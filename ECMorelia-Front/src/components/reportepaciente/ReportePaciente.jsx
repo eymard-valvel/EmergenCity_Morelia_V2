@@ -117,7 +117,7 @@ const API_URL = import.meta.env.VITE_API || 'http://localhost:3000/api';
   }, [theme]);
 
   useEffect(() => {
-    const ws = new WebSocket('ws://localhost:8081');
+    const ws = new WebSocket(import.meta.env.VITE_WS_URL);
 
     ws.onopen = () => {
       console.log('✅ ReportePaciente conectado al servidor de WebSockets');
