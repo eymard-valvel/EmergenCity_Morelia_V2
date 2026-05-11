@@ -2,7 +2,9 @@
 const WebSocket = require('ws');
 const http = require('http');
 const express = require('express');
-const fetch = (...args) => import('node-fetch').then(({default: f}) => f(...args));
+//const fetch = (...args) => import('node-fetch').then(({default: f}) => f(...args));
+// Reemplazo de fetch: usamos node-fetch versión CommonJS estable
+const fetch = require('node-fetch');
 const { PrismaClient } = require('@prisma/client');
 
 const app = express();
@@ -37,75 +39,52 @@ app.options('*', (req, res) => res.sendStatus(200));
 
 // ---------- FUNCIÓN DE GEOCODING MEJORADA ----------
 async function geocodeAddress(address) {
-  if (!address || address.trim() === '') {
-    console.log('❌ Dirección vacía para geocoding');
-    return null;
-  }
+  if (!address || address.trim() === '') return null;
 
   const cleanAddress = address.trim();
 
   try {
-    // No añadimos "Morelia" porque la dirección ya la contiene. Usamos la dirección tal cual + país.
-    // Añadir "México" ayuda a restringir la búsqueda si no está presente.
     const queryBase = cleanAddress.toLowerCase().includes('méxico') || cleanAddress.toLowerCase().includes('mexico')
       ? cleanAddress
       : `${cleanAddress}, México`;
-    
     const q = encodeURIComponent(queryBase);
-    console.log(`📍 Geocoding dirección: "${cleanAddress}" -> query: "${queryBase}"`);
-
-    // Priorizar direcciones exactas con types=address
     const mapboxUrl = `https://api.mapbox.com/geocoding/v5/mapbox.places/${q}.json?access_token=${MAPBOX_TOKEN}&country=mx&types=address,poi&limit=1&language=es`;
 
     const mapboxResp = await fetch(mapboxUrl);
     if (mapboxResp.ok) {
       const mapboxData = await mapboxResp.json();
-
       if (mapboxData.features && mapboxData.features.length > 0) {
         const bestMatch = mapboxData.features[0];
-
-        const result = {
+        return {
           lat: bestMatch.center[1],
           lng: bestMatch.center[0],
           place_name: bestMatch.place_name,
           relevance: bestMatch.relevance || 1,
           address: bestMatch.place_name
         };
-
-        console.log(`✅ Geocoding exitoso: ${result.lat}, ${result.lng} - ${result.place_name}`);
-        return result;
       }
     }
 
-    // Fallback a Nominatim (sin duplicar ciudad)
     const nominatimQuery = encodeURIComponent(`${cleanAddress}, Michoacán, México`);
     const fallbackUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${nominatimQuery}&countrycodes=mx&limit=1`;
     const fallbackResp = await fetch(fallbackUrl);
-
     if (fallbackResp.ok) {
       const fallbackData = await fallbackResp.json();
       if (fallbackData.length > 0) {
-        const result = {
+        return {
           lat: parseFloat(fallbackData[0].lat),
           lng: parseFloat(fallbackData[0].lon),
           place_name: fallbackData[0].display_name,
           address: fallbackData[0].display_name
         };
-        console.log(`✅ Geocoding alternativo exitoso: ${result.lat}, ${result.lng}`);
-        return result;
       }
     }
-
-    console.log('❌ No se pudo geocodificar la dirección, usando coordenadas por defecto');
-    // Solo en caso de fallo total regresamos coordenadas genéricas de Morelia (centro)
-    return null;
-
   } catch (error) {
     console.error('💥 Error en geocoding:', error);
-    return null;
   }
-}
 
+  return null;
+}
 // ---------- BROADCAST DE HOSPITALES ACTIVOS (SOLO IDs PARA ACTUALIZAR ESTADO) ----------
 function broadcastActiveHospitalsToAmbulances() {
   const connectedIds = Array.from(activeHospitals.keys());
@@ -884,8 +863,9 @@ async function handleRequestHospitalsList(ws) {
   try {
     const hospitalsFromDB = await getAllHospitalsFromDB();
 
-    const hospitalsWithCoords = await Promise.all(
-      hospitalsFromDB.map(async (hospital) => {
+    const hospitalsWithCoords = [];
+    for (const hospital of hospitalsFromDB) {
+      try {
         if (hospital.direccion && hospital.direccion.trim() !== '') {
           const activeHospital = activeHospitals.get(hospital.id);
           if (activeHospital && activeHospital.info.lat && activeHospital.info.lng) {
@@ -899,9 +879,11 @@ async function handleRequestHospitalsList(ws) {
             }
           }
         }
-        return hospital;
-      })
-    );
+      } catch (err) {
+        console.error(`Error geocoding hospital ${hospital.id}:`, err);
+      }
+      hospitalsWithCoords.push(hospital);
+    }
 
     const hospitalsWithStatus = hospitalsWithCoords.map(hospital => ({
       ...hospital,

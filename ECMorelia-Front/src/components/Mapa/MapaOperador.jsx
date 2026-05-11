@@ -1851,7 +1851,7 @@ export default function MapaOperadorGPS() {
   };
 
 
-  const calculateRoute = async (start, end) => {
+const calculateRoute = async (start, end) => {
   if (!start || !end) {
     showToast('error', 'Error de Ruta', 'Ubicaciones no válidas');
     return null;
@@ -1871,11 +1871,11 @@ export default function MapaOperadorGPS() {
 
     const route = data.routes[0];
     return {
-      geometry: route.geometry.coordinates,
-      distance: route.distance,
-      duration: route.duration,
+      geometry: route.geometry.coordinates,  // coordenadas de la línea
+      distance: route.distance,               // metros
+      duration: route.duration,               // segundos
       summary: `${(route.distance / 1000).toFixed(1)} km, ${Math.round(route.duration / 60)} min`,
-      steps: route.legs[0]?.steps || []
+      steps: route.legs?.[0]?.steps || []     // pasos de navegación
     };
   } catch (error) {
     console.error('❌ Error calculando ruta:', error);
@@ -1912,19 +1912,18 @@ export default function MapaOperadorGPS() {
 
     try {
       const routeData = await calculateRoute(startLocation, endLocation);
-      if (!routeData) return;
+if (!routeData) return;
 
-      const routeId = `route-pending-${emergencyMode === 'atender_emergencia' ? 'emergency' : hospital.id}-${Date.now()}`;
-      
-      setPendingEmergencyRoute({
-        routeId: routeId,
-        startLocation: startLocation,
-        endLocation: endLocation,
-        routeData: routeData,
-        isEmergencyRoute: emergencyMode === 'atender_emergencia',
-        hospital: hospital
-      });
-      
+const routeId = `route-${emergencyMode === 'atender_emergencia' ? 'emergency' : hospital.id}-${Date.now()}`;
+drawRoute(routeData.geometry, routeId, 0);
+
+setActiveRoutes(prev => [...prev, {
+  routeKey: routeId,
+  ambulanceId: 'UVI-01',
+  geometry: routeData.geometry,
+  distance: (routeData.distance / 1000).toFixed(1),
+  duration: Math.round(routeData.duration / 60)
+}]);
       if (routeData.steps && routeData.steps.length > 0) {
         const steps = routeData.steps.map((step, index) => ({
           number: index + 1,
