@@ -39,10 +39,67 @@ import {
   AccordionButton,
   AccordionPanel,
   AccordionIcon,
-  useMediaQuery
+  useMediaQuery,
+  IconButton,
+  Tooltip,
+  useColorModeValue
 } from "@chakra-ui/react";
 
 mapboxgl.accessToken = 'pk.eyJ1IjoiZXltYXJkMjkiLCJhIjoiY21tcDY4YzNpMGw3bjJzb203YmZyNTVnMyJ9.OvZlnCMfUkUYe6Ib83DUVw';
+
+// Global styles
+const styleInject = document.createElement('style');
+styleInject.textContent = `
+  @keyframes pulseGreen {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.2); opacity: 0.6; }
+  }
+  @keyframes slideUp {
+    from { transform: translateY(20px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+  }
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  .glass-card {
+    background: rgba(255, 255, 255, 0.85) !important;
+    backdrop-filter: blur(12px) !important;
+    -webkit-backdrop-filter: blur(12px) !important;
+    border: 1px solid rgba(255,255,255,0.3) !important;
+    border-radius: 16px !important;
+  }
+  .glass-card-dark {
+    background: rgba(26, 32, 44, 0.85) !important;
+    backdrop-filter: blur(12px) !important;
+    -webkit-backdrop-filter: blur(12px) !important;
+    border: 1px solid rgba(255,255,255,0.1) !important;
+    border-radius: 16px !important;
+  }
+  .status-dot-green {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: #4CAF50;
+    box-shadow: 0 0 8px rgba(76,175,80,0.8);
+    animation: pulseGreen 2s infinite;
+    display: inline-block;
+  }
+  .status-dot-yellow {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: #FFC107;
+    animation: pulseGreen 1.5s infinite;
+    display: inline-block;
+  }
+  .status-dot-red {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: #F44336;
+    display: inline-block;
+  }
+  @media (max-width: 768px) {
+    .mapboxgl-popup { max-width: 260px !important; }
+    .mapboxgl-popup-content { padding: 10px !important; }
+  }
+`;
+document.head.appendChild(styleInject);
 
 // ---------- OBTENER URL BASE HTTP DESDE VARIABLES DE ENTORNO ----------
 const getApiBaseUrl = () => {
@@ -76,6 +133,11 @@ export default function MapaHospitalOptimizado() {
 
   // Responsive
   const [isMobile] = useMediaQuery("(max-width: 768px)");
+  const [isTablet] = useMediaQuery("(max-width: 1024px) and (min-width: 769px)");
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isCarMode] = useMediaQuery("(max-width: 900px) and (orientation: landscape)");
+  
+  const sidebarWidth = isMobile ? "100%" : isTablet ? "380px" : "480px";
 
   // Estado principal
   const [hospitalInfo, setHospitalInfo] = useState(null);
@@ -1096,61 +1158,131 @@ export default function MapaHospitalOptimizado() {
     <ChakraProvider>
       <Box height="100vh" display="flex" flexDirection="column" bg="gray.50">
         {/* Header */}
-        <Box bg="white" p={isMobile ? 3 : 4} boxShadow="sm" borderBottom="1px" borderColor="gray.200">
-          <HStack justifyContent="space-between" flexWrap="wrap" spacing={2}>
-            <VStack align="start" spacing={0}>
-              <Text fontSize={isMobile ? "lg" : "xl"} fontWeight="bold" color="gray.800">
-                🏥 {hospitalInfo.nombre}
-              </Text>
-              <Text fontSize="xs" color="gray.600">
-                Centro de Control Hospitalario - Monitoreo de Emergencias
-                <Badge ml={2} colorScheme={wsConnected ? "green" : isConnecting ? "yellow" : "red"} fontSize="xs">
-                  {wsConnected ? "SISTEMA CONECTADO" : isConnecting ? "CONECTANDO..." : "SIN CONEXIÓN"}
-                </Badge>
-              </Text>
-            </VStack>
+        <Box 
+          bg="white" 
+          p={isMobile ? 2 : 3} 
+          boxShadow="sm" 
+          borderBottom="1px" borderColor="gray.200"
+          position="sticky"
+          top={0}
+          zIndex={100}
+        >
+          <HStack justifyContent="space-between" spacing={isMobile ? 1 : 3}>
+            <HStack spacing={isMobile ? 2 : 3} minW={0}>
+              {isMobile && (
+                <IconButton
+                  aria-label="Toggle sidebar"
+                  icon={<span>☰</span>}
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+                />
+              )}
+              <VStack align="start" spacing={0} minW={0}>
+                <HStack spacing={2}>
+                  <Text fontSize={isMobile ? "sm" : "lg"} fontWeight="bold" color="gray.800" noOfLines={1}>
+                    🏥 {hospitalInfo.nombre}
+                  </Text>
+                  <Box className={wsConnected ? "status-dot-green" : isConnecting ? "status-dot-yellow" : "status-dot-red"} />
+                </HStack>
+                {!isCarMode && (
+                  <Text fontSize="2xs" color="gray.500" noOfLines={1}>
+                    {isMobile ? `${ambulances.length} ambulancias` : `Centro de Control - Monitoreo de Emergencias`}
+                  </Text>
+                )}
+              </VStack>
+            </HStack>
 
-            <HStack spacing={2}>
-              <Badge colorScheme="blue" fontSize="sm" p={2} borderRadius="md">
-                {ambulances.length} AMBULANCIAS
-              </Badge>
+            <HStack spacing={isMobile ? 1 : 2} flexShrink={0}>
+              {!isMobile && (
+                <Badge colorScheme="blue" fontSize="sm" p={2} borderRadius="md">
+                  {ambulances.length} AMBULANCIAS
+                </Badge>
+              )}
 
               {patientNotifications.length > 0 && (
-                <Badge colorScheme="red" fontSize="sm" p={2} borderRadius="md" cursor="pointer" onClick={onNotificationOpen}>
-                  {patientNotifications.length} NOTIFICACIONES
-                </Badge>
+                <Box
+                  position="relative"
+                  cursor="pointer"
+                  onClick={onNotificationOpen}
+                >
+                  <Badge colorScheme="red" fontSize="sm" p={2} borderRadius="md" animation="pulseGreen 2s infinite">
+                    🔔 {patientNotifications.length}
+                  </Badge>
+                </Box>
               )}
 
-              {activeRoute && (
+              {activeRoute && !isMobile && (
                 <Badge colorScheme="purple" fontSize="sm" p={2} borderRadius="md">
-                  🕐 {Math.round(activeRoute.duration / 60)} min • 📏 {(activeRoute.distance / 1000).toFixed(1)} km
+                  🕐 {Math.round(activeRoute.duration / 60)} min
                 </Badge>
               )}
 
-              <Button size="sm" colorScheme={wsConnected ? "green" : isConnecting ? "yellow" : "orange"} onClick={reconnect} isDisabled={isConnecting}>
-                {isConnecting ? <Spinner size="sm" /> : wsConnected ? "✅ CONECTADO" : "🔌 RECONECTAR"}
+              <Button 
+                size="sm" 
+                colorScheme={wsConnected ? "green" : isConnecting ? "yellow" : "orange"} 
+                onClick={reconnect} 
+                isDisabled={isConnecting}
+                fontSize="xs"
+                px={isMobile ? 2 : 3}
+              >
+                {isConnecting ? <Spinner size="sm" /> : wsConnected ? "✅" : "🔌"}
+                {!isMobile && (wsConnected ? " CONECTADO" : isConnecting ? " CONECTANDO..." : " RECONECTAR")}
               </Button>
             </HStack>
           </HStack>
         </Box>
 
         {/* Main Content */}
-        <Box flex={1} display="flex" flexDirection={isMobile ? "column" : "row"}>
+        <Box flex={1} display="flex" flexDirection={isMobile ? "column" : "row"} position="relative">
           {/* Side Panel */}
           <Box 
-            width={isMobile ? "100%" : "480px"} 
-            bg="white" 
-            p={isMobile ? 3 : 4} 
-            overflowY="auto" 
-            boxShadow="md" 
+            width={isMobile ? "100%" : sidebarWidth}
+            bg={isMobile ? "white" : "rgba(255,255,255,0.95)"}
+            p={isMobile ? (isSidebarOpen ? 2 : 0) : 4}
+            overflowY="auto"
+            boxShadow={isMobile ? "none" : "md"}
             borderRight={isMobile ? "none" : "1px solid #e2e8f0"}
-            maxHeight={isMobile ? "40vh" : "100%"}
+            maxHeight={isMobile ? (isSidebarOpen ? "45vh" : "0") : "100%"}
+            transition="all 0.3s ease"
+            position={isMobile ? "absolute" : "relative"}
+            zIndex={isMobile ? 50 : "auto"}
+            left={0}
+            right={0}
+            top={0}
+            sx={{
+              '&::-webkit-scrollbar': { width: '4px' },
+              '&::-webkit-scrollbar-thumb': { background: '#CBD5E0', borderRadius: '4px' }
+            }}
           >
-            <VStack spacing={isMobile ? 4 : 6} align="stretch">
+            <VStack spacing={isMobile ? 3 : 5} align="stretch">
+              {/* Connection Status */}
+              <Box className="glass-card" p={3}>
+                <HStack justify="space-between">
+                  <HStack>
+                    <Box className={wsConnected ? "status-dot-green" : "status-dot-red"} />
+                    <Text fontSize="sm" fontWeight="bold" color={wsConnected ? "green.700" : "red.600"}>
+                      {wsConnected ? 'SISTEMA CONECTADO' : 'SIN CONEXIÓN'}
+                    </Text>
+                  </HStack>
+                  {ambulances.length > 0 && (
+                    <Badge colorScheme="blue" variant="solid" borderRadius="full" px={3} py={1}>
+                      {ambulances.length} ambulancias activas
+                    </Badge>
+                  )}
+                </HStack>
+              </Box>
+
               {/* Hospital Info */}
-              <Card bg="blue.50" border="1px" borderColor="blue.200">
+              <Card 
+                className="glass-card"
+                border="1px" 
+                borderColor="blue.100"
+              >
                 <CardBody>
-                  <Text fontWeight="bold" mb={3} color="blue.800">🏥 Información del Hospital</Text>
+                  <Text fontWeight="bold" mb={3} color="blue.700" fontSize={isMobile ? "sm" : "md"}>
+                    🏥 Información del Hospital
+                  </Text>
                   <VStack align="start" spacing={2}>
                     <Text fontSize="sm"><strong>📍 Dirección:</strong> {hospitalInfo.direccion}</Text>
                     <Text fontSize="sm"><strong>🗺️ Coordenadas:</strong> {hospitalInfo.lat.toFixed(4)}, {hospitalInfo.lng.toFixed(4)}</Text>
@@ -1163,59 +1295,86 @@ export default function MapaHospitalOptimizado() {
 
               {/* Ambulances List */}
               <Box>
-                <HStack justify="space-between" mb={3}>
-                  <Text fontWeight="bold" color="gray.800">🚑 Ambulancias en Servicio</Text>
-                  <Text fontSize="sm" color="gray.600">
-                    {ambulances.length} conectadas
+                <HStack justify="space-between" mb={2}>
+                  <Text fontWeight="bold" color="gray.800" fontSize={isMobile ? "sm" : "md"}>
+                    🚑 Ambulancias en Servicio
                   </Text>
+                  <Badge colorScheme="blue" variant="subtle" borderRadius="full" px={2}>
+                    {ambulances.length}
+                  </Badge>
                 </HStack>
 
                 {ambulances.length === 0 ? (
-                  <Text color="gray.500" textAlign="center" py={4} fontSize="sm">
-                    No hay ambulancias activas en el sistema
-                  </Text>
+                  <Box 
+                    p={4} 
+                    textAlign="center"
+                    className="glass-card"
+                  >
+                    <Text color="gray.400" fontSize="sm">
+                      No hay ambulancias activas en el sistema
+                    </Text>
+                    <Text fontSize="xs" color="gray.300" mt={1}>
+                      Esperando conexión de unidades...
+                    </Text>
+                  </Box>
                 ) : (
-                  <VStack spacing={3} align="stretch">
+                  <VStack spacing={2} align="stretch">
                     {ambulances.map(ambulance => (
                       <Card
                         key={ambulance.id}
-                        bg={selectedAmbulance?.id === ambulance.id ? "blue.50" : "white"}
+                        className="glass-card"
+                        bg={selectedAmbulance?.id === ambulance.id ? "rgba(66,153,225,0.1)" : "white"}
                         border="1px"
-                        borderColor={selectedAmbulance?.id === ambulance.id ? "blue.200" : "gray.200"}
+                        borderColor={selectedAmbulance?.id === ambulance.id ? "blue.300" : "gray.200"}
                         cursor="pointer"
                         onClick={() => setSelectedAmbulance(ambulance)}
-                        _hover={{ borderColor: "blue.300", transform: 'translateY(-1px)' }}
+                        _hover={{ borderColor: "blue.300", transform: 'translateY(-1px)', boxShadow: 'md' }}
                         transition="all 0.2s"
                       >
-                        <CardBody p={3}>
-                          <HStack justify="space-between" mb={2}>
-                            <Text fontWeight="bold" color="red.600" fontSize="sm">{ambulance.id}</Text>
-                            <Badge colorScheme={ambulance.status === 'en_ruta' ? "green" : "orange"} fontSize="2xs">
-                              {ambulance.status === 'en_ruta' ? 'EN RUTA' : 'DISPONIBLE'}
+                        <CardBody p={isMobile ? 2 : 3}>
+                          <HStack justify="space-between" mb={1.5}>
+                            <HStack>
+                              <Box
+                                w="8px" h="8px" borderRadius="full"
+                                bg={ambulance.status === 'en_ruta' ? "#4CAF50" : "#FF9800"}
+                                boxShadow={ambulance.status === 'en_ruta' ? '0 0 6px #4CAF50' : 'none'}
+                                animation={ambulance.status === 'en_ruta' ? 'pulseGreen 2s infinite' : 'none'}
+                              />
+                              <Text fontWeight="bold" color="red.600" fontSize={isMobile ? "sm" : "sm"}>
+                                {ambulance.id}
+                              </Text>
+                            </HStack>
+                            <Badge 
+                              colorScheme={ambulance.status === 'en_ruta' ? "green" : "orange"} 
+                              fontSize="2xs"
+                              variant={ambulance.status === 'en_ruta' ? "solid" : "subtle"}
+                            >
+                              {ambulance.status === 'en_ruta' ? '● EN RUTA' : 'DISPONIBLE'}
                             </Badge>
                           </HStack>
 
-                          <VStack align="start" spacing={1}>
-                            <Text fontSize="sm">📋 {ambulance.placa || 'N/A'}</Text>
-                            <Text fontSize="sm">🔧 {ambulance.tipo || 'N/A'}</Text>
+                          <HStack spacing={3} fontSize="xs" color="gray.600" flexWrap="wrap">
+                            <span>📋 {ambulance.placa || 'N/A'}</span>
+                            <span>🔧 {ambulance.tipo || 'N/A'}</span>
                             {ambulance.location && (
-                              <Text fontSize="sm">💨 {ambulance.speed || 0} km/h</Text>
+                              <span>💨 {ambulance.speed || 0} km/h</span>
                             )}
-                          </VStack>
+                          </HStack>
 
                           {activeRoute && activeRoute.ambulanceId === ambulance.id && (
-                            <Box mt={2} p={2} bg="blue.100" borderRadius="md">
-                              <Text fontSize="sm" fontWeight="bold" color="blue.800">📊 Ruta Activa</Text>
-                              <Text fontSize="xs" color="blue.700">
+                            <Box mt={1.5} p={2} bg="rgba(66,153,225,0.08)" borderRadius="md" border="1px" borderColor="blue.100">
+                              <Text fontSize="xs" fontWeight="bold" color="blue.700">📊 Ruta Activa</Text>
+                              <Text fontSize="2xs" color="blue.600">
                                 🕐 {Math.round(activeRoute.duration / 60)} min • 📏 {(activeRoute.distance / 1000).toFixed(1)} km
                               </Text>
                             </Box>
                           )}
 
-                          <HStack mt={3} spacing={2}>
+                          <HStack mt={2} spacing={1.5}>
                             <Button
                               size="xs"
                               colorScheme="blue"
+                              variant="outline"
                               onClick={(e) => {
                                 e.stopPropagation();
                                 if (ambulance.location) {
@@ -1226,30 +1385,52 @@ export default function MapaHospitalOptimizado() {
                                   });
                                 }
                               }}
+                              fontSize="2xs"
+                              px={2}
                             >
-                              👁️ Seguir
+                              👁️
                             </Button>
                             <Button
                               size="xs"
                               colorScheme="teal"
+                              variant="outline"
                               onClick={(e) => {
                                 e.stopPropagation();
                                 calculateRouteToAmbulance(ambulance);
                               }}
+                              fontSize="2xs"
+                              px={2}
                             >
-                              🛣️ Trazar Ruta
+                              🛣️
                             </Button>
                             <Button
                               size="xs"
                               colorScheme="purple"
+                              variant="outline"
                               onClick={(e) => {
                                 e.stopPropagation();
                                 setSelectedAmbulance(ambulance);
                                 onNoteOpen();
                               }}
+                              fontSize="2xs"
+                              px={2}
                             >
-                              💬 Nota
+                              💬
                             </Button>
+                            {!isMobile && (
+                              <Button
+                                size="xs"
+                                colorScheme="red"
+                                variant="ghost"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  requestRouteUpdate(ambulance.id);
+                                }}
+                                fontSize="2xs"
+                              >
+                                🔄 Ruta
+                              </Button>
+                            )}
                           </HStack>
                         </CardBody>
                       </Card>
@@ -1294,27 +1475,33 @@ export default function MapaHospitalOptimizado() {
               )}
 
               {/* Quick Actions */}
-              <VStack spacing={2}>
-                <Button
-                  width="100%"
-                  colorScheme="blue"
-                  onClick={centerOnHospital}
-                  leftIcon={<Text>🎯</Text>}
-                  size={isMobile ? "sm" : "md"}
-                >
-                  Centrar en Hospital
-                </Button>
-                <Button
-                  width="100%"
-                  colorScheme={trafficEnabled ? "orange" : "blue"}
-                  onClick={toggleTraffic}
-                  leftIcon={<Text>🚦</Text>}
-                  variant={trafficEnabled ? "solid" : "outline"}
-                  size={isMobile ? "sm" : "md"}
-                >
-                  {trafficEnabled ? 'Ocultar Tráfico' : 'Mostrar Tráfico'}
-                </Button>
-              </VStack>
+              <Box className="glass-card" p={isMobile ? 2 : 3}>
+                <VStack spacing={2}>
+                  <Button
+                    width="100%"
+                    colorScheme="blue"
+                    onClick={centerOnHospital}
+                    leftIcon={<span>🎯</span>}
+                    size={isMobile ? "sm" : "md"}
+                    height={isMobile ? "44px" : "48px"}
+                    fontSize="sm"
+                  >
+                    Centrar en Hospital
+                  </Button>
+                  <Button
+                    width="100%"
+                    colorScheme={trafficEnabled ? "orange" : "blue"}
+                    onClick={toggleTraffic}
+                    leftIcon={<span>🚦</span>}
+                    variant={trafficEnabled ? "solid" : "outline"}
+                    size={isMobile ? "sm" : "md"}
+                    height={isMobile ? "44px" : "48px"}
+                    fontSize="sm"
+                  >
+                    {trafficEnabled ? 'Ocultar Tráfico' : 'Mostrar Tráfico'}
+                  </Button>
+                </VStack>
+              </Box>
             </VStack>
           </Box>
 
@@ -1326,44 +1513,62 @@ export default function MapaHospitalOptimizado() {
             {activeRoute && (
               <Box
                 position="absolute"
-                top="20px"
-                left="20px"
-                bg="white"
-                color="gray.800"
+                top={isMobile ? "60px" : "20px"}
+                left={isMobile ? "10px" : "20px"}
+                right={isMobile ? "10px" : "auto"}
+                className="glass-card"
                 p={isMobile ? 3 : 4}
-                borderRadius="md"
                 boxShadow="xl"
-                border="1px"
-                borderColor="gray.200"
                 zIndex="1000"
-                minWidth={isMobile ? "260px" : "320px"}
+                minWidth={isMobile ? "auto" : "320px"}
+                maxWidth={isMobile ? "calc(100% - 20px)" : "360px"}
+                animation="slideUp 0.3s ease"
               >
-                <Text fontWeight="bold" mb={2} color="blue.600">📊 Ruta Activa - {activeRoute.ambulanceId}</Text>
-                <VStack align="start" spacing={1}>
-                  <Text fontSize="sm"><strong>🕐 ETA:</strong> {Math.round(activeRoute.duration / 60)} minutos</Text>
-                  <Text fontSize="sm"><strong>📏 Distancia:</strong> {(activeRoute.distance / 1000).toFixed(1)} km</Text>
-                  <Text fontSize="sm"><strong>🏥 Destino:</strong> {hospitalInfo.nombre}</Text>
+                <HStack justify="space-between" mb={2}>
+                  <Text fontWeight="bold" color="blue.600" fontSize={isMobile ? "sm" : "md"}>
+                    📊 Ruta - {activeRoute.ambulanceId}
+                  </Text>
+                  <Badge colorScheme="purple" variant="solid" borderRadius="full" px={2}>
+                    {Math.round(activeRoute.duration / 60)} min
+                  </Badge>
+                </HStack>
+                <VStack align="start" spacing={0.5}>
+                  <Text fontSize="sm" color="gray.600">
+                    <strong>🕐 ETA:</strong> {Math.round(activeRoute.duration / 60)} min • <strong>📏</strong> {(activeRoute.distance / 1000).toFixed(1)} km
+                  </Text>
+                  <Text fontSize="xs" color="gray.500"><strong>🏥</strong> {hospitalInfo.nombre}</Text>
                 </VStack>
-                <Progress value={65} size="sm" colorScheme="blue" mt={2} borderRadius="full" />
-                <Button
-                  size="xs"
-                  colorScheme="blue"
-                  mt={2}
-                  onClick={() => {
-                    if (activeRoute.geometry) {
-                      const bounds = new mapboxgl.LngLatBounds();
-                      activeRoute.geometry.forEach(coord => {
-                        bounds.extend([coord[0], coord[1]]);
-                      });
-                      if (hospitalInfo) {
-                        bounds.extend([hospitalInfo.lng, hospitalInfo.lat]);
+                <Progress value={65} size="xs" colorScheme="blue" mt={2} borderRadius="full" />
+                <HStack mt={2} spacing={2}>
+                  <Button
+                    size="xs"
+                    colorScheme="blue"
+                    onClick={() => {
+                      if (activeRoute.geometry) {
+                        const bounds = new mapboxgl.LngLatBounds();
+                        activeRoute.geometry.forEach(coord => {
+                          bounds.extend([coord[0], coord[1]]);
+                        });
+                        if (hospitalInfo) {
+                          bounds.extend([hospitalInfo.lng, hospitalInfo.lat]);
+                        }
+                        map.current.fitBounds(bounds, { padding: 80, duration: 1000 });
                       }
-                      map.current.fitBounds(bounds, { padding: 80, duration: 1000 });
-                    }
-                  }}
-                >
-                  🗺️ Ajustar Vista
-                </Button>
+                    }}
+                    flex={1}
+                  >
+                    🗺️ Vista
+                  </Button>
+                  <Button
+                    size="xs"
+                    colorScheme="red"
+                    variant="ghost"
+                    onClick={() => clearRoute()}
+                    flex={1}
+                  >
+                    🗑️ Limpiar
+                  </Button>
+                </HStack>
               </Box>
             )}
           </Box>

@@ -54,6 +54,7 @@ import {
   AccordionPanel,
   AccordionIcon,
   Divider,
+  Tag,
   Switch,
   Slider,
   SliderTrack,
@@ -176,6 +177,39 @@ const theme = extendTheme({
         '.mapboxgl-popup-content': {
           padding: '10px'
         }
+      },
+      '@keyframes pulseGreen': {
+        '0%, 100%': { transform: 'scale(1)', opacity: '1' },
+        '50%': { transform: 'scale(1.15)', opacity: '0.7' }
+      },
+      '.status-dot-green': {
+        width: '10px', height: '10px', borderRadius: '50%',
+        background: '#4CAF50',
+        boxShadow: '0 0 8px rgba(76,175,80,0.8)',
+        animation: 'pulseGreen 2s infinite'
+      },
+      '.status-dot-yellow': {
+        width: '10px', height: '10px', borderRadius: '50%',
+        background: '#FFC107',
+        animation: 'pulseGreen 1.5s infinite'
+      },
+      '.status-dot-red': {
+        width: '10px', height: '10px', borderRadius: '50%',
+        background: '#F44336'
+      },
+      '.glass-card': {
+        background: 'rgba(255, 255, 255, 0.85)',
+        backdropFilter: 'blur(12px)',
+        WebkitBackdropFilter: 'blur(12px)',
+        border: '1px solid rgba(255,255,255,0.3)',
+        borderRadius: '16px'
+      },
+      '.glass-card-dark': {
+        background: 'rgba(26, 32, 44, 0.85)',
+        backdropFilter: 'blur(12px)',
+        WebkitBackdropFilter: 'blur(12px)',
+        border: '1px solid rgba(255,255,255,0.1)',
+        borderRadius: '16px'
       }
     })
   },
@@ -197,6 +231,38 @@ const theme = extendTheme({
 });
 
 mapboxgl.accessToken = 'pk.eyJ1IjoiZXltYXJkMjkiLCJhIjoiY21tcDY4YzNpMGw3bjJzb203YmZyNTVnMyJ9.OvZlnCMfUkUYe6Ib83DUVw';
+
+// Inject global styles for animations
+const globalStyle = document.createElement('style');
+globalStyle.textContent = `
+  @keyframes pulseGreen {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.2); opacity: 0.6; }
+  }
+  @keyframes slideUp {
+    from { transform: translateY(20px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+  }
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  .glass-card {
+    background: rgba(255, 255, 255, 0.85) !important;
+    backdrop-filter: blur(12px) !important;
+    -webkit-backdrop-filter: blur(12px) !important;
+    border: 1px solid rgba(255,255,255,0.3) !important;
+    border-radius: 16px !important;
+  }
+  .glass-card-dark {
+    background: rgba(26, 32, 44, 0.85) !important;
+    backdrop-filter: blur(12px) !important;
+    -webkit-backdrop-filter: blur(12px) !important;
+    border: 1px solid rgba(255,255,255,0.1) !important;
+    border-radius: 16px !important;
+  }
+`;
+document.head.appendChild(globalStyle);
 
 function ColorModeToggle() {
   const { colorMode, toggleColorMode } = useColorMode();
@@ -833,8 +899,20 @@ export default function MapaOperadorGPS() {
               console.log('✅ Conexión WebSocket confirmada');
               break;
             case 'active_hospitals_update':
-              console.log('🏥 Hospitales activos actualizados via WS:', data.hospitals?.length);
-              if (data.hospitals) processHospitalsList(data.hospitals);
+              if (data.connectedIds) {
+                // Broadcast sincrónico: solo actualizar estado connected de hospitales existentes
+                setHospitals(prev => {
+                  if (prev.length === 0) return prev;
+                  return prev.map(h => ({
+                    ...h,
+                    connected: data.connectedIds.includes(h.id)
+                  }));
+                });
+              } else if (data.hospitals) {
+                // Lista completa desde el servidor
+                console.log('🏥 Hospitales recibidos vía WS:', data.hospitals.length, 'conectados:', data.connected);
+                processHospitalsList(data.hospitals);
+              }
               break;
             case 'all_hospitals_list':
               console.log('🏥 Todos los hospitales cargados vía WS:', data.hospitals?.length);
@@ -979,21 +1057,28 @@ export default function MapaOperadorGPS() {
       
       if (!isActiveInDB) return;
 
-      let backgroundColor = 'linear-gradient(135deg, #FF9800, #F57C00)';
-      let borderColor = '#FF9800';
-      let opacity = 0.8;
+      let backgroundColor = 'linear-gradient(135deg, #9E9E9E, #757575)';
+      let borderColor = '#9E9E9E';
+      let opacity = 0.6;
       let icon = '🏢';
-      let size = isMobile ? '50px' : '60px';
-      let fontSize = isMobile ? '18px' : '22px';
+      let size = isMobile ? '44px' : '52px';
+      let fontSize = isMobile ? '16px' : '20px';
+      let boxShadow = '0 4px 12px rgba(0,0,0,0.15)';
+      let animation = '';
       
       if (isConnected) {
-        backgroundColor = 'linear-gradient(135deg, #4CAF50, #2E7D32)';
+        backgroundColor = 'linear-gradient(135deg, #4CAF50, #1B5E20)';
         borderColor = '#4CAF50';
         opacity = 1;
         icon = '🏥';
+        size = isMobile ? '56px' : '66px';
+        fontSize = isMobile ? '22px' : '26px';
+        boxShadow = '0 6px 25px rgba(76,175,80,0.4)';
+        animation = 'pulseGreen 2s infinite';
         if (isClosest) {
-          size = isMobile ? '60px' : '70px';
-          fontSize = isMobile ? '22px' : '26px';
+          size = isMobile ? '64px' : '76px';
+          fontSize = isMobile ? '24px' : '30px';
+          boxShadow = '0 8px 30px rgba(76,175,80,0.6)';
         }
       }
 
@@ -1003,7 +1088,7 @@ export default function MapaOperadorGPS() {
           width: ${size};
           height: ${size};
           background: ${backgroundColor};
-          border: ${isClosest ? '4px' : '3px'} solid white;
+          border: ${isConnected ? (isClosest ? '4px' : '3px') : '2px'} solid white;
           border-radius: 50%;
           display: flex;
           align-items: center;
@@ -1011,38 +1096,48 @@ export default function MapaOperadorGPS() {
           color: white;
           font-weight: bold;
           font-size: ${fontSize};
-          box-shadow: 0 6px 20px rgba(0,0,0,0.3);
+          box-shadow: ${boxShadow};
           cursor: ${isConnected ? 'pointer' : 'default'};
           opacity: ${opacity};
           position: relative;
           transition: all 0.3s ease;
-          ${isClosest && isConnected ? 'animation: pulse 2s infinite;' : ''}
+          ${animation ? `animation: ${animation};` : ''}
+          ${!isConnected ? 'filter: grayscale(0.5);' : ''}
         ">
           ${icon}
-          ${isClosest ? `
+          ${isConnected ? `
             <div style="
               position: absolute;
-              top: -8px;
-              right: -8px;
-              background: #2196F3;
-              color: white;
+              top: -2px;
+              right: -2px;
+              width: 14px;
+              height: 14px;
+              background: #4CAF50;
+              border: 2px solid white;
               border-radius: 50%;
-              width: 20px;
-              height: 20px;
-              font-size: 10px;
-              display: flex;
-              align-items: center;
-              justify-content: center;
+              box-shadow: 0 0 8px rgba(76,175,80,0.8);
+            "></div>
+          ` : ''}
+          ${isClosest && isConnected ? `
+            <div style="
+              position: absolute;
+              bottom: -4px;
+              right: -4px;
+              background: #FF6F00;
+              color: white;
+              border-radius: 10px;
+              padding: 1px 5px;
+              font-size: 8px;
               font-weight: bold;
-              box-shadow: 0 2px 8px rgba(33,150,243,0.5);
-            ">${index + 1}</div>
+              box-shadow: 0 2px 6px rgba(255,111,0,0.5);
+            ">#1</div>
           ` : ''}
         </div>
         <style>
-          @keyframes pulse {
-            0% { transform: scale(1); box-shadow: 0 6px 20px rgba(76,175,80,0.3); }
-            50% { transform: scale(1.05); box-shadow: 0 8px 25px rgba(76,175,80,0.5); }
-            100% { transform: scale(1); box-shadow: 0 6px 20px rgba(76,175,80,0.3); }
+          @keyframes pulseGreen {
+            0% { transform: scale(1); box-shadow: 0 6px 25px rgba(76,175,80,0.3); }
+            50% { transform: scale(1.08); box-shadow: 0 10px 35px rgba(76,175,80,0.6); }
+            100% { transform: scale(1); box-shadow: 0 6px 25px rgba(76,175,80,0.3); }
           }
         </style>
       `;
@@ -1050,36 +1145,43 @@ export default function MapaOperadorGPS() {
       const popup = new mapboxgl.Popup({ offset: 25, closeButton: true, closeOnClick: false })
         .setHTML(`
           <div style="padding: ${isMobile ? '8px' : '12px'}; max-width: ${isMobile ? '240px' : '280px'}; font-family: Arial, sans-serif;">
-            <strong style="font-size: ${isMobile ? '14px' : '16px'}; color: #333;">${hospital.nombre}</strong>
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+              <div style="width: 10px; height: 10px; border-radius: 50%; background: ${isConnected ? '#4CAF50' : '#9E9E9E'}; box-shadow: ${isConnected ? '0 0 8px rgba(76,175,80,0.8)' : 'none'}; ${isConnected ? 'animation: pulseGreenPop 2s infinite;' : ''}"></div>
+              <strong style="font-size: ${isMobile ? '14px' : '16px'}; color: #333;">${hospital.nombre}</strong>
+              <span style="margin-left: auto; font-size: 10px; padding: 2px 8px; border-radius: 12px; background: ${isConnected ? '#E8F5E9' : '#F5F5F5'}; color: ${isConnected ? '#2E7D32' : '#9E9E9E'}; font-weight: bold;">
+                ${isConnected ? 'EN LÍNEA' : 'INACTIVO'}
+              </span>
+            </div>
             <div style="margin: ${isMobile ? '6px 0' : '8px 0'}; font-size: ${isMobile ? '12px' : '14px'}; color: #666;">
               <div>📍 ${hospital.direccion || 'Dirección no disponible'}</div>
               ${hospital.distance ? `<div style="margin-top: 4px;">📏 ${hospital.distance.toFixed(1)} km de distancia</div>` : ''}
               ${hospital.estimatedTime ? `<div style="margin-top: 4px;">🕐 ~${hospital.estimatedTime} min (estimado)</div>` : ''}
               ${hospital.especialidades?.length > 0 ? 
-                `<div style="margin-top: 4px;">🏥 ${hospital.especialidades.slice(0, 2).join(', ')}${hospital.especialidades.length > 2 ? '...' : ''}</div>` : ''}
+                `<div style="margin-top: 4px;">🏥 ${hospital.especialidades.slice(0, 3).join(', ')}</div>` : ''}
               ${hospital.camasDisponibles ? 
                 `<div style="margin-top: 4px;">🛏️ ${hospital.camasDisponibles} camas disponibles</div>` : ''}
               ${hospital.telefono ? 
                 `<div style="margin-top: 4px;">📞 ${hospital.telefono}</div>` : ''}
-              <div style="margin-top: 4px;">
-                <span style="color: ${isConnected ? '#4CAF50' : '#FF9800'}; font-weight: bold;">
-                  ${isConnected ? '✅ CONECTADO' : '🟡 ACTIVO (SIN CONEXIÓN)'}
-                </span>
-              </div>
             </div>
             ${isConnected ? `
               <button onclick="window.selectHospitalFromMap('${hospital.id}')" 
-                style="width: 100%; padding: ${isMobile ? '8px 12px' : '10px 16px'}; background: #2196F3; color: white; 
+                style="width: 100%; padding: ${isMobile ? '8px 12px' : '10px 16px'}; background: linear-gradient(135deg, #4CAF50, #2E7D32); color: white; 
                 border: none; border-radius: 8px; cursor: pointer; margin-top: 8px; font-weight: bold;
                 font-size: ${isMobile ? '12px' : '14px'};
-                box-shadow: 0 2px 8px rgba(33,150,243,0.3); transition: all 0.2s;"
-                onmouseover="this.style.background='#1976D2'" 
-                onmouseout="this.style.background='#2196F3'">
-                🚑 Seleccionar Destino
+                box-shadow: 0 2px 8px rgba(76,175,80,0.3); transition: all 0.2s;"
+                onmouseover="this.style.background='linear-gradient(135deg, #2E7D32, #1B5E20)'" 
+                onmouseout="this.style.background='linear-gradient(135deg, #4CAF50, #2E7D32)'">
+                🚑 Seleccionar como Destino
               </button>
             ` : 
-            '<div style="padding: 8px; background: #FF9800; color: white; text-align: center; border-radius: 8px; margin-top: 8px; font-size: 12px;">Hospital no disponible para selección</div>'}
+            '<div style="padding: 8px; background: #F5F5F5; color: #9E9E9E; text-align: center; border-radius: 8px; margin-top: 8px; font-size: 12px; border: 1px dashed #CCC;">Hospital no conectado - No disponible</div>'}
           </div>
+          <style>
+            @keyframes pulseGreenPop {
+              0%, 100% { opacity: 1; }
+              50% { opacity: 0.5; }
+            }
+          </style>
         `);
 
       const hospitalMarker = new mapboxgl.Marker({ element: el })
@@ -2420,7 +2522,7 @@ export default function MapaOperadorGPS() {
             <CardBody p={isMobile ? 2 : 3}>
               <HStack justify="space-between">
                 <HStack>
-                  <Box w="3" h="3" borderRadius="full" bg={wsConnected ? "green.400" : isConnecting ? "yellow.400" : "red.400"} />
+                  <Box className={wsConnected ? "status-dot-green" : isConnecting ? "status-dot-yellow" : "status-dot-red"} />
                   <Text fontSize={isMobile ? "xs" : "sm"} fontWeight="medium" color={wsConnected ? "green.800" : isConnecting ? "yellow.800" : "red.800"}>
                     {wsConnected ? 'Conectado al Sistema' : isConnecting ? 'Conectando...' : 'Desconectado'}
                   </Text>
@@ -2431,10 +2533,6 @@ export default function MapaOperadorGPS() {
                   </Button>
                 )}
               </HStack>
-              
-              <Text fontSize="2xs" color="gray.600" mt={2}>
-                {hospitals.filter(h => h.connected && h.activo).length} hospitales conectados de {hospitals.filter(h => h.activo).length} en sistema
-              </Text>
             </CardBody>
           </Card>
 
@@ -2505,63 +2603,151 @@ export default function MapaOperadorGPS() {
             </Card>
           )}
 
-          <Card>
+          {/* HOSPITALES ACTIVOS - Solo conectados via MapaHospital */}
+          <Card
+            border="1px"
+            borderColor="green.200"
+            bg="rgba(240, 255, 240, 0.7)"
+            sx={{ backdropFilter: 'blur(8px)' }}
+          >
             <CardBody p={isMobile ? 2 : 3}>
-              <HStack justify="space-between" mb={3}>
-                <Text fontSize={isMobile ? "sm" : "sm"} fontWeight="bold">
-                  <FaHospital style={{ display: 'inline', marginRight: '8px' }} /> HOSPITALES CERCANOS
+              <HStack justify="space-between" mb={2}>
+                <Text fontSize={isMobile ? "sm" : "sm"} fontWeight="bold" color="green.700">
+                  <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', background: '#4CAF50', marginRight: 8, boxShadow: '0 0 8px #4CAF50', animation: 'pulseGreen 2s infinite' }} />
+                  HOSPITALES ACTIVOS ({hospitals.filter(h => h.connected && h.activo).length})
                 </Text>
                 <Button 
                   size="xs" 
                   onClick={refreshHospitals}
                   variant="ghost"
                   leftIcon={<FaSync />}
+                  colorScheme="green"
                 >
-                  Actualizar
+                  Sinc.
                 </Button>
               </HStack>
               
-              <VStack spacing={2} align="stretch" maxH={isMobile ? "200px" : "250px"} overflowY="auto">
-                {hospitals
-                  .filter(h => h.activo && h.connected)
-                  .slice(0, isMobile ? 3 : 4)
-                  .map((hospital, index) => (
-                    <HStack 
-                      key={hospital.id}
-                      p={isMobile ? 2 : 2}
-                      bg={hospital.connected ? "green.50" : "orange.50"}
-                      borderRadius="md"
-                      border="1px"
-                      borderColor={hospital.connected ? "green.200" : "orange.200"}
-                      opacity={hospital.connected ? 1 : 0.8}
-                    >
-                      <Badge 
-                        colorScheme={hospital.connected ? "green" : "orange"}
-                        minW="24px"
-                        height="24px"
-                        display="flex"
-                        alignItems="center"
-                        justifyContent="center"
+              <VStack spacing={2} align="stretch" maxH={isMobile ? "180px" : "220px"} overflowY="auto">
+                {hospitals.filter(h => h.activo && h.connected).length === 0 ? (
+                  <Text fontSize="2xs" color="gray.500" textAlign="center" py={1}>
+                    No hay hospitales conectados via MapaHospital
+                  </Text>
+                ) : (
+                  hospitals
+                    .filter(h => h.activo && h.connected)
+                    .sort((a, b) => (a.distance || 999) - (b.distance || 999))
+                    .slice(0, isMobile ? 4 : 6)
+                    .map((hospital, index) => (
+                      <HStack 
+                        key={hospital.id}
+                        p={2}
+                        bg="white"
+                        borderRadius="md"
+                        border="1px"
+                        borderColor="green.200"
+                        boxShadow="0 2px 8px rgba(76,175,80,0.12)"
+                        _hover={{ borderColor: 'green.400', transform: 'translateX(2px)' }}
+                        transition="all 0.2s ease"
+                        cursor="pointer"
+                        onClick={() => {
+                          setSelectedHospital(hospital.id);
+                          if (hospital.lat && hospital.lng && map.current) {
+                            map.current.flyTo({ center: [hospital.lng, hospital.lat], zoom: 16, duration: 800 });
+                          }
+                        }}
                       >
-                        {index + 1}
-                      </Badge>
-                      <VStack align="start" spacing={0} flex={1}>
-                        <Text fontSize="xs" fontWeight="medium" noOfLines={1}>
-                          {hospital.nombre}
-                        </Text>
-                        <Text fontSize="2xs" color="gray.600" noOfLines={1}>
-                          {hospital.distance ? `${hospital.distance.toFixed(1)} km` : 'Distancia N/A'}
-                        </Text>
-                      </VStack>
-                      <Badge 
-                        colorScheme={hospital.connected ? "green" : "orange"}
-                        fontSize="2xs"
-                      >
-                        {hospital.connected ? '✅' : '🟡'}
-                      </Badge>
-                    </HStack>
-                  ))}
+                        <Box
+                          w="8px" h="8px" borderRadius="full" bg="#4CAF50"
+                          boxShadow="0 0 6px #4CAF50"
+                          animation="pulseGreen 2s infinite"
+                        />
+                        <VStack align="start" spacing={0} flex={1} ml={1}>
+                          <Text fontSize="xs" fontWeight="semibold" color="green.800" noOfLines={1}>
+                            {hospital.nombre}
+                          </Text>
+                          <HStack spacing={2}>
+                            {hospital.distance && (
+                              <Text fontSize="2xs" color="gray.500">
+                                📏 {hospital.distance.toFixed(1)} km
+                              </Text>
+                            )}
+                            {hospital.estimatedTime && (
+                              <Text fontSize="2xs" color="blue.600" fontWeight="medium">
+                                🕐 ~{hospital.estimatedTime} min
+                              </Text>
+                            )}
+                          </HStack>
+                        </VStack>
+                        <Badge colorScheme="green" fontSize="2xs" variant="subtle">
+                          EN LÍNEA
+                        </Badge>
+                      </HStack>
+                    ))
+                )}
               </VStack>
+            </CardBody>
+          </Card>
+
+          {/* TODOS LOS HOSPITALES */}
+          <Card>
+            <CardBody p={isMobile ? 2 : 3}>
+              <Accordion allowToggle>
+                <AccordionItem border="none">
+                  <AccordionButton px={0}>
+                    <Box flex="1" textAlign="left">
+                      <Text fontSize={isMobile ? "xs" : "sm"} fontWeight="bold" color="gray.600">
+                        <FaHospital style={{ display: 'inline', marginRight: 6 }} />
+                        TODOS LOS HOSPITALES ({hospitals.filter(h => h.activo).length})
+                      </Text>
+                    </Box>
+                    <AccordionIcon />
+                  </AccordionButton>
+                  <AccordionPanel pb={2} px={0}>
+                    <HStack mb={2}>
+                      <Button size="xs" onClick={refreshHospitals} variant="ghost" leftIcon={<FaSync />} fontSize="2xs">
+                        Actualizar
+                      </Button>
+                    </HStack>
+                    <VStack spacing={1} align="stretch" maxH={isMobile ? "160px" : "200px"} overflowY="auto">
+                      {hospitals
+                        .filter(h => h.activo)
+                        .slice(0, isMobile ? 6 : 10)
+                        .map((hospital) => (
+                          <HStack 
+                            key={hospital.id}
+                            p={1.5}
+                            borderRadius="md"
+                            border="1px"
+                            borderColor={hospital.connected ? "green.200" : "gray.200"}
+                            bg={hospital.connected ? "rgba(76,175,80,0.05)" : "transparent"}
+                          >
+                            <Box
+                              w="6px" h="6px" borderRadius="full"
+                              bg={hospital.connected ? "#4CAF50" : "#FF9800"}
+                              boxShadow={hospital.connected ? '0 0 4px #4CAF50' : 'none'}
+                            />
+                            <VStack align="start" spacing={0} flex={1}>
+                              <Text fontSize="2xs" fontWeight="medium" noOfLines={1}>
+                                {hospital.nombre}
+                              </Text>
+                              {hospital.distance && (
+                                <Text fontSize="2xs" color="gray.400">
+                                  {hospital.distance.toFixed(1)} km
+                                </Text>
+                              )}
+                            </VStack>
+                            <Badge 
+                              fontSize="2xs"
+                              colorScheme={hospital.connected ? "green" : "gray"}
+                            >
+                              {hospital.connected ? 'ACTIVO' : 'INACTIVO'}
+                            </Badge>
+                          </HStack>
+                        ))}
+                    </VStack>
+                  </AccordionPanel>
+                </AccordionItem>
+              </Accordion>
             </CardBody>
           </Card>
 
@@ -2682,11 +2868,26 @@ export default function MapaOperadorGPS() {
             </Stat>
           </Tooltip>
           
-          <Tooltip label="Hospitales Disponibles">
-            <Badge colorScheme="purple" fontSize={badgeSize} p={isMobile ? 1 : 2} borderRadius="md">
-              <FaHospital style={{ display: 'inline', marginRight: '2px' }} /> 
+          <Tooltip label={`${hospitals.filter(h => h.connected && h.activo).length} hospitales en línea de ${hospitals.filter(h => h.activo).length} totales`}>
+            <Box
+              bg={hospitals.filter(h => h.connected && h.activo).length > 0 ? "green.500" : "gray.400"}
+              color="white"
+              fontSize={badgeSize}
+              px={isMobile ? 2 : 3}
+              py={1}
+              borderRadius="full"
+              display="flex"
+              alignItems="center"
+              gap={1.5}
+              boxShadow={hospitals.filter(h => h.connected && h.activo).length > 0 ? "0 0 12px rgba(76,175,80,0.4)" : "none"}
+            >
+              <Box
+                w="6px" h="6px" borderRadius="full" bg="white"
+                animation={hospitals.filter(h => h.connected && h.activo).length > 0 ? "pulseGreen 2s infinite" : "none"}
+              />
               {hospitals.filter(h => h.connected && h.activo).length}
-            </Badge>
+              <Text as="span" fontWeight="normal" opacity={0.7}>/ {hospitals.filter(h => h.activo).length}</Text>
+            </Box>
           </Tooltip>
           
           <Button 
@@ -3226,95 +3427,144 @@ export default function MapaOperadorGPS() {
         onClose={onHospitalDrawerClose}
         size={isMobile ? "full" : "md"}
       >
-        <DrawerOverlay />
+        <DrawerOverlay backdropFilter="blur(4px)" />
         <DrawerContent>
           <DrawerCloseButton color="white" />
-          <DrawerHeader bg="blue.600" color="white">
-            <FaHospital style={{ display: 'inline', marginRight: '12px' }} /> HOSPITALES DISPONIBLES
+          <DrawerHeader bg="linear-gradient(135deg, #1a73e8, #0d47a1)" color="white">
+            <FaHospital style={{ display: 'inline', marginRight: '12px' }} /> HOSPITALES DEL SISTEMA
           </DrawerHeader>
 
           <DrawerBody>
             <VStack spacing={4} align="stretch" pt={4}>
+              {/* Resumen */}
+              <Box 
+                p={3} 
+                borderRadius="xl" 
+                bg="rgba(76,175,80,0.08)" 
+                border="1px" 
+                borderColor="rgba(76,175,80,0.2)"
+                sx={{ backdropFilter: 'blur(8px)' }}
+              >
+                <HStack justify="space-around">
+                  <VStack spacing={0}>
+                    <Text fontSize="2xl" fontWeight="bold" color="green.600">
+                      {hospitals.filter(h => h.connected && h.activo).length}
+                    </Text>
+                    <Text fontSize="xs" color="gray.500">CONECTADOS</Text>
+                  </VStack>
+                  <Box w="1px" h="40px" bg="gray.200" />
+                  <VStack spacing={0}>
+                    <Text fontSize="2xl" fontWeight="bold" color="blue.600">
+                      {hospitals.filter(h => h.activo).length}
+                    </Text>
+                    <Text fontSize="xs" color="gray.500">TOTAL</Text>
+                  </VStack>
+                  <Box w="1px" h="40px" bg="gray.200" />
+                  <VStack spacing={0}>
+                    <Text fontSize="2xl" fontWeight="bold" color="orange.600">
+                      {hospitals.filter(h => h.activo && !h.connected).length}
+                    </Text>
+                    <Text fontSize="xs" color="gray.500">INACTIVOS</Text>
+                  </VStack>
+                </HStack>
+              </Box>
+
               <HStack justify="space-between">
-                <Text fontWeight="bold" fontSize={isMobile ? "md" : "lg"}>
-                  {hospitals.filter(h => h.activo).length} hospitales activos en sistema
+                <Text fontSize="sm" fontWeight="bold" color="gray.600">
+                  <FaHospital style={{ display: 'inline', marginRight: 6 }} /> LISTA DE HOSPITALES
                 </Text>
-                <Button size="sm" onClick={refreshHospitals} variant="outline" leftIcon={<FaSync />}>
+                <Button size="sm" onClick={refreshHospitals} variant="ghost" leftIcon={<FaSync />} colorScheme="blue">
                   Actualizar
                 </Button>
               </HStack>
 
               <Divider />
 
-              <VStack spacing={3} align="stretch" maxH={isMobile ? "70vh" : "500px"} overflowY="auto">
+              <VStack spacing={2} align="stretch" maxH={isMobile ? "60vh" : "500px"} overflowY="auto">
                 {hospitals
                   .filter(h => h.activo)
+                  .sort((a, b) => {
+                    if (a.connected !== b.connected) return a.connected ? -1 : 1;
+                    return (a.distance || 999) - (b.distance || 999);
+                  })
                   .map((hospital, index) => (
                     <Card
                       key={hospital.id}
                       border="1px"
-                      borderColor={hospital.connected ? "green.200" : "orange.200"}
-                      bg={hospital.connected ? "green.50" : "orange.50"}
+                      borderColor={hospital.connected ? "green.200" : "gray.200"}
+                      bg={hospital.connected ? "white" : "gray.50"}
+                      boxShadow={hospital.connected ? "0 2px 12px rgba(76,175,80,0.15)" : "none"}
+                      _hover={{ transform: 'translateY(-1px)', boxShadow: 'md' }}
+                      transition="all 0.2s ease"
+                      cursor={hospital.connected ? "pointer" : "default"}
+                      onClick={() => {
+                        if (hospital.connected && map.current) {
+                          setSelectedHospital(hospital.id);
+                          map.current.flyTo({ center: [hospital.lng, hospital.lat], zoom: 16, duration: 800 });
+                        }
+                      }}
                     >
                       <CardBody p={isMobile ? 2 : 3}>
-                        <VStack align="start" spacing={2}>
+                        <VStack align="start" spacing={1.5}>
                           <HStack justify="space-between" width="100%">
-                            <VStack align="start" spacing={0}>
-                              <HStack wrap="wrap">
-                                <Text fontWeight="bold" fontSize={isMobile ? "sm" : "sm"}>
-                                  {index + 1}. {hospital.nombre}
-                                </Text>
-                                {index === 0 && hospital.distance && (
-                                  <Badge colorScheme="orange" fontSize="2xs">
-                                    MÁS CERCANO
-                                  </Badge>
-                                )}
-                              </HStack>
-                              <Text fontSize="xs" color="gray.600" noOfLines={1}>
-                                {hospital.direccion}
+                            <HStack spacing={2}>
+                              <Box
+                                w="8px" h="8px" borderRadius="full"
+                                bg={hospital.connected ? "#4CAF50" : "#BDBDBD"}
+                                boxShadow={hospital.connected ? '0 0 8px #4CAF50' : 'none'}
+                                animation={hospital.connected ? 'pulseGreen 2s infinite' : 'none'}
+                              />
+                              <Text fontWeight="bold" fontSize={isMobile ? "sm" : "sm"} color={hospital.connected ? "green.800" : "gray.500"}>
+                                {hospital.nombre}
                               </Text>
-                            </VStack>
+                              {index === 0 && hospital.distance && hospital.connected && (
+                                <Badge colorScheme="orange" fontSize="2xs" variant="solid" borderRadius="full">
+                                  MÁS CERCANO
+                                </Badge>
+                              )}
+                            </HStack>
                             <Badge 
-                              colorScheme={hospital.connected ? "green" : "orange"} 
+                              colorScheme={hospital.connected ? "green" : "gray"} 
                               fontSize="2xs"
+                              variant={hospital.connected ? "solid" : "subtle"}
                             >
-                              {hospital.connected ? '✅ CONECTADO' : '🟡 SIN CONEXIÓN'}
+                              {hospital.connected ? '● EN LÍNEA' : 'SIN CONEXIÓN'}
                             </Badge>
                           </HStack>
                           
-                          <HStack spacing={4} fontSize="2xs" wrap="wrap">
+                          <Text fontSize="xs" color="gray.500" noOfLines={1}>
+                            {hospital.direccion || 'Dirección no disponible'}
+                          </Text>
+                          
+                          <HStack spacing={3} fontSize="2xs" wrap="wrap">
                             {hospital.distance && (
-                              <Box>
-                                <Text fontWeight="bold" color="green.600">
-                                  <FaRoad style={{ display: 'inline', marginRight: '2px' }} /> {hospital.distance.toFixed(1)} km
-                                </Text>
-                                <Text fontSize="2xs" color="gray.500">Distancia</Text>
-                              </Box>
+                              <Badge colorScheme="green" variant="outline" borderRadius="full" px={2}>
+                                📏 {hospital.distance.toFixed(1)} km
+                              </Badge>
                             )}
-                            
                             {hospital.estimatedTime && (
-                              <Box>
-                                <Text fontWeight="bold" color="blue.600">
-                                  <FaClock style={{ display: 'inline', marginRight: '2px' }} /> ~{hospital.estimatedTime} min
-                                </Text>
-                                <Text fontSize="2xs" color="gray.500">Tiempo estimado</Text>
-                              </Box>
+                              <Badge colorScheme="blue" variant="outline" borderRadius="full" px={2}>
+                                🕐 ~{hospital.estimatedTime} min
+                              </Badge>
                             )}
-                            
                             {hospital.camasDisponibles && (
-                              <Box>
-                                <Text fontWeight="bold" color="purple.600">
-                                  <FaBed style={{ display: 'inline', marginRight: '2px' }} /> {hospital.camasDisponibles}
-                                </Text>
-                                <Text fontSize="2xs" color="gray.500">Camas disp.</Text>
-                              </Box>
+                              <Badge colorScheme="purple" variant="outline" borderRadius="full" px={2}>
+                                🛏️ {hospital.camasDisponibles}
+                              </Badge>
                             )}
                           </HStack>
                           
                           {hospital.especialidades?.length > 0 && (
-                            <Text fontSize="2xs" color="gray.600">
-                              <FaHospital style={{ display: 'inline', marginRight: '4px' }} /> {hospital.especialidades.slice(0, 3).join(', ')}
-                            </Text>
+                            <HStack spacing={1} mt={0.5}>
+                              {hospital.especialidades.slice(0, 3).map((esp, i) => (
+                                <Tag key={i} size="sm" variant="subtle" colorScheme={hospital.connected ? "green" : "gray"} fontSize="2xs">
+                                  {esp}
+                                </Tag>
+                              ))}
+                              {hospital.especialidades.length > 3 && (
+                                <Text fontSize="2xs" color="gray.400">+{hospital.especialidades.length - 3}</Text>
+                              )}
+                            </HStack>
                           )}
                         </VStack>
                       </CardBody>

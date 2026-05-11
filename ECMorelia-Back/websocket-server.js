@@ -106,30 +106,16 @@ async function geocodeAddress(address) {
   }
 }
 
-// ---------- BROADCAST DE HOSPITALES ACTIVOS (CORREGIDO) ----------
+// ---------- BROADCAST DE HOSPITALES ACTIVOS (SOLO IDs PARA ACTUALIZAR ESTADO) ----------
 function broadcastActiveHospitalsToAmbulances() {
-  const hospitalsList = Array.from(activeHospitals.values()).map(hospital => ({
-    id: hospital.info.id,
-    nombre: hospital.info.nombre,
-    lat: hospital.info.lat,
-    lng: hospital.info.lng,
-    direccion: hospital.info.direccion,
-    especialidades: hospital.info.especialidades || ['General'],
-    camasDisponibles: hospital.info.camasDisponibles || 10,
-    telefono: hospital.info.telefono || '',
-    connected: true,
-    status: 'active',
-    connectedAt: hospital.connectedAt,
-    activo: hospital.info.activo !== false
-  }));
-
-  console.log(`📤 Broadcasting ${hospitalsList.length} hospitales activos a todas las ambulancias`);
+  const connectedIds = Array.from(activeHospitals.keys());
+  
+  console.log(`📤 Broadcasting ${connectedIds.length} hospitales conectados a todas las ambulancias`);
 
   broadcastToAmbulances({
     type: 'active_hospitals_update',
-    hospitals: hospitalsList,
-    timestamp: new Date().toISOString(),
-    total: hospitalsList.length
+    connectedIds: connectedIds,
+    timestamp: new Date().toISOString()
   });
 }
 
@@ -480,9 +466,10 @@ async function handleRegisterAmbulance(ws, data) {
   activeAmbulances.set(ambulanceData.id, ambulanceData);
   console.log(`🚑 Ambulancia registrada: ${ambulanceData.id}`);
 
-  // Enviar lista actual de hospitales conectados INMEDIATAMENTE
-  broadcastActiveHospitalsToAmbulances();
+  // Enviar lista COMPLETA de hospitales a esta ambulancia (con estado connected)
+  await handleRequestHospitalsList(ws);
 
+  // Broadcast a ambulancias y hospitales: nuevo vehículo en servicio
   broadcastActiveAmbulances();
 }
 
@@ -894,26 +881,46 @@ function handleRequestRouteUpdate(ws, data) {
 }
 
 async function handleRequestHospitalsList(ws) {
-  const hospitalsList = Array.from(activeHospitals.values())
-    .filter(hospital => hospital.info.activo !== false)
-    .map(hospital => ({
-      id: hospital.info.id,
-      nombre: hospital.info.nombre,
-      lat: hospital.info.lat,
-      lng: hospital.info.lng,
-      direccion: hospital.info.direccion,
-      especialidades: hospital.info.especialidades || ['General'],
-      camasDisponibles: hospital.info.camasDisponibles || 10,
-      telefono: hospital.info.telefono || '',
-      connected: true,
-      activo: hospital.info.activo
+  try {
+    const hospitalsFromDB = await getAllHospitalsFromDB();
+
+    const hospitalsWithCoords = await Promise.all(
+      hospitalsFromDB.map(async (hospital) => {
+        if (hospital.direccion && hospital.direccion.trim() !== '') {
+          const activeHospital = activeHospitals.get(hospital.id);
+          if (activeHospital && activeHospital.info.lat && activeHospital.info.lng) {
+            hospital.lat = activeHospital.info.lat;
+            hospital.lng = activeHospital.info.lng;
+          } else {
+            const geoResult = await geocodeAddress(hospital.direccion);
+            if (geoResult) {
+              hospital.lat = geoResult.lat;
+              hospital.lng = geoResult.lng;
+            }
+          }
+        }
+        return hospital;
+      })
+    );
+
+    const hospitalsWithStatus = hospitalsWithCoords.map(hospital => ({
+      ...hospital,
+      connected: activeHospitals.has(hospital.id),
+      activo: true,
+      status: activeHospitals.has(hospital.id) ? 'active' : 'inactive'
     }));
 
-  sendMessage(ws, {
-    type: 'active_hospitals_update',
-    hospitals: hospitalsList,
-    message: `${hospitalsList.length} hospitales conectados`
-  });
+    sendMessage(ws, {
+      type: 'active_hospitals_update',
+      hospitals: hospitalsWithStatus,
+      total: hospitalsWithStatus.length,
+      connected: activeHospitals.size,
+      message: `${hospitalsWithStatus.length} hospitales en sistema (${activeHospitals.size} conectados)`
+    });
+  } catch (error) {
+    console.error('❌ Error obteniendo hospitales:', error);
+    sendError(ws, 'Error obteniendo lista de hospitales');
+  }
 }
 
 async function handleGetAllHospitals(ws) {
