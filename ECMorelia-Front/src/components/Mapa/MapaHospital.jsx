@@ -1,4 +1,4 @@
-// MapaHospitalOptimizado.jsx - VERSIÓN CORREGIDA
+// MapaHospitalOptimizado.jsx - VERSIÓN CON GEOCODING DIRECTO (MAPBOX + FALLBACK NOMINATIM)
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
@@ -44,6 +44,22 @@ import {
 
 mapboxgl.accessToken = 'pk.eyJ1IjoiZXltYXJkMjkiLCJhIjoiY21tcDY4YzNpMGw3bjJzb203YmZyNTVnMyJ9.OvZlnCMfUkUYe6Ib83DUVw';
 
+// ---------- OBTENER URL BASE HTTP DESDE VARIABLES DE ENTORNO ----------
+const getApiBaseUrl = () => {
+  if (import.meta.env.VITE_API) {
+    return import.meta.env.VITE_API.replace(/\/+$/, "");
+  }
+  const wsUrl = import.meta.env.VITE_WS_URL || 'wss://emergencity-morelia-v2.onrender.com';
+  try {
+    const url = new URL(wsUrl);
+    url.protocol = url.protocol === 'wss:' ? 'https:' : 'http:';
+    url.pathname = url.pathname.replace('/ws', '');
+    return url.origin;
+  } catch (e) {
+    return 'https://emergencity-morelia-v2.onrender.com';
+  }
+};
+
 export default function MapaHospitalOptimizado() {
   // Refs
   const mapContainer = useRef(null);
@@ -86,40 +102,59 @@ export default function MapaHospitalOptimizado() {
 
   const toast = useToast();
 
-  // ---------- FUNCIÓN DE GEOCODIFICACIÓN ----------
-  const geocodeHospitalAddress = async (address) => {
-    if (!address || address.trim() === '') {
-      return null;
-    }
+  const apiBaseUrl = getApiBaseUrl();
+
+  // ---------- GEOCODIFICACIÓN DIRECTA (MAPBOX + NOMINATIM FALLBACK) ----------
+  const geocodeAddressDirect = async (address) => {
+    if (!address || address.trim() === '') return null;
 
     setIsGeocoding(true);
-    
-    try {
-      const response = await fetch('http://localhost:3002/geocode', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ address: address })
-      });
+    const cleanAddress = address.trim();
 
+    // ---- Intento con Mapbox Geocoding API ----
+    try {
+      const query = `${cleanAddress}, Morelia, Michoacán, México`;
+      const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?access_token=${mapboxgl.accessToken}&country=mx&types=address&limit=1&language=es`;
+
+      const response = await fetch(url);
       if (response.ok) {
-        const result = await response.json();
-        if (result && result.lat && result.lng) {
-          console.log('✅ Hospital geocoded correctamente:', result);
-          return { lat: result.lat, lng: result.lng, place_name: result.place_name };
+        const data = await response.json();
+        if (data.features && data.features.length > 0) {
+          const feature = data.features[0];
+          const [lng, lat] = feature.center;
+          console.log('✅ Mapbox Geocoding exitoso:', lat, lng, feature.place_name);
+          return { lat, lng, place_name: feature.place_name };
         }
       }
     } catch (error) {
-      console.error('❌ Error en geocoding hospital:', error);
-    } finally {
-      setIsGeocoding(false);
+      console.warn('⚠️ Falló Mapbox Geocoding:', error);
     }
-    
+
+    // ---- Fallback con Nominatim (OpenStreetMap) ----
+    try {
+      const nominatimQuery = `${cleanAddress}, Morelia, Michoacán, México`;
+      const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(nominatimQuery)}&limit=1&countrycodes=mx`;
+
+      const response = await fetch(url, { headers: { 'User-Agent': 'EmergenCity/1.0' } });
+      if (response.ok) {
+        const data = await response.json();
+        if (data && data.length > 0) {
+          const lat = parseFloat(data[0].lat);
+          const lng = parseFloat(data[0].lon);
+          console.log('✅ Nominatim Geocoding exitoso:', lat, lng, data[0].display_name);
+          return { lat, lng, place_name: data[0].display_name };
+        }
+      }
+    } catch (error) {
+      console.warn('⚠️ Falló Nominatim Geocoding:', error);
+    }
+
+    // Si nada funcionó, regresar null para usar coordenadas por defecto
+    setIsGeocoding(false);
     return null;
   };
 
-  // ---------- CARGA DE DATOS DEL HOSPITAL ----------
+  // ---------- CARGA DE DATOS DEL HOSPITAL (con geocodificación directa) ----------
   useEffect(() => {
     isMounted.current = true;
 
@@ -143,35 +178,34 @@ export default function MapaHospitalOptimizado() {
           telefono: stored.telefono || ''
         };
 
-        // Geocodificar si no tenemos coordenadas válidas
+        // Geocodificar si no hay coordenadas válidas (o si se quiere forzar actualización)
         if (hospitalData.direccion && (!hospitalData.lat || !hospitalData.lng)) {
-          showToast('info', 'Geocodificando', 'Obteniendo coordenadas del hospital...');
-          
-          const geoResult = await geocodeHospitalAddress(hospitalData.direccion);
-          
+          showToast('info', 'Geocodificando', 'Buscando coordenadas exactas del hospital...');
+
+          const geoResult = await geocodeAddressDirect(hospitalData.direccion);
+          setIsGeocoding(false);
+
           if (geoResult) {
             hospitalData.lat = geoResult.lat;
             hospitalData.lng = geoResult.lng;
-            
-            // Actualizar localStorage con coordenadas corregidas
+
             localStorage.setItem("hospitalInfo", JSON.stringify({
               ...stored,
               lat: geoResult.lat,
               lng: geoResult.lng
             }));
-            
-            showToast('success', 'Ubicación Encontrada', `Coordenadas obtenidas: ${geoResult.lat.toFixed(4)}, ${geoResult.lng.toFixed(4)}`);
+
+            //showToast('success', 'Ubicación Encontrada', `Coordenadas: ${geoResult.lat.toFixed(4)}, ${geoResult.lng.toFixed(4)}`);
           } else {
-            // Coordenadas por defecto en Morelia
             hospitalData.lat = 19.7024;
             hospitalData.lng = -101.1969;
-            showToast('warning', 'Ubicación Por Defecto', 'No se pudo geocodificar la dirección exacta, usando coordenadas de Morelia centro');
+           // showToast('warning', 'Ubicación Aproximada', 'No se pudo geocodificar la dirección exacta. Usando referencia de Morelia.');
           }
         }
 
         if (isMounted.current) {
           setHospitalInfo(hospitalData);
-          showToast('success', 'Hospital Configurado', `${hospitalData.nombre} listo para recibir pacientes`);
+          showToast('success', 'Hospital Configurado', hospitalData.nombre);
         }
 
       } catch (error) {
@@ -260,7 +294,7 @@ export default function MapaHospitalOptimizado() {
             case 'recepcion_reporte_paciente':
               console.log("📄 Reporte Médico Recibido:", data.reporte);
               setSelectedReport(data.reporte);
-              
+
               const nuevaNotificacion = {
                 notificationId: `report_${Date.now()}`,
                 type: 'reporte_medico',
@@ -366,11 +400,11 @@ export default function MapaHospitalOptimizado() {
     }
   }, [hospitalInfo]);
 
-  // ---------- CARGA DE DOCTORES ----------
+  // ---------- CARGA DE DOCTORES (usando apiBaseUrl) ----------
   useEffect(() => {
     const cargarDoctores = async () => {
       try {
-        const response = await fetch('http://localhost:3000/api/doctor');
+        const response = await fetch(`${apiBaseUrl}/api/doctor`);
         if (response.ok) {
           const data = await response.json();
           setListaDoctores(data);
@@ -378,11 +412,11 @@ export default function MapaHospitalOptimizado() {
           console.error("Error HTTP al cargar la lista de doctores:", response.status);
         }
       } catch (error) {
-        console.error("Error de conexión al API:", error);
+        console.error("Error de conexión al API de doctores:", error);
       }
     };
     cargarDoctores();
-  }, []);
+  }, [apiBaseUrl]);
 
   // ---------- MAP INITIALIZATION ----------
   useEffect(() => {
@@ -536,18 +570,18 @@ export default function MapaHospitalOptimizado() {
       const el = document.createElement('div');
       el.innerHTML = `
         <div style="
-          width: ${isMobile ? '60px' : '70px'}; 
-          height: ${isMobile ? '60px' : '70px'}; 
+          width: ${isMobile ? '60px' : '70px'};
+          height: ${isMobile ? '60px' : '70px'};
           background: linear-gradient(135deg, #2E7D32, #1B5E20);
-          border: 4px solid white; 
-          border-radius: 50%; 
-          display: flex; 
+          border: 4px solid white;
+          border-radius: 50%;
+          display: flex;
           align-items: center;
-          justify-content: center; 
-          color: white; 
-          font-weight: bold; 
+          justify-content: center;
+          color: white;
+          font-weight: bold;
           font-size: ${isMobile ? '24px' : '28px'};
-          box-shadow: 0 8px 25px rgba(46,125,50,0.3); 
+          box-shadow: 0 8px 25px rgba(46,125,50,0.3);
           cursor: pointer;
         ">🏥</div>
       `;
@@ -593,18 +627,18 @@ export default function MapaHospitalOptimizado() {
       const el = document.createElement('div');
       el.innerHTML = `
         <div style="
-          width: ${isMobile ? '45px' : '55px'}; 
-          height: ${isMobile ? '45px' : '55px'}; 
+          width: ${isMobile ? '45px' : '55px'};
+          height: ${isMobile ? '45px' : '55px'};
           background: linear-gradient(135deg, #D32F2F, #B71C1C);
-          border: 3px solid white; 
-          border-radius: 50%; 
-          display: flex; 
+          border: 3px solid white;
+          border-radius: 50%;
+          display: flex;
           align-items: center;
-          justify-content: center; 
-          color: white; 
-          font-weight: bold; 
+          justify-content: center;
+          color: white;
+          font-weight: bold;
           font-size: ${isMobile ? '18px' : '22px'};
-          box-shadow: 0 4px 15px rgba(211,47,47,0.3); 
+          box-shadow: 0 4px 15px rgba(211,47,47,0.3);
           cursor: pointer;
         ">🚑</div>
       `;
@@ -778,7 +812,7 @@ export default function MapaHospitalOptimizado() {
     }
 
     try {
-      const response = await fetch('http://localhost:3002/directions', {
+      const response = await fetch(`${apiBaseUrl}/directions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1049,7 +1083,7 @@ export default function MapaHospitalOptimizado() {
             <Progress size="lg" width="300px" isIndeterminate colorScheme="blue" />
             {isGeocoding && (
               <Text color="gray.600" textAlign="center">
-                Obteniendo coordenadas del hospital...
+                Obteniendo coordenadas exactas del hospital...
               </Text>
             )}
           </VStack>
@@ -1341,16 +1375,16 @@ export default function MapaHospitalOptimizado() {
         <ModalOverlay />
         <ModalContent>
           <ModalHeader bg="blue.600" color="white">
-            💬 Enviar Mensaje al Conductor
+            💬 Enviar Comunicación al Conductor
           </ModalHeader>
           <ModalBody py={4}>
             <VStack spacing={4}>
               <Text fontSize="sm" color="gray.600">
-                Para: {selectedAmbulance?.id} - {selectedAmbulance?.placa}
+                Para: <strong>{selectedAmbulance?.id}</strong> - Placa {selectedAmbulance?.placa}
               </Text>
 
               <Textarea
-                placeholder="Escribe tu mensaje para el conductor de la ambulancia..."
+                placeholder="Mensaje para el conductor (ej. instrucciones, estado del área de recepción...)"
                 value={noteMessage}
                 onChange={(e) => setNoteMessage(e.target.value)}
                 rows={4}
@@ -1358,7 +1392,7 @@ export default function MapaHospitalOptimizado() {
               />
 
               <Textarea
-                placeholder="Información adicional del paciente (opcional)"
+                placeholder="Información adicional del paciente (nombre, condiciones, etc.)"
                 value={patientInfo}
                 onChange={(e) => setPatientInfo(e.target.value)}
                 rows={2}
@@ -1375,7 +1409,7 @@ export default function MapaHospitalOptimizado() {
               onClick={sendNoteToAmbulance}
               isDisabled={!noteMessage.trim()}
             >
-              📤 Enviar Mensaje
+              📤 Enviar Comunicación
             </Button>
           </ModalFooter>
         </ModalContent>

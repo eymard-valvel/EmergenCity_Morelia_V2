@@ -1,4 +1,4 @@
-// MapaOperadorGPS.jsx - VERSIÓN GPS UBER/DIDI MEJORADA CON DISEÑO RESPONSIVO
+// MapaOperadorGPS.jsx - VERSIÓN FINAL CORREGIDA (USO EXCLUSIVO DE WEBSOCKET PARA HOSPITALES)
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
@@ -156,7 +156,11 @@ const theme = extendTheme({
     global: (props) => ({
       body: {
         overflow: 'hidden',
-        fontFamily: "'Inter', system-ui, -apple-system, sans-serif"
+        fontFamily: "'Inter', system-ui, -apple-system, sans-serif",
+        paddingTop: 'env(safe-area-inset-top)',
+        paddingBottom: 'env(safe-area-inset-bottom)',
+        paddingLeft: 'env(safe-area-inset-left)',
+        paddingRight: 'env(safe-area-inset-right)',
       },
       '.mapboxgl-map': {
         fontFamily: "'Inter', system-ui, sans-serif"
@@ -210,6 +214,19 @@ function ColorModeToggle() {
   );
 }
 
+// ---------- UTILIDAD: Obtener API base desde la URL del WebSocket ----------
+const getApiBaseUrl = () => {
+  const wsUrl = import.meta.env.VITE_WS_URL || 'ws://localhost:3002/ws';
+  try {
+    const url = new URL(wsUrl);
+    url.protocol = url.protocol === 'wss:' ? 'https:' : 'http:';
+    url.pathname = url.pathname.replace('/ws', '');
+    return url.origin;
+  } catch (e) {
+    return 'http://localhost:3002';
+  }
+};
+
 export default function MapaOperadorGPS() {
   // Refs
   const mapContainer = useRef(null);
@@ -230,14 +247,14 @@ export default function MapaOperadorGPS() {
   const routeStepsPanelRef = useRef(null);
   const sidebarRef = useRef(null);
 
-  // Responsive hooks - usando useMediaQuery directamente en lugar de useBreakpointValue
+  // Responsive hooks
   const [isMobile] = useMediaQuery("(max-width: 768px)");
   const [isTablet] = useMediaQuery("(max-width: 1024px) and (min-width: 769px)");
   const [isDesktop] = useMediaQuery("(min-width: 1025px)");
   const [isSidebarOpen, setIsSidebarOpen] = useState(!isMobile);
   const [isFullscreenMap, setIsFullscreenMap] = useState(false);
   
-  // Valores responsivos calculados manualmente
+  // Valores calculados para responsive
   const sidebarWidth = isMobile ? "100%" : isTablet ? "320px" : "380px";
   const headerPadding = isMobile ? 2 : 3;
   const fontSizeTitle = isMobile ? "md" : "xl";
@@ -301,6 +318,9 @@ export default function MapaOperadorGPS() {
   const headerBg = useColorModeValue('white', 'gray.800');
   const sidebarBg = useColorModeValue('white', 'gray.800');
 
+  // URL base para las peticiones HTTP (no se usa para hospitales, solo directions/geocode si son necesarios)
+  const apiBaseUrl = getApiBaseUrl();
+
   // ---------- ORIENTACIÓN DEL DISPOSITIVO ----------
   useEffect(() => {
     if (typeof window !== 'undefined' && window.DeviceOrientationEvent) {
@@ -321,7 +341,7 @@ export default function MapaOperadorGPS() {
     }
   }, []);
 
-  // ---------- FUNCIONES DE NAVEGACIÓN ----------
+  // ---------- FUNCIONES DE NAVEGACIÓN DEL DRAWER DE EMERGENCIA ----------
   const nextStep = () => {
     if (emergencyStep === 'mode' && emergencyMode) {
       if (emergencyMode === 'atender_emergencia') {
@@ -760,7 +780,7 @@ export default function MapaOperadorGPS() {
     return directions[index];
   };
 
-  // ---------- WEBSOCKET CONNECTION MEJORADA ----------
+  // ---------- WEBSOCKET CONNECTION MEJORADA (SIN DEPENDENCIA DE API REST) ----------
   const connectWebSocket = useCallback(() => {
     if (!isMounted.current || isConnecting || connectionAttempts.current >= maxConnectionAttempts) {
       return;
@@ -796,7 +816,8 @@ export default function MapaOperadorGPS() {
           }
         });
 
-        loadAllHospitalsFromAPI();
+        // Solicitamos la lista de hospitales a través del WebSocket
+        safeSend({ type: 'request_hospitals_list' });
         showToast('success', 'Sistema Conectado', 'Conectado al servidor WebSocket');
       };
 
@@ -812,12 +833,12 @@ export default function MapaOperadorGPS() {
               console.log('✅ Conexión WebSocket confirmada');
               break;
             case 'active_hospitals_update':
-              console.log('🏥 Hospitales activos actualizados via WS:', data.hospitals.length);
-              updateHospitalConnectionStatus(data.hospitals);
+              console.log('🏥 Hospitales activos actualizados via WS:', data.hospitals?.length);
+              if (data.hospitals) processHospitalsList(data.hospitals);
               break;
             case 'all_hospitals_list':
-              console.log('🏥 Todos los hospitales cargados vía WS:', data.hospitals.length);
-              processHospitalsList(data.hospitals);
+              console.log('🏥 Todos los hospitales cargados vía WS:', data.hospitals?.length);
+              if (data.hospitals) processHospitalsList(data.hospitals);
               break;
             case 'hospital_note':
               showToast('info', 'Mensaje del Hospital', data.note?.message || 'Nueva comunicación');
@@ -892,27 +913,7 @@ export default function MapaOperadorGPS() {
     }
   }, [isConnecting, pos, ambulanceStatus]);
 
-  const loadAllHospitalsFromAPI = async () => {
-    try {
-      const response = await fetch('http://localhost:3002/api/all-hospitals');
-      const data = await response.json();
-      
-      if (data.hospitals) {
-        console.log(`🏥 ${data.hospitals.length} hospitales cargados desde API (carga inicial)`);
-        processHospitalsList(data.hospitals);
-        
-        setTimeout(() => {
-          safeSend({
-            type: 'request_hospitals_list'
-          });
-        }, 1000);
-      }
-    } catch (error) {
-      console.error('❌ Error cargando hospitales desde API:', error);
-      showToast('error', 'Error de Carga', 'No se pudieron cargar los hospitales del sistema');
-    }
-  };
-
+  // Función para procesar la lista de hospitales y actualizar el estado
   const processHospitalsList = (hospitalsData) => {
     if (!hospitalsData || hospitalsData.length === 0) {
       console.log('❌ No hay hospitales para cargar');
@@ -948,18 +949,7 @@ export default function MapaOperadorGPS() {
       : hospitalsWithDistance.sort((a, b) => a.nombre.localeCompare(b.nombre));
 
     setHospitals(sortedHospitals);
-    updateHospitalMarkers(sortedHospitals);
-
     console.log(`✅ ${sortedHospitals.length} hospitales procesados (${sortedHospitals.filter(h => h.connected).length} conectados)`);
-  };
-
-  const updateHospitalConnectionStatus = (activeHospitals) => {
-    setHospitals(prev => prev.map(hospital => {
-      const isActive = activeHospitals.some(active => active.id === hospital.id);
-      return { ...hospital, connected: isActive };
-    }));
-    
-    updateHospitalMarkers(hospitals);
   };
 
   const calculateDistance = (lat1, lon1, lat2, lon2) => {
@@ -974,7 +964,7 @@ export default function MapaOperadorGPS() {
     return R * c;
   };
 
-  const updateHospitalMarkers = (hospitalsList) => {
+  const updateHospitalMarkers = useCallback((hospitalsList) => {
     if (!map.current) return;
 
     hospitalMarkers.current.forEach(marker => marker.remove());
@@ -1120,8 +1110,14 @@ export default function MapaOperadorGPS() {
         });
       }
     };
-  };
+  }, [isMobile]);
 
+  // Sincronizar marcadores cuando cambia la lista de hospitales
+  useEffect(() => {
+    updateHospitalMarkers(hospitals);
+  }, [hospitals, updateHospitalMarkers]);
+
+  // ---------- CAPA DE TRÁFICO REALISTA (colores oficiales Mapbox) ----------
   const addTrafficLayer = () => {
     if (!map.current) return;
 
@@ -1133,124 +1129,68 @@ export default function MapaOperadorGPS() {
         });
       }
 
-      if (map.current.getLayer('traffic-layer')) {
-        map.current.removeLayer('traffic-layer');
+      if (!map.current.getLayer('traffic-layer')) {
+        map.current.addLayer({
+          id: 'traffic-layer',
+          type: 'line',
+          source: 'mapbox-traffic',
+          'source-layer': 'traffic',
+          paint: {
+            'line-color': [
+              'match',
+              ['get', 'congestion'],
+              'low', '#00C853',      // verde
+              'moderate', '#FFD600', // amarillo
+              'heavy', '#FF9100',    // naranja
+              'severe', '#D50000',   // rojo
+              '#00C853'
+            ],
+            'line-width': [
+              'interpolate',
+              ['linear'],
+              ['zoom'],
+              10, isMobile ? 2 : 3,
+              14, isMobile ? 3 : 5,
+              18, isMobile ? 6 : 8
+            ],
+            'line-opacity': 0.9
+          },
+          'layout': {
+            'line-cap': 'round',
+            'line-join': 'round',
+            'visibility': trafficEnabled ? 'visible' : 'none'
+          }
+        }, 'waterway-label'); // Se utiliza una capa que sí existe por defecto
+      } else {
+        map.current.setLayoutProperty('traffic-layer', 'visibility', trafficEnabled ? 'visible' : 'none');
       }
 
-      if (map.current.getLayer('traffic-layer-glow')) {
-        map.current.removeLayer('traffic-layer-glow');
-      }
-
-      map.current.addLayer({
-        id: 'traffic-layer',
-        type: 'line',
-        source: 'mapbox-traffic',
-        'source-layer': 'traffic',
-        paint: {
-          'line-color': [
-            'match',
-            ['get', 'congestion'],
-            'low', '#00FF00',
-            'moderate', '#FFFF00',
-            'heavy', '#FF6600',
-            'severe', '#FF0000',
-            '#00FF00'
-          ],
-          'line-width': [
-            'interpolate',
-            ['linear'],
-            ['zoom'],
-            10, isMobile ? 2 : 3,
-            14, isMobile ? 3 : 5,
-            18, isMobile ? 6 : 8
-          ],
-          'line-opacity': 0.9,
-          'line-blur': 0.5
-        },
-        'layout': {
-          'line-cap': 'round',
-          'line-join': 'round',
-          'visibility': trafficEnabled ? 'visible' : 'none'
-        }
-      }, 'road-label');
-
-      map.current.addLayer({
-        id: 'traffic-layer-glow',
-        type: 'line',
-        source: 'mapbox-traffic',
-        'source-layer': 'traffic',
-        paint: {
-          'line-color': [
-            'match',
-            ['get', 'congestion'],
-            'low', 'rgba(0, 255, 0, 0.4)',
-            'moderate', 'rgba(255, 255, 0, 0.4)',
-            'heavy', 'rgba(255, 102, 0, 0.4)',
-            'severe', 'rgba(255, 0, 0, 0.4)',
-            'rgba(0, 255, 0, 0.4)'
-          ],
-          'line-width': [
-            'interpolate',
-            ['linear'],
-            ['zoom'],
-            10, isMobile ? 4 : 6,
-            14, isMobile ? 7 : 10,
-            18, isMobile ? 12 : 18
-          ],
-          'line-opacity': 0.6,
-          'line-blur': 3
-        },
-        'layout': {
-          'line-cap': 'round',
-          'line-join': 'round',
-          'visibility': trafficEnabled ? 'visible' : 'none'
-        }
-      }, 'traffic-layer');
-
-      if (!map.current.getLayer('traffic-legend')) {
-        const legendEl = document.createElement('div');
-        legendEl.className = 'traffic-legend';
-        legendEl.style.cssText = `
+      // Leyenda de tráfico mejorada
+      if (!document.querySelector('.traffic-legend')) {
+        const legend = document.createElement('div');
+        legend.className = 'traffic-legend';
+        legend.style.cssText = `
           position: absolute;
-          bottom: ${isMobile ? '10px' : '20px'};
-          right: ${isMobile ? '10px' : '20px'};
-          background: ${colorMode === 'light' ? 'rgba(255, 255, 255, 0.9)' : 'rgba(26, 32, 44, 0.9)'};
-          padding: ${isMobile ? '8px' : '12px'};
+          bottom: 30px;
+          left: 10px;
+          background: rgba(255, 255, 255, 0.9);
+          padding: 8px 12px;
           border-radius: 8px;
-          box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-          font-family: Arial, sans-serif;
-          font-size: ${isMobile ? '10px' : '12px'};
-          z-index: 1000;
-          min-width: ${isMobile ? '130px' : '160px'};
-          border: 1px solid ${colorMode === 'light' ? '#e2e8f0' : '#2d3748'};
-          backdrop-filter: blur(5px);
+          font-size: 12px;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+          z-index: 500;
+          backdrop-filter: blur(4px);
+          line-height: 1.6;
         `;
-        
-        legendEl.innerHTML = `
-          <div style="font-weight: bold; margin-bottom: ${isMobile ? '6px' : '8px'}; color: ${colorMode === 'light' ? '#2d3748' : 'white'}">TRÁFICO EN TIEMPO REAL</div>
-          <div style="display: flex; align-items: center; margin-bottom: ${isMobile ? '3px' : '4px'};">
-            <div style="width: 12px; height: 3px; background: #00FF00; margin-right: 6px; border-radius: 2px; box-shadow: 0 0 8px #00FF00;"></div>
-            <span style="color: ${colorMode === 'light' ? '#4a5568' : '#a0aec0'}">Fluido</span>
-          </div>
-          <div style="display: flex; align-items: center; margin-bottom: ${isMobile ? '3px' : '4px'};">
-            <div style="width: 12px; height: 3px; background: #FFFF00; margin-right: 6px; border-radius: 2px; box-shadow: 0 0 8px #FFFF00;"></div>
-            <span style="color: ${colorMode === 'light' ? '#4a5568' : '#a0aec0'}">Moderado</span>
-          </div>
-          <div style="display: flex; align-items: center; margin-bottom: ${isMobile ? '3px' : '4px'};">
-            <div style="width: 12px; height: 3px; background: #FF6600; margin-right: 6px; border-radius: 2px; box-shadow: 0 0 8px #FF6600;"></div>
-            <span style="color: ${colorMode === 'light' ? '#4a5568' : '#a0aec0'}">Congestionado</span>
-          </div>
-          <div style="display: flex; align-items: center;">
-            <div style="width: 12px; height: 3px; background: #FF0000; margin-right: 6px; border-radius: 2px; box-shadow: 0 0 8px #FF0000;"></div>
-            <span style="color: ${colorMode === 'light' ? '#4a5568' : '#a0aec0'}">Severo</span>
-          </div>
+        legend.innerHTML = `
+          <div style="font-weight: bold; margin-bottom: 4px;">Tráfico</div>
+          <div><span style="display: inline-block; width: 12px; height: 12px; background: #00C853; border-radius: 2px; margin-right: 6px;"></span> Fluido</div>
+          <div><span style="display: inline-block; width: 12px; height: 12px; background: #FFD600; border-radius: 2px; margin-right: 6px;"></span> Moderado</div>
+          <div><span style="display: inline-block; width: 12px; height: 12px; background: #FF9100; border-radius: 2px; margin-right: 6px;"></span> Congestionado</div>
+          <div><span style="display: inline-block; width: 12px; height: 12px; background: #D50000; border-radius: 2px; margin-right: 6px;"></span> Severo</div>
         `;
-        
-        mapContainer.current.appendChild(legendEl);
+        mapContainer.current.appendChild(legend);
       }
-
-      setTrafficEnabled(true);
-      showToast('info', 'Tráfico en Tiempo Real', 'Capa de tráfico activada con colores mejorados');
 
     } catch (error) {
       console.warn('No se pudo agregar capa de tráfico:', error);
@@ -1263,18 +1203,15 @@ export default function MapaOperadorGPS() {
     if (trafficEnabled) {
       if (map.current.getLayer('traffic-layer')) {
         map.current.setLayoutProperty('traffic-layer', 'visibility', 'none');
-        map.current.setLayoutProperty('traffic-layer-glow', 'visibility', 'none');
       }
-      
       const legend = document.querySelector('.traffic-legend');
-      if (legend) {
-        legend.style.display = 'none';
-      }
-      
+      if (legend) legend.style.display = 'none';
       setTrafficEnabled(false);
       showToast('info', 'Tráfico', 'Capa de tráfico desactivada');
     } else {
       addTrafficLayer();
+      setTrafficEnabled(true);
+      showToast('info', 'Tráfico', 'Capa de tráfico activada');
     }
   };
 
@@ -1644,49 +1581,29 @@ export default function MapaOperadorGPS() {
     setIsSearching(true);
 
     try {
-      const response = await fetch('http://localhost:3002/search-addresses', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          query: searchQuery + ' Morelia'
-        })
-      });
+      const query = encodeURIComponent(`${searchQuery}, Morelia, Michoacán, México`);
+      const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${query}.json?access_token=${mapboxgl.accessToken}&country=mx&types=address,poi,place&limit=5&language=es`;
+      const response = await fetch(url);
 
       if (!response.ok) {
         throw new Error('Error en búsqueda');
       }
 
-      const results = await response.json();
+      const data = await response.json();
       
-      const filteredResults = results
-        .filter(result => {
-          const hasNumber = /\d/.test(result.place_name);
-          const isAddress = result.type === 'address';
-          const isPOI = result.type === 'poi';
-          const isPlace = result.type === 'place';
-          const hasHighRelevance = result.relevance > 0.3;
-          const isInMorelia = result.place_name.toLowerCase().includes('morelia') || 
-                             result.context.toLowerCase().includes('morelia') ||
-                             result.municipality?.toLowerCase().includes('morelia');
-          
-          return (isAddress || isPOI || isPlace) && (hasNumber || hasHighRelevance) && isInMorelia;
-        })
-        .sort((a, b) => {
-          const aHasNumber = /\d/.test(a.place_name) ? 1 : 0;
-          const bHasNumber = /\d/.test(b.place_name) ? 1 : 0;
-          const aIsExact = a.place_name.toLowerCase().includes(searchQuery.toLowerCase()) ? 1 : 0;
-          const bIsExact = b.place_name.toLowerCase().includes(searchQuery.toLowerCase()) ? 1 : 0;
-          return (bHasNumber - aHasNumber) || (bIsExact - aIsExact) || (b.relevance - a.relevance);
-        })
-        .slice(0, isMobile ? 5 : 8);
+      const results = (data.features || []).map(f => ({
+        id: f.id,
+        place_name: f.place_name,
+        lat: f.center[1],
+        lng: f.center[0],
+        type: f.place_type[0],
+        relevance: f.relevance,
+      }));
       
-      setSearchResults(filteredResults);
-
+      setSearchResults(results);
     } catch (error) {
       console.error('❌ Error buscando direcciones:', error);
-      showToast('error', 'Error de Búsqueda', 'No se pudieron cargar los resultados');
+      showToast('error', 'Error de Búsqueda', 'No se pudieron obtener resultados');
     } finally {
       setIsSearching(false);
     }
@@ -1838,7 +1755,7 @@ export default function MapaOperadorGPS() {
     }
 
     try {
-      const response = await fetch('http://localhost:3002/directions', {
+      const response = await fetch(`${apiBaseUrl}/directions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2107,7 +2024,6 @@ export default function MapaOperadorGPS() {
       });
 
       setHospitals(updatedHospitals);
-      updateHospitalMarkers(updatedHospitals);
     }
   }, [pos]);
 
@@ -2451,6 +2367,7 @@ export default function MapaOperadorGPS() {
             borderRadius: '24px',
           }
         }}
+        pb={isMobile ? `calc(env(safe-area-inset-bottom) + 16px)` : 0}
       >
         <VStack spacing={isMobile ? 3 : 4} align="stretch">
           <Button 
@@ -2701,9 +2618,16 @@ export default function MapaOperadorGPS() {
     );
   };
 
-  // Header responsivo
+  // Header responsivo con safe area
   const Header = () => (
-    <Box bg={headerBg} p={headerPadding} boxShadow="sm" borderBottom="1px" borderColor={borderColor}>
+    <Box 
+      bg={headerBg} 
+      p={headerPadding} 
+      boxShadow="sm" 
+      borderBottom="1px" 
+      borderColor={borderColor}
+      pt={`calc(env(safe-area-inset-top) + 8px)`}
+    >
       <HStack justifyContent="space-between" alignItems="center" flexWrap="wrap" spacing={2}>
         <HStack spacing={isMobile ? 2 : 3}>
           <IconButton
@@ -2821,6 +2745,10 @@ export default function MapaOperadorGPS() {
         flexDirection="column" 
         bg={bgColor}
         position="relative"
+        style={{
+          paddingTop: 'env(safe-area-inset-top)',
+          paddingBottom: 'env(safe-area-inset-bottom)',
+        }}
       >
         <Header />
 

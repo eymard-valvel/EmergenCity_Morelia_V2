@@ -1,4 +1,4 @@
-// websocket-server-optimized.js - VERSIÓN CORREGIDA
+// websocket-server-optimized.js - VERSIÓN CORREGIDA Y GEOLOCALIZACIÓN MEJORADA
 const WebSocket = require('ws');
 const http = require('http');
 const express = require('express');
@@ -42,36 +42,46 @@ async function geocodeAddress(address) {
     return null;
   }
 
+  const cleanAddress = address.trim();
+
   try {
-    const q = encodeURIComponent(address.trim() + ', Morelia, Michoacán, México');
-    console.log(`📍 Geocoding dirección: ${address}`);
+    // No añadimos "Morelia" porque la dirección ya la contiene. Usamos la dirección tal cual + país.
+    // Añadir "México" ayuda a restringir la búsqueda si no está presente.
+    const queryBase = cleanAddress.toLowerCase().includes('méxico') || cleanAddress.toLowerCase().includes('mexico')
+      ? cleanAddress
+      : `${cleanAddress}, México`;
     
-    const mapboxUrl = `https://api.mapbox.com/geocoding/v5/mapbox.places/${q}.json?access_token=${MAPBOX_TOKEN}&country=mx&limit=5&language=es`;
-    
+    const q = encodeURIComponent(queryBase);
+    console.log(`📍 Geocoding dirección: "${cleanAddress}" -> query: "${queryBase}"`);
+
+    // Priorizar direcciones exactas con types=address
+    const mapboxUrl = `https://api.mapbox.com/geocoding/v5/mapbox.places/${q}.json?access_token=${MAPBOX_TOKEN}&country=mx&types=address,poi&limit=1&language=es`;
+
     const mapboxResp = await fetch(mapboxUrl);
     if (mapboxResp.ok) {
       const mapboxData = await mapboxResp.json();
-      
+
       if (mapboxData.features && mapboxData.features.length > 0) {
         const bestMatch = mapboxData.features[0];
-        
+
         const result = {
           lat: bestMatch.center[1],
           lng: bestMatch.center[0],
           place_name: bestMatch.place_name,
-          relevance: bestMatch.relevance,
+          relevance: bestMatch.relevance || 1,
           address: bestMatch.place_name
         };
-        
+
         console.log(`✅ Geocoding exitoso: ${result.lat}, ${result.lng} - ${result.place_name}`);
         return result;
       }
     }
 
-    // Fallback a Nominatim
-    const fallbackUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}&countrycodes=mx&limit=5`;
+    // Fallback a Nominatim (sin duplicar ciudad)
+    const nominatimQuery = encodeURIComponent(`${cleanAddress}, Michoacán, México`);
+    const fallbackUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${nominatimQuery}&countrycodes=mx&limit=1`;
     const fallbackResp = await fetch(fallbackUrl);
-    
+
     if (fallbackResp.ok) {
       const fallbackData = await fallbackResp.json();
       if (fallbackData.length > 0) {
@@ -86,7 +96,8 @@ async function geocodeAddress(address) {
       }
     }
 
-    console.log('❌ No se pudo geocodificar la dirección');
+    console.log('❌ No se pudo geocodificar la dirección, usando coordenadas por defecto');
+    // Solo en caso de fallo total regresamos coordenadas genéricas de Morelia (centro)
     return null;
 
   } catch (error) {
@@ -111,9 +122,9 @@ function broadcastActiveHospitalsToAmbulances() {
     connectedAt: hospital.connectedAt,
     activo: hospital.info.activo !== false
   }));
-  
+
   console.log(`📤 Broadcasting ${hospitalsList.length} hospitales activos a todas las ambulancias`);
-  
+
   broadcastToAmbulances({
     type: 'active_hospitals_update',
     hospitals: hospitalsList,
@@ -125,7 +136,7 @@ function broadcastActiveHospitalsToAmbulances() {
 function broadcastToAmbulances(message) {
   const messageStr = JSON.stringify(message);
   let sentCount = 0;
-  
+
   activeAmbulances.forEach((ambulance) => {
     if (ambulance.ws && ambulance.ws.readyState === WebSocket.OPEN) {
       try {
@@ -136,14 +147,14 @@ function broadcastToAmbulances(message) {
       }
     }
   });
-  
+
   console.log(`📤 Broadcast a ${sentCount} ambulancias: ${message.type}`);
 }
 
 function broadcastToHospitals(message) {
   const messageStr = JSON.stringify(message);
   let sentCount = 0;
-  
+
   activeHospitals.forEach((hospital) => {
     if (hospital.ws && hospital.ws.readyState === WebSocket.OPEN) {
       try {
@@ -154,7 +165,7 @@ function broadcastToHospitals(message) {
       }
     }
   });
-  
+
   console.log(`📤 Broadcast a ${sentCount} hospitales: ${message.type}`);
 }
 
@@ -169,9 +180,9 @@ function broadcastActiveAmbulances() {
     heading: ambulance.heading,
     lastUpdate: ambulance.lastUpdate
   }));
-  
+
   broadcastToHospitals({
-    type: 'active_ambulances_update', 
+    type: 'active_ambulances_update',
     ambulances: ambulancesList,
     timestamp: new Date().toISOString()
   });
@@ -221,7 +232,7 @@ app.get('/health', (req, res) => {
 app.get('/api/all-hospitals', async (req, res) => {
   try {
     const hospitalsFromDB = await getAllHospitalsFromDB();
-    
+
     // Geocodificar hospitales que no tienen coordenadas
     const hospitalsWithCoords = await Promise.all(
       hospitalsFromDB.map(async (hospital) => {
@@ -236,13 +247,17 @@ app.get('/api/all-hospitals', async (req, res) => {
             if (geoResult) {
               hospital.lat = geoResult.lat;
               hospital.lng = geoResult.lng;
+            } else {
+              // No asignamos coordenadas por defecto si falla, mantenemos null
+              hospital.lat = null;
+              hospital.lng = null;
             }
           }
         }
         return hospital;
       })
     );
-    
+
     // Marcar cuáles están conectados actualmente
     const hospitalsWithStatus = hospitalsWithCoords.map(hospital => ({
       ...hospital,
@@ -250,7 +265,7 @@ app.get('/api/all-hospitals', async (req, res) => {
       status: activeHospitals.has(hospital.id) ? 'active' : 'inactive'
     }));
 
-    res.json({ 
+    res.json({
       hospitals: hospitalsWithStatus,
       total: hospitalsWithStatus.length,
       connected: activeHospitals.size
@@ -264,17 +279,17 @@ app.get('/api/all-hospitals', async (req, res) => {
 app.post('/geocode', async (req, res) => {
   try {
     const { address } = req.body;
-    
+
     if (!address) {
       return res.status(400).json({ error: 'Se requiere la dirección' });
     }
-    
+
     const result = await geocodeAddress(address);
-    
+
     if (!result) {
       return res.status(404).json({ error: 'No se pudo geocodificar la dirección' });
     }
-    
+
     res.json(result);
   } catch (error) {
     console.error('Error en /geocode:', error);
@@ -285,19 +300,19 @@ app.post('/geocode', async (req, res) => {
 app.post('/search-addresses', async (req, res) => {
   try {
     const { query } = req.body;
-    
+
     if (!query || query.trim().length < 3) {
       return res.json([]);
     }
-    
+
     const q = encodeURIComponent(query.trim());
     const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${q}.json?access_token=${MAPBOX_TOKEN}&country=mx&limit=10&types=address,poi,place&language=es`;
-    
+
     const response = await fetch(url);
     if (!response.ok) return res.json([]);
-    
+
     const data = await response.json();
-    
+
     const results = (data.features || []).map(feature => ({
       id: feature.id,
       place_name: feature.place_name,
@@ -307,7 +322,7 @@ app.post('/search-addresses', async (req, res) => {
       address: feature.properties?.address || '',
       relevance: feature.relevance
     }));
-    
+
     res.json(results);
   } catch (error) {
     console.error('Error en /search-addresses:', error);
@@ -318,25 +333,25 @@ app.post('/search-addresses', async (req, res) => {
 app.post('/directions', async (req, res) => {
   try {
     const { startLng, startLat, endLng, endLat } = req.body;
-    
+
     if (!startLng || !startLat || !endLng || !endLat) {
       return res.status(400).json({ error: 'Coordenadas incompletas' });
     }
-    
+
     const coords = `${startLng},${startLat};${endLng},${endLat}`;
     const url = `https://api.mapbox.com/directions/v5/mapbox/driving-traffic/${coords}?geometries=geojson&overview=full&steps=true&access_token=${MAPBOX_TOKEN}`;
-    
+
     const resp = await fetch(url);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    
+
     const json = await resp.json();
-    
+
     if (!json.routes || json.routes.length === 0) {
       return res.status(404).json({ error: 'No se encontraron rutas' });
     }
 
     const route = json.routes[0];
-    
+
     res.json({
       geometry: route.geometry.coordinates,
       distance: route.distance,
@@ -353,7 +368,7 @@ app.post('/directions', async (req, res) => {
 // ---------- WEBSOCKET MESSAGE HANDLERS ----------
 wss.on('connection', (ws, req) => {
   console.log('✅ Nueva conexión WebSocket establecida');
-  
+
   ws.send(JSON.stringify({
     type: 'connection_established',
     message: 'Conexión WebSocket establecida correctamente',
@@ -386,51 +401,51 @@ async function handleMessage(ws, data) {
     case 'register_ambulance':
       await handleRegisterAmbulance(ws, data);
       break;
-      
+
     case 'register_hospital':
       await handleRegisterHospital(ws, data);
       break;
-      
+
     case 'location_update':
       handleLocationUpdate(data);
       break;
-      
+
     case 'patient_transfer_notification':
       await handlePatientTransferNotification(data);
       break;
-      
+
     case 'hospital_accept_patient':
       await handleHospitalAcceptPatient(data);
       break;
-      
+
     case 'hospital_reject_patient':
       await handleHospitalRejectPatient(data);
       break;
-      
+
     case 'cancel_navigation':
       handleCancelNavigation(data);
       break;
-      
+
     case 'cancel_emergency_marker':
       handleCancelEmergencyMarker(data);
       break;
-      
+
     case 'request_route_update':
       handleRequestRouteUpdate(ws, data);
       break;
-      
+
     case 'hospital_note':
       handleHospitalNote(data);
       break;
-      
+
     case 'request_hospitals_list':
       await handleRequestHospitalsList(ws);
       break;
-      
+
     case 'get_all_hospitals':
       await handleGetAllHospitals(ws);
       break;
-      
+
     case 'asignar_paciente_doctor':
       handleAsignarDoctor(ws, data);
       break;
@@ -438,7 +453,7 @@ async function handleMessage(ws, data) {
     case 'nuevo_reporte_paciente':
       handleNuevoReportePaciente(ws, data);
       break;
-      
+
     default:
       console.log('⚠️ Mensaje no manejado:', data.type);
       break;
@@ -497,13 +512,13 @@ async function handleRegisterHospital(ws, data) {
     if ((!hospitalData.info.lat || !hospitalData.info.lng) && hospitalData.info.direccion) {
       console.log(`📍 Geocoding para hospital: ${hospitalData.info.direccion}`);
       const geoResult = await geocodeAddress(hospitalData.info.direccion);
-      
+
       if (geoResult) {
         hospitalData.info.lat = geoResult.lat;
         hospitalData.info.lng = geoResult.lng;
         console.log(`✅ Hospital geocoded: ${hospitalData.info.lat}, ${hospitalData.info.lng}`);
       } else {
-        // Coordenadas por defecto en Morelia
+        // Si falla, usamos coordenadas por defecto de Morelia centro (solo como último recurso)
         hospitalData.info.lat = 19.7024;
         hospitalData.info.lng = -101.1969;
         console.log(`⚠️ Usando coordenadas por defecto para hospital`);
@@ -577,7 +592,7 @@ function handleLocationUpdate(data) {
 
 async function handlePatientTransferNotification(data) {
   const notificationId = data.notificationId || `notif_${Date.now()}`;
-  
+
   const payload = {
     ...data,
     notificationId: notificationId,
@@ -628,7 +643,7 @@ async function handleHospitalAcceptPatient(data) {
   if (!notification) return;
 
   const pendingRoute = pendingEmergencyRoutes.get(data.notificationId);
-  
+
   const ambulance = activeAmbulances.get(notification.ambulanceId);
   if (ambulance && ambulance.ws) {
     if (pendingRoute) {
@@ -654,15 +669,15 @@ async function handleHospitalAcceptPatient(data) {
         timestamp: new Date().toISOString()
       });
     }
-    
+
     ambulance.status = 'en_ruta';
-    
+
     if (rejectedHospitals.has(notification.ambulanceId)) {
       rejectedHospitals.delete(notification.ambulanceId);
     }
-    
+
     pendingEmergencyRoutes.delete(data.notificationId);
-    
+
     console.log(`✅ Paciente aceptado por hospital ${data.hospitalId}`);
   }
 
@@ -684,17 +699,17 @@ async function handleHospitalRejectPatient(data) {
       message: 'Hospital no puede aceptar al paciente.',
       timestamp: new Date().toISOString()
     });
-    
+
     const alreadyRejected = rejectedHospitals.get(notification.ambulanceId) || new Set();
     const rejectedList = Array.from(alreadyRejected);
     rejectedList.push(data.hospitalId);
-    
+
     const availableHospitals = Array.from(activeHospitals.values())
       .filter(hospital => {
         const hasRejected = rejectedList.includes(hospital.info.id);
         const isConnected = hospital.ws && hospital.ws.readyState === WebSocket.OPEN;
         const isActive = hospital.info.activo !== false;
-        
+
         return !hasRejected && isConnected && isActive;
       })
       .sort((a, b) => {
@@ -711,7 +726,7 @@ async function handleHospitalRejectPatient(data) {
 
     if (availableHospitals.length > 0) {
       const nextHospital = availableHospitals[0];
-      
+
       const newNotificationId = `auto_${Date.now()}`;
       const newNotification = {
         ...notification,
@@ -719,15 +734,15 @@ async function handleHospitalRejectPatient(data) {
         hospitalId: nextHospital.info.id,
         isAutomatic: true
       };
-      
+
       pendingNotifications.set(newNotificationId, newNotification);
-      
+
       if (nextHospital.ws && nextHospital.ws.readyState === WebSocket.OPEN) {
         sendMessage(nextHospital.ws, {
           type: 'patient_transfer_notification',
           ...newNotification
         });
-        
+
         sendMessage(ambulance.ws, {
           type: 'automatic_redirect',
           originalHospitalId: data.hospitalId,
@@ -737,7 +752,7 @@ async function handleHospitalRejectPatient(data) {
           message: `Solicitud enviada automáticamente a ${nextHospital.info.nombre}`,
           remainingHospitals: availableHospitals.length - 1
         });
-        
+
         console.log(`🔄 Solicitud enviada a hospital ${nextHospital.info.id}`);
       }
     } else {
@@ -746,10 +761,10 @@ async function handleHospitalRejectPatient(data) {
         message: 'Todos los hospitales disponibles han rechazado la solicitud',
         timestamp: new Date().toISOString()
       });
-      
+
       pendingEmergencyRoutes.delete(data.notificationId);
     }
-    
+
     console.log(`❌ Paciente rechazado por hospital ${data.hospitalId}`);
   }
 
@@ -759,9 +774,9 @@ async function handleHospitalRejectPatient(data) {
 
 function handleCancelEmergencyMarker(data) {
   const { ambulanceId } = data;
-  
+
   console.log(`🗑️ Cancelando marcador de emergencia para ambulancia: ${ambulanceId}`);
-  
+
   const ambulance = activeAmbulances.get(ambulanceId);
   if (ambulance && ambulance.ws) {
     sendMessage(ambulance.ws, {
@@ -770,7 +785,7 @@ function handleCancelEmergencyMarker(data) {
       timestamp: new Date().toISOString()
     });
   }
-  
+
   for (let [key, route] of pendingEmergencyRoutes.entries()) {
     if (route.ambulanceId === ambulanceId && route.isEmergencyRoute) {
       pendingEmergencyRoutes.delete(key);
@@ -780,14 +795,14 @@ function handleCancelEmergencyMarker(data) {
 
 function handleCancelNavigation(data) {
   const { ambulanceId, hospitalId, routeKey, isEmergencyRoute } = data;
-  
+
   console.log(`🛑 Cancelando navegación: ambulancia ${ambulanceId}, hospital ${hospitalId}`);
-  
+
   const ambulance = activeAmbulances.get(ambulanceId);
   if (ambulance) {
     ambulance.status = 'disponible';
   }
-  
+
   if (routeKey) {
     activeRoutes.delete(routeKey);
   } else {
@@ -797,15 +812,15 @@ function handleCancelNavigation(data) {
       }
     }
   }
-  
+
   rejectedHospitals.delete(ambulanceId);
-  
+
   pendingNotifications.forEach((notif, id) => {
     if (notif.ambulanceId === ambulanceId && notif.hospitalId === hospitalId) {
       pendingNotifications.delete(id);
     }
   });
-  
+
   if (isEmergencyRoute) {
     for (let [key, route] of pendingEmergencyRoutes.entries()) {
       if (route.ambulanceId === ambulanceId && route.isEmergencyRoute) {
@@ -813,7 +828,7 @@ function handleCancelNavigation(data) {
       }
     }
   }
-  
+
   if (ambulance && ambulance.ws) {
     sendMessage(ambulance.ws, {
       type: 'navigation_cancelled',
@@ -822,7 +837,7 @@ function handleCancelNavigation(data) {
       isEmergencyRoute: isEmergencyRoute || false
     });
   }
-  
+
   const hospital = activeHospitals.get(hospitalId);
   if (hospital && hospital.ws) {
     sendMessage(hospital.ws, {
@@ -832,13 +847,13 @@ function handleCancelNavigation(data) {
       timestamp: new Date().toISOString()
     });
   }
-  
+
   broadcastActiveAmbulances();
 }
 
 function handleHospitalNote(data) {
   const { ambulanceId, note } = data;
-  
+
   const ambulance = activeAmbulances.get(ambulanceId);
   if (ambulance && ambulance.ws) {
     sendMessage(ambulance.ws, {
@@ -904,7 +919,7 @@ async function handleRequestHospitalsList(ws) {
 async function handleGetAllHospitals(ws) {
   try {
     const hospitalsFromDB = await getAllHospitalsFromDB();
-    
+
     const hospitalsWithCoords = await Promise.all(
       hospitalsFromDB.map(async (hospital) => {
         if (hospital.direccion && hospital.direccion.trim() !== '') {
@@ -923,7 +938,7 @@ async function handleGetAllHospitals(ws) {
         return hospital;
       })
     );
-    
+
     const hospitalsWithStatus = hospitalsWithCoords.map(hospital => ({
       ...hospital,
       connected: activeHospitals.has(hospital.id),
@@ -944,7 +959,7 @@ async function handleGetAllHospitals(ws) {
 
 function handleAsignarDoctor(ws, data) {
   const { targetDoctorId, reporte, hospitalId } = data;
-  
+
   console.log(`[SERVER] 👨‍⚕️ Hospital ${hospitalId} asigna paciente a Doctor ID: ${targetDoctorId}`);
 
   wss.clients.forEach((client) => {
@@ -969,13 +984,13 @@ function handleNuevoReportePaciente(ws, data) {
     const { targetHospitalId, reporte } = data;
 
     console.log(`[SERVER] 📥 Buscando hospital con ID: "${targetHospitalId}"`);
-    
+
     let hospitalDestino = activeHospitals.get(targetHospitalId);
-    
+
     if (!hospitalDestino) {
       hospitalDestino = activeHospitals.get(String(targetHospitalId));
     }
-    
+
     if (!hospitalDestino) {
       hospitalDestino = activeHospitals.get(Number(targetHospitalId));
     }
@@ -988,15 +1003,15 @@ function handleNuevoReportePaciente(ws, data) {
 
     if (hospitalDestino.ws && hospitalDestino.ws.readyState === WebSocket.OPEN) {
       console.log(`[SERVER] 📤 Enviando reporte a: ${hospitalDestino.info.nombre}`);
-      
+
       hospitalDestino.ws.send(JSON.stringify({
         type: 'recepcion_reporte_paciente',
         reporte: reporte
       }));
-      
-      sendMessage(ws, { 
-        type: 'reporte_enviado_ok', 
-        message: `Notificación enviada a ${hospitalDestino.info.nombre}` 
+
+      sendMessage(ws, {
+        type: 'reporte_enviado_ok',
+        message: `Notificación enviada a ${hospitalDestino.info.nombre}`
       });
 
     } else {
@@ -1013,9 +1028,9 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
   const R = 6371;
   const dLat = (lat2 - lat1) * Math.PI / 180;
   const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a = 
+  const a =
     Math.sin(dLat/2) * Math.sin(dLat/2) +
-    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
     Math.sin(dLon/2) * Math.sin(dLon/2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
   return R * c;
@@ -1052,21 +1067,21 @@ function cleanupDisconnectedClient(ws) {
   for (let [ambulanceId, ambulanceData] of activeAmbulances.entries()) {
     if (ambulanceData.ws === ws) {
       activeAmbulances.delete(ambulanceId);
-      
+
       for (let [key, route] of activeRoutes.entries()) {
         if (route.ambulanceId === ambulanceId) {
           activeRoutes.delete(key);
         }
       }
-      
+
       rejectedHospitals.delete(ambulanceId);
-      
+
       for (let [key, route] of pendingEmergencyRoutes.entries()) {
         if (route.ambulanceId === ambulanceId) {
           pendingEmergencyRoutes.delete(key);
         }
       }
-      
+
       console.log(`🚑 Ambulancia ${ambulanceId} desconectada`);
       broadcastActiveAmbulances();
       break;
@@ -1083,15 +1098,15 @@ setInterval(() => {
     if (ambulance.lastUpdate && (now - ambulance.lastUpdate.getTime()) > timeout) {
       console.log(`🕒 Limpiando ambulancia inactiva: ${id}`);
       activeAmbulances.delete(id);
-      
+
       for (let [key, route] of activeRoutes.entries()) {
         if (route.ambulanceId === id) {
           activeRoutes.delete(key);
         }
       }
-      
+
       rejectedHospitals.delete(id);
-      
+
       for (let [key, route] of pendingEmergencyRoutes.entries()) {
         if (route.ambulanceId === id) {
           pendingEmergencyRoutes.delete(key);
@@ -1106,21 +1121,21 @@ setInterval(() => {
       pendingNotifications.delete(id);
     }
   });
-  
+
   activeRoutes.forEach((route, key) => {
     if (route.updatedAt && (now - route.updatedAt) > timeout) {
       console.log(`🕒 Limpiando ruta antigua: ${key}`);
       activeRoutes.delete(key);
     }
   });
-  
+
   rejectedHospitals.forEach((rejectedSet, ambulanceId) => {
     if (!activeAmbulances.has(ambulanceId)) {
       console.log(`🕒 Limpiando rechazados de ambulancia inactiva: ${ambulanceId}`);
       rejectedHospitals.delete(ambulanceId);
     }
   });
-  
+
   pendingEmergencyRoutes.forEach((route, key) => {
     if (route.timestamp && (now - new Date(route.timestamp).getTime()) > timeout) {
       console.log(`🕒 Limpiando ruta pendiente antigua: ${key}`);
