@@ -1850,38 +1850,40 @@ export default function MapaOperadorGPS() {
     showToast('info', 'Navegando a Emergencia', 'Ubicación de emergencia centrada en el mapa');
   };
 
+
   const calculateRoute = async (start, end) => {
-    if (!start || !end) {
-      showToast('error', 'Error de Ruta', 'Ubicaciones no válidas para calcular ruta');
-      return null;
+  if (!start || !end) {
+    showToast('error', 'Error de Ruta', 'Ubicaciones no válidas');
+    return null;
+  }
+
+  try {
+    const coords = `${start.lng},${start.lat};${end.lng},${end.lat}`;
+    const url = `https://api.mapbox.com/directions/v5/mapbox/driving-traffic/${coords}?geometries=geojson&overview=full&steps=true&access_token=${mapboxgl.accessToken}&language=es`;
+
+    const response = await fetch(url);
+    if (!response.ok) throw new Error('Error calculando ruta');
+
+    const data = await response.json();
+    if (!data.routes || data.routes.length === 0) {
+      throw new Error('No se encontraron rutas');
     }
 
-    try {
-      const response = await fetch(`${apiBaseUrl}/directions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          startLng: start.lng,
-          startLat: start.lat,
-          endLng: end.lng,
-          endLat: end.lat
-        })
-      });
+    const route = data.routes[0];
+    return {
+      geometry: route.geometry.coordinates,
+      distance: route.distance,
+      duration: route.duration,
+      summary: `${(route.distance / 1000).toFixed(1)} km, ${Math.round(route.duration / 60)} min`,
+      steps: route.legs[0]?.steps || []
+    };
+  } catch (error) {
+    console.error('❌ Error calculando ruta:', error);
+    showToast('error', 'Error de Ruta', 'No se pudo calcular la ruta al destino');
+    return null;
+  }
+};
 
-      if (!response.ok) {
-        throw new Error('Error calculando ruta');
-      }
-
-      const routeData = await response.json();
-      return routeData;
-    } catch (error) {
-      console.error('❌ Error calculando ruta:', error);
-      showToast('error', 'Error de Ruta', 'No se pudo calcular la ruta al destino');
-      return null;
-    }
-  };
 
   const startEmergency = async () => {
     if (emergencyMode === 'atender_emergencia' && !selectedLocation) {
