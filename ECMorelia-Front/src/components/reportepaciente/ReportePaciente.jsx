@@ -369,7 +369,10 @@ const API_URL = import.meta.env.VITE_API || 'http://localhost:3000/api';
 		// delete reporteParaEnviar.codigo_prioridad_color; // (Si lo tuvieras)
 
 		try {
-			console.log('Enviando a BD:', reporteParaEnviar);
+			console.log(
+	'Enviando a BD:',
+	JSON.stringify(reporteParaEnviar, null, 2)
+);
 
 			// Usamos la variable de entorno o localhost por defecto
 			const API_URL = import.meta.env.VITE_API || 'http://localhost:3000';

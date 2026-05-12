@@ -2,8 +2,6 @@
 const WebSocket = require('ws');
 const http = require('http');
 const express = require('express');
-//const fetch = (...args) => import('node-fetch').then(({default: f}) => f(...args));
-// Reemplazo de fetch: usamos node-fetch versión CommonJS estable
 const fetch = require('node-fetch');
 const { PrismaClient } = require('@prisma/client');
 
@@ -27,6 +25,12 @@ const pendingEmergencyRoutes = new Map();
 
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN || 'pk.eyJ1IjoiZXltYXJkMjkiLCJhIjoiY21tcDY4YzNpMGw3bjJzb203YmZyNTVnMyJ9.OvZlnCMfUkUYe6Ib83DUVw';
 
+// Caché de geocodificación para mejorar rendimiento
+const geocodeCache = new Map();
+
+// Throttle para broadcast de ubicaciones
+const lastLocationBroadcast = new Map();
+
 // Middleware
 app.use(express.json());
 app.use((req, res, next) => {
@@ -41,10 +45,13 @@ app.options('*', (req, res) => res.sendStatus(200));
 async function geocodeAddress(address) {
   if (!address || address.trim() === '') return null;
 
-  const cleanAddress = address.trim();
+  const cleanAddress = address.trim().toLowerCase();
+  if (geocodeCache.has(cleanAddress)) {
+    return geocodeCache.get(cleanAddress);
+  }
 
   try {
-    const queryBase = cleanAddress.toLowerCase().includes('méxico') || cleanAddress.toLowerCase().includes('mexico')
+    const queryBase = cleanAddress.includes('méxico') || cleanAddress.includes('mexico')
       ? cleanAddress
       : `${cleanAddress}, México`;
     const q = encodeURIComponent(queryBase);
@@ -55,13 +62,15 @@ async function geocodeAddress(address) {
       const mapboxData = await mapboxResp.json();
       if (mapboxData.features && mapboxData.features.length > 0) {
         const bestMatch = mapboxData.features[0];
-        return {
+        const result = {
           lat: bestMatch.center[1],
           lng: bestMatch.center[0],
           place_name: bestMatch.place_name,
           relevance: bestMatch.relevance || 1,
           address: bestMatch.place_name
         };
+        geocodeCache.set(cleanAddress, result);
+        return result;
       }
     }
 
@@ -71,12 +80,14 @@ async function geocodeAddress(address) {
     if (fallbackResp.ok) {
       const fallbackData = await fallbackResp.json();
       if (fallbackData.length > 0) {
-        return {
+        const result = {
           lat: parseFloat(fallbackData[0].lat),
           lng: parseFloat(fallbackData[0].lon),
           place_name: fallbackData[0].display_name,
           address: fallbackData[0].display_name
         };
+        geocodeCache.set(cleanAddress, result);
+        return result;
       }
     }
   } catch (error) {
@@ -85,17 +96,34 @@ async function geocodeAddress(address) {
 
   return null;
 }
-// ---------- BROADCAST DE HOSPITALES ACTIVOS (SOLO IDs PARA ACTUALIZAR ESTADO) ----------
-function broadcastActiveHospitalsToAmbulances() {
-  const connectedIds = Array.from(activeHospitals.keys());
-  
-  console.log(`📤 Broadcasting ${connectedIds.length} hospitales conectados a todas las ambulancias`);
 
-  broadcastToAmbulances({
-    type: 'active_hospitals_update',
-    connectedIds: connectedIds,
-    timestamp: new Date().toISOString()
-  });
+// ---------- BROADCAST DE HOSPITALES ACTIVOS (LISTA COMPLETA CON CONEXIÓN) ----------
+async function broadcastActiveHospitalsToAmbulances() {
+  try {
+    const allHospitals = await getAllHospitalsFromDB();
+    const enriched = allHospitals.map(h => {
+      const active = activeHospitals.get(h.id);
+      return {
+        ...h,
+        connected: !!active,
+        lat: active?.info.lat || h.lat,
+        lng: active?.info.lng || h.lng,
+        especialidades: active?.info.especialidades || h.especialidades,
+        camasDisponibles: active?.info.camasDisponibles ?? h.camasDisponibles,
+        telefono: active?.info.telefono || h.telefono,
+        activo: true
+      };
+    });
+
+    broadcastToAmbulances({
+      type: 'active_hospitals_update',
+      hospitals: enriched,
+      connectedIds: Array.from(activeHospitals.keys()),
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error broadcastActiveHospitalsToAmbulances:', err);
+  }
 }
 
 function broadcastToAmbulances(message) {
@@ -198,11 +226,9 @@ app.get('/api/all-hospitals', async (req, res) => {
   try {
     const hospitalsFromDB = await getAllHospitalsFromDB();
 
-    // Geocodificar hospitales que no tienen coordenadas
     const hospitalsWithCoords = await Promise.all(
       hospitalsFromDB.map(async (hospital) => {
         if (hospital.direccion && hospital.direccion.trim() !== '') {
-          // Verificar si ya tenemos coordenadas en activeHospitals
           const activeHospital = activeHospitals.get(hospital.id);
           if (activeHospital && activeHospital.info.lat && activeHospital.info.lng) {
             hospital.lat = activeHospital.info.lat;
@@ -213,7 +239,6 @@ app.get('/api/all-hospitals', async (req, res) => {
               hospital.lat = geoResult.lat;
               hospital.lng = geoResult.lng;
             } else {
-              // No asignamos coordenadas por defecto si falla, mantenemos null
               hospital.lat = null;
               hospital.lng = null;
             }
@@ -223,7 +248,6 @@ app.get('/api/all-hospitals', async (req, res) => {
       })
     );
 
-    // Marcar cuáles están conectados actualmente
     const hospitalsWithStatus = hospitalsWithCoords.map(hospital => ({
       ...hospital,
       connected: activeHospitals.has(hospital.id),
@@ -244,17 +268,13 @@ app.get('/api/all-hospitals', async (req, res) => {
 app.post('/geocode', async (req, res) => {
   try {
     const { address } = req.body;
-
     if (!address) {
       return res.status(400).json({ error: 'Se requiere la dirección' });
     }
-
     const result = await geocodeAddress(address);
-
     if (!result) {
       return res.status(404).json({ error: 'No se pudo geocodificar la dirección' });
     }
-
     res.json(result);
   } catch (error) {
     console.error('Error en /geocode:', error);
@@ -265,19 +285,14 @@ app.post('/geocode', async (req, res) => {
 app.post('/search-addresses', async (req, res) => {
   try {
     const { query } = req.body;
-
     if (!query || query.trim().length < 3) {
       return res.json([]);
     }
-
     const q = encodeURIComponent(query.trim());
     const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${q}.json?access_token=${MAPBOX_TOKEN}&country=mx&limit=10&types=address,poi,place&language=es`;
-
     const response = await fetch(url);
     if (!response.ok) return res.json([]);
-
     const data = await response.json();
-
     const results = (data.features || []).map(feature => ({
       id: feature.id,
       place_name: feature.place_name,
@@ -287,7 +302,6 @@ app.post('/search-addresses', async (req, res) => {
       address: feature.properties?.address || '',
       relevance: feature.relevance
     }));
-
     res.json(results);
   } catch (error) {
     console.error('Error en /search-addresses:', error);
@@ -298,25 +312,18 @@ app.post('/search-addresses', async (req, res) => {
 app.post('/directions', async (req, res) => {
   try {
     const { startLng, startLat, endLng, endLat } = req.body;
-
     if (!startLng || !startLat || !endLng || !endLat) {
       return res.status(400).json({ error: 'Coordenadas incompletas' });
     }
-
     const coords = `${startLng},${startLat};${endLng},${endLat}`;
     const url = `https://api.mapbox.com/directions/v5/mapbox/driving-traffic/${coords}?geometries=geojson&overview=full&steps=true&access_token=${MAPBOX_TOKEN}`;
-
     const resp = await fetch(url);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-
     const json = await resp.json();
-
     if (!json.routes || json.routes.length === 0) {
       return res.status(404).json({ error: 'No se encontraron rutas' });
     }
-
     const route = json.routes[0];
-
     res.json({
       geometry: route.geometry.coordinates,
       distance: route.distance,
@@ -399,6 +406,10 @@ async function handleMessage(ws, data) {
       handleRequestRouteUpdate(ws, data);
       break;
 
+    case 'request_route_recompute':
+      await handleRequestRouteRecompute(ws, data);
+      break;
+
     case 'hospital_note':
       handleHospitalNote(data);
       break;
@@ -445,7 +456,7 @@ async function handleRegisterAmbulance(ws, data) {
   activeAmbulances.set(ambulanceData.id, ambulanceData);
   console.log(`🚑 Ambulancia registrada: ${ambulanceData.id}`);
 
-  // Enviar lista COMPLETA de hospitales a esta ambulancia (con estado connected)
+  // Enviar lista completa de hospitales a esta ambulancia
   await handleRequestHospitalsList(ws);
 
   // Broadcast a ambulancias y hospitales: nuevo vehículo en servicio
@@ -513,8 +524,30 @@ async function handleRegisterHospital(ws, data) {
       message: `${ambulancesList.length} ambulancias activas`
     });
 
+    // Enviar las rutas activas hacia este hospital (si las hay)
+    const relevantRoutes = [];
+    for (let [key, route] of activeRoutes) {
+      if (route.hospitalId === hospitalData.info.id) {
+        relevantRoutes.push({
+          ambulanceId: route.ambulanceId,
+          routeGeometry: route.routeGeometry,
+          distance: route.distance,
+          duration: route.duration,
+          timestamp: route.timestamp
+        });
+      }
+    }
+
+    if (relevantRoutes.length > 0) {
+      sendMessage(ws, {
+        type: 'active_routes_update',
+        routes: relevantRoutes,
+        message: 'Rutas activas hacia este hospital'
+      });
+    }
+
     // Broadcast a TODAS las ambulancias que hay un nuevo hospital activo
-    broadcastActiveHospitalsToAmbulances();
+    await broadcastActiveHospitalsToAmbulances();
 
     // Confirmar registro exitoso
     sendMessage(ws, {
@@ -541,16 +574,21 @@ function handleLocationUpdate(data) {
     ambulance.status = data.status || ambulance.status;
     ambulance.lastUpdate = new Date();
 
-    // Broadcast de ubicación a todos los hospitales
-    broadcastToHospitals({
-      type: 'location_update',
-      ambulanceId: ambulanceId,
-      location: ambulance.location,
-      speed: ambulance.speed,
-      heading: ambulance.heading,
-      status: ambulance.status,
-      timestamp: new Date().toISOString()
-    });
+    // Throttle broadcast a hospitales: máximo cada 2 segundos
+    const now = Date.now();
+    const last = lastLocationBroadcast.get(ambulanceId) || 0;
+    if (now - last >= 2000) {
+      lastLocationBroadcast.set(ambulanceId, now);
+      broadcastToHospitals({
+        type: 'location_update',
+        ambulanceId: ambulanceId,
+        location: ambulance.location,
+        speed: ambulance.speed,
+        heading: ambulance.heading,
+        status: ambulance.status,
+        timestamp: new Date().toISOString()
+      });
+    }
 
     console.log(`📍 Ubicación actualizada: ${ambulanceId} - ${ambulance.speed} km/h - ${ambulance.heading}°`);
   }
@@ -859,6 +897,66 @@ function handleRequestRouteUpdate(ws, data) {
   });
 }
 
+// Nuevo: recalcular ruta en tiempo real bajo demanda
+async function handleRequestRouteRecompute(ws, data) {
+  const { ambulanceId, hospitalId } = data;
+  if (!ambulanceId || !hospitalId) return;
+
+  const ambulance = activeAmbulances.get(ambulanceId);
+  const hospital = activeHospitals.get(hospitalId);
+  if (!ambulance || !ambulance.location || !hospital || !hospital.info.lat) return;
+
+  try {
+    const coords = `${ambulance.location.lng},${ambulance.location.lat};${hospital.info.lng},${hospital.info.lat}`;
+    const url = `https://api.mapbox.com/directions/v5/mapbox/driving-traffic/${coords}?geometries=geojson&overview=full&steps=true&access_token=${MAPBOX_TOKEN}&language=es`;
+
+    const resp = await fetch(url);
+    if (!resp.ok) return;
+    const json = await resp.json();
+    if (!json.routes || json.routes.length === 0) return;
+
+    const route = json.routes[0];
+    const routeData = {
+      ambulanceId,
+      hospitalId,
+      routeGeometry: route.geometry.coordinates,
+      distance: route.distance,
+      duration: route.duration,
+      timestamp: new Date().toISOString()
+    };
+
+    // Guardar en activeRoutes para futuras referencias
+    activeRoutes.set(`${ambulanceId}-${hospitalId}`, {
+      ...routeData,
+      updatedAt: new Date()
+    });
+
+    // Enviar a la ambulancia
+    if (ambulance.ws.readyState === WebSocket.OPEN) {
+      sendMessage(ambulance.ws, {
+        type: 'route_updated',
+        ...routeData,
+        message: 'Ruta actualizada con tráfico en tiempo real'
+      });
+    }
+
+    // Enviar al hospital
+    if (hospital.ws.readyState === WebSocket.OPEN) {
+      sendMessage(hospital.ws, {
+        type: 'route_updated',
+        ambulanceId,
+        hospitalId,
+        routeGeometry: route.geometry.coordinates,
+        distance: route.distance,
+        duration: route.duration,
+        message: 'Ruta actualizada desde servidor con condiciones de tráfico'
+      });
+    }
+  } catch (err) {
+    console.error('Error recalculando ruta:', err);
+  }
+}
+
 async function handleRequestHospitalsList(ws) {
   try {
     const hospitalsFromDB = await getAllHospitalsFromDB();
@@ -1047,7 +1145,7 @@ function cleanupDisconnectedClient(ws) {
     if (hospitalData.ws === ws) {
       activeHospitals.delete(hospitalId);
       console.log(`🏥 Hospital ${hospitalId} desconectado`);
-      broadcastActiveHospitalsToAmbulances();
+      broadcastActiveHospitalsToAmbulances(); // Se ejecuta asíncrono, no necesita await
       break;
     }
   }
@@ -1143,6 +1241,64 @@ setInterval(() => {
     }
   });
 }, 30000);
+
+// ---------- RECOMPUTACIÓN AUTOMÁTICA DE RUTAS ACTIVAS ----------
+setInterval(async () => {
+  for (let [ambulanceId, ambulance] of activeAmbulances) {
+    if (ambulance.status !== 'en_ruta') continue;
+    // Buscar la ruta activa de esta ambulancia
+    let hospitalId = null;
+    for (let [key, route] of activeRoutes) {
+      if (route.ambulanceId === ambulanceId) {
+        hospitalId = route.hospitalId;
+        break;
+      }
+    }
+    if (!hospitalId) continue;
+    const hospital = activeHospitals.get(hospitalId);
+    if (!hospital || !hospital.info.lat) continue;
+    if (!ambulance.location) continue;
+
+    try {
+      const coords = `${ambulance.location.lng},${ambulance.location.lat};${hospital.info.lng},${hospital.info.lat}`;
+      const url = `https://api.mapbox.com/directions/v5/mapbox/driving-traffic/${coords}?geometries=geojson&overview=full&steps=true&access_token=${MAPBOX_TOKEN}&language=es`;
+      const resp = await fetch(url);
+      if (!resp.ok) continue;
+      const json = await resp.json();
+      if (!json.routes || json.routes.length === 0) continue;
+      const route = json.routes[0];
+      
+      const routeData = {
+        ambulanceId,
+        hospitalId,
+        routeGeometry: route.geometry.coordinates,
+        distance: route.distance,
+        duration: route.duration,
+        timestamp: new Date().toISOString()
+      };
+      
+      activeRoutes.set(`${ambulanceId}-${hospitalId}`, { ...routeData, updatedAt: new Date() });
+      
+      // Enviar actualización a ambulancia y hospital
+      if (ambulance.ws.readyState === WebSocket.OPEN) {
+        sendMessage(ambulance.ws, { type: 'route_updated', ...routeData });
+      }
+      if (hospital.ws.readyState === WebSocket.OPEN) {
+        sendMessage(hospital.ws, {
+          type: 'route_updated',
+          ambulanceId,
+          hospitalId,
+          routeGeometry: route.geometry.coordinates,
+          distance: route.distance,
+          duration: route.duration,
+          timestamp: routeData.timestamp
+        });
+      }
+    } catch (e) {
+      // Ignorar errores de API
+    }
+  }
+}, 15000);
 
 // Iniciar servidor
 const PORT = process.env.WS_PORT || 3002;

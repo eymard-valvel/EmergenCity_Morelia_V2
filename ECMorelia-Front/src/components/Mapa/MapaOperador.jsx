@@ -1,4 +1,4 @@
-// MapaOperadorGPS.jsx - VERSIÓN FINAL CORREGIDA (USO EXCLUSIVO DE WEBSOCKET PARA HOSPITALES)
+// MapaOperadorGPS.jsx - VERSIÓN REDISEÑO MÓVIL (NAVEGACIÓN PASO A PASO MINIMALISTA)
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
@@ -261,6 +261,26 @@ globalStyle.textContent = `
     border: 1px solid rgba(255,255,255,0.1) !important;
     border-radius: 16px !important;
   }
+  .turn-by-turn-bar {
+    background: rgba(0, 0, 0, 0.8) !important;
+    backdrop-filter: blur(8px);
+    color: white;
+    padding: 8px 12px;
+    border-radius: 12px;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 1001;
+    max-width: 90%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 `;
 document.head.appendChild(globalStyle);
 
@@ -310,7 +330,6 @@ export default function MapaOperadorGPS() {
   const lastPosition = useRef(null);
   const isMounted = useRef(true);
   const orientationListener = useRef(null);
-  const routeStepsPanelRef = useRef(null);
   const sidebarRef = useRef(null);
 
   // Responsive hooks
@@ -365,9 +384,10 @@ export default function MapaOperadorGPS() {
     respiratoryRate: ''
   });
   const [ambulanceStatus, setAmbulanceStatus] = useState('disponible');
-  const [routeSteps, setRouteSteps] = useState([]);
-  const [currentStep, setCurrentStep] = useState(0);
-  const [showRouteSteps, setShowRouteSteps] = useState(false);
+  // Navegación paso a paso minimalista
+  const [currentManeuver, setCurrentManeuver] = useState(null);
+  const [nextManeuver, setNextManeuver] = useState(null);
+  const [routeProgress, setRouteProgress] = useState(null); // { distanceRemaining, durationRemaining }
   const [pendingEmergencyRoute, setPendingEmergencyRoute] = useState(null);
   const [mapZoom, setMapZoom] = useState(15);
   const [mapPitch, setMapPitch] = useState(60);
@@ -384,7 +404,7 @@ export default function MapaOperadorGPS() {
   const headerBg = useColorModeValue('white', 'gray.800');
   const sidebarBg = useColorModeValue('white', 'gray.800');
 
-  // URL base para las peticiones HTTP (no se usa para hospitales, solo directions/geocode si son necesarios)
+  // URL base para las peticiones HTTP (solo para geocoding/directions)
   const apiBaseUrl = getApiBaseUrl();
 
   // ---------- ORIENTACIÓN DEL DISPOSITIVO ----------
@@ -846,7 +866,7 @@ export default function MapaOperadorGPS() {
     return directions[index];
   };
 
-  // ---------- WEBSOCKET CONNECTION MEJORADA (SIN DEPENDENCIA DE API REST) ----------
+  // ---------- WEBSOCKET CONNECTION MEJORADA ----------
   const connectWebSocket = useCallback(() => {
     if (!isMounted.current || isConnecting || connectionAttempts.current >= maxConnectionAttempts) {
       return;
@@ -899,8 +919,11 @@ export default function MapaOperadorGPS() {
               console.log('✅ Conexión WebSocket confirmada');
               break;
             case 'active_hospitals_update':
-              if (data.connectedIds) {
-                // Broadcast sincrónico: solo actualizar estado connected de hospitales existentes
+              if (data.hospitals) {
+                console.log('🏥 Hospitales recibidos vía WS:', data.hospitals.length, 'conectados:', data.connected);
+                processHospitalsList(data.hospitals);
+              } else if (data.connectedIds) {
+                // Broadcast sincrónico: actualizar estado connected de hospitales existentes
                 setHospitals(prev => {
                   if (prev.length === 0) return prev;
                   return prev.map(h => ({
@@ -908,15 +931,16 @@ export default function MapaOperadorGPS() {
                     connected: data.connectedIds.includes(h.id)
                   }));
                 });
-              } else if (data.hospitals) {
-                // Lista completa desde el servidor
-                console.log('🏥 Hospitales recibidos vía WS:', data.hospitals.length, 'conectados:', data.connected);
-                processHospitalsList(data.hospitals);
               }
               break;
             case 'all_hospitals_list':
-              console.log('🏥 Todos los hospitales cargados vía WS:', data.hospitals?.length);
               if (data.hospitals) processHospitalsList(data.hospitals);
+              break;
+            case 'route_updated':
+              handleRouteUpdate(data);
+              break;
+            case 'location_update':
+              handleAmbulanceLocationUpdate(data);
               break;
             case 'hospital_note':
               showToast('info', 'Mensaje del Hospital', data.note?.message || 'Nueva comunicación');
@@ -1219,7 +1243,7 @@ export default function MapaOperadorGPS() {
     updateHospitalMarkers(hospitals);
   }, [hospitals, updateHospitalMarkers]);
 
-  // ---------- CAPA DE TRÁFICO REALISTA (colores oficiales Mapbox) ----------
+  // ---------- CAPA DE TRÁFICO REALISTA ----------
   const addTrafficLayer = () => {
     if (!map.current) return;
 
@@ -1241,10 +1265,10 @@ export default function MapaOperadorGPS() {
             'line-color': [
               'match',
               ['get', 'congestion'],
-              'low', '#00C853',      // verde
-              'moderate', '#FFD600', // amarillo
-              'heavy', '#FF9100',    // naranja
-              'severe', '#D50000',   // rojo
+              'low', '#00C853',
+              'moderate', '#FFD600',
+              'heavy', '#FF9100',
+              'severe', '#D50000',
               '#00C853'
             ],
             'line-width': [
@@ -1262,12 +1286,11 @@ export default function MapaOperadorGPS() {
             'line-join': 'round',
             'visibility': trafficEnabled ? 'visible' : 'none'
           }
-        }, 'waterway-label'); // Se utiliza una capa que sí existe por defecto
+        }, 'waterway-label');
       } else {
         map.current.setLayoutProperty('traffic-layer', 'visibility', trafficEnabled ? 'visible' : 'none');
       }
 
-      // Leyenda de tráfico mejorada
       if (!document.querySelector('.traffic-legend')) {
         const legend = document.createElement('div');
         legend.className = 'traffic-legend';
@@ -1317,43 +1340,49 @@ export default function MapaOperadorGPS() {
     }
   };
 
+  // Manejo de actualizaciones de ruta desde el servidor
   const handleRouteUpdate = (data) => {
-    if (data.routes && data.routes.length > 0) {
-      data.routes.forEach((route, index) => {
-        const routeId = `route-${data.ambulanceId}-${route.hospitalId || 'emergency'}-${index}`;
-        drawRoute(route.routeGeometry, routeId, index);
+    if (data.routeGeometry) {
+      const routeId = `route-${data.ambulanceId || 'UVI-01'}-${data.hospitalId || 'dest'}`;
+      drawRoute(data.routeGeometry, routeId, 0);
+      
+      // Actualizar pasos si vienen incluidos
+      if (data.steps && data.steps.length > 0) {
+        const steps = data.steps.map((step, idx) => ({
+          number: idx + 1,
+          instruction: step.maneuver.instruction || `Continuar por ${step.name || 'la vía'}`,
+          distance: step.distance,
+          duration: step.duration,
+          maneuver: step.maneuver.type || 'straight'
+        }));
+        setCurrentManeuver(steps[0] || null);
+        if (steps.length > 1) setNextManeuver(steps[1]);
+        else setNextManeuver(null);
+      }
+      
+      setRouteProgress({
+        distanceRemaining: data.distance,
+        durationRemaining: data.duration
       });
       
-      const newRoutes = data.routes.map(route => ({
-        routeKey: route.routeKey,
-        ambulanceId: data.ambulanceId,
-        hospitalId: route.hospitalId,
-        distance: route.distance,
-        duration: route.duration,
-        geometry: route.routeGeometry
-      }));
-      
-      setActiveRoutes(prev => [...prev, ...newRoutes.filter(newRoute => 
-        !prev.some(prevRoute => prevRoute.routeKey === newRoute.routeKey)
-      )]);
-      
-    } else if (data.routeGeometry) {
-      const routeId = `route-${data.ambulanceId}-${data.hospitalId || 'emergency'}`;
-      drawRoute(data.routeGeometry, routeId);
-      
+      // Agregar o actualizar ruta activa
       const newRoute = {
-        routeKey: data.routeKey || routeId,
-        ambulanceId: data.ambulanceId,
+        routeKey: routeId,
+        ambulanceId: data.ambulanceId || 'UVI-01',
         hospitalId: data.hospitalId,
+        geometry: data.routeGeometry,
         distance: data.distance,
         duration: data.duration,
-        geometry: data.routeGeometry
+        isEmergencyRoute: data.isEmergencyRoute || false
       };
-      
-      setActiveRoutes(prev => [...prev.filter(r => r.routeKey !== newRoute.routeKey), newRoute]);
+      setActiveRoutes(prev => [
+        ...prev.filter(r => r.routeKey !== routeId),
+        newRoute
+      ]);
     }
   };
 
+  // ---------- DIBUJAR RUTA EN EL MAPA ----------
   const drawRoute = (routeGeometry, routeId, index = 0) => {
     if (!map.current || !routeGeometry) return;
 
@@ -1440,24 +1469,19 @@ export default function MapaOperadorGPS() {
       routeLayerIds.current.push(uniqueRouteId, `${uniqueRouteId}-dots`, `${uniqueRouteId}-glow`);
       routeSources.current.push(uniqueRouteId);
 
-      let dashArraySeq = [[0, 4, 3]];
+      // Animación simple para la línea punteada
       let timer = 0;
-      
       const animateRoute = () => {
-        timer = (timer + 1) % 1000;
-        const newDashArray = dashArraySeq.map(arr => arr.map(num => num * (timer / 20)));
-        
+        timer = (timer + 1) % 100;
         if (map.current.getLayer(`${uniqueRouteId}-dots`)) {
           map.current.setPaintProperty(
             `${uniqueRouteId}-dots`,
             'line-dasharray',
-            newDashArray[0]
+            [0, 4, 3].map(num => num * (Math.sin(timer / 10) * 0.5 + 0.5))
           );
         }
-        
-        requestAnimationFrame(animateRoute);
+        if (isMounted.current) requestAnimationFrame(animateRoute);
       };
-      
       animateRoute();
 
       if (pos) {
@@ -1498,9 +1522,9 @@ export default function MapaOperadorGPS() {
     routeLayerIds.current = [];
     routeSources.current = [];
     setActiveRoutes([]);
-    setRouteSteps([]);
-    setCurrentStep(0);
-    setShowRouteSteps(false);
+    setCurrentManeuver(null);
+    setNextManeuver(null);
+    setRouteProgress(null);
   };
 
   const clearSpecificRoute = (routeKey) => {
@@ -1524,9 +1548,10 @@ export default function MapaOperadorGPS() {
     routeSources.current = routeSources.current.filter(id => !id.includes(routeKey));
     
     setActiveRoutes(prev => prev.filter(route => route.routeKey !== routeKey));
-    
-    if (activeRoutes.find(route => route.routeKey === routeKey)) {
-      setShowRouteSteps(false);
+    if (activeRoutes.length === 0) {
+      setCurrentManeuver(null);
+      setNextManeuver(null);
+      setRouteProgress(null);
     }
   };
 
@@ -1568,6 +1593,14 @@ export default function MapaOperadorGPS() {
         removeEmergencyMarker();
       }
       
+      // Extraer pasos de la respuesta de Mapbox (si vinieran)
+      // Como desde el servidor no enviamos steps, los solicitaremos con request_route_recompute
+      safeSend({
+        type: 'request_route_recompute',
+        ambulanceId: 'UVI-01',
+        hospitalId: data.hospitalId
+      });
+      
       const newRoute = {
         routeKey: routeId,
         ambulanceId: 'UVI-01',
@@ -1577,7 +1610,6 @@ export default function MapaOperadorGPS() {
         geometry: data.routeGeometry,
         isEmergencyRoute: data.isEmergencyRoute || false
       };
-      
       setActiveRoutes(prev => [...prev.filter(r => r.hospitalId !== data.hospitalId), newRoute]);
       setPendingEmergencyRoute(null);
     }
@@ -1850,40 +1882,38 @@ export default function MapaOperadorGPS() {
     showToast('info', 'Navegando a Emergencia', 'Ubicación de emergencia centrada en el mapa');
   };
 
-
-const calculateRoute = async (start, end) => {
-  if (!start || !end) {
-    showToast('error', 'Error de Ruta', 'Ubicaciones no válidas');
-    return null;
-  }
-
-  try {
-    const coords = `${start.lng},${start.lat};${end.lng},${end.lat}`;
-    const url = `https://api.mapbox.com/directions/v5/mapbox/driving-traffic/${coords}?geometries=geojson&overview=full&steps=true&access_token=${mapboxgl.accessToken}&language=es`;
-
-    const response = await fetch(url);
-    if (!response.ok) throw new Error('Error calculando ruta');
-
-    const data = await response.json();
-    if (!data.routes || data.routes.length === 0) {
-      throw new Error('No se encontraron rutas');
+  const calculateRoute = async (start, end) => {
+    if (!start || !end) {
+      showToast('error', 'Error de Ruta', 'Ubicaciones no válidas');
+      return null;
     }
 
-    const route = data.routes[0];
-    return {
-      geometry: route.geometry.coordinates,  // coordenadas de la línea
-      distance: route.distance,               // metros
-      duration: route.duration,               // segundos
-      summary: `${(route.distance / 1000).toFixed(1)} km, ${Math.round(route.duration / 60)} min`,
-      steps: route.legs?.[0]?.steps || []     // pasos de navegación
-    };
-  } catch (error) {
-    console.error('❌ Error calculando ruta:', error);
-    showToast('error', 'Error de Ruta', 'No se pudo calcular la ruta al destino');
-    return null;
-  }
-};
+    try {
+      const coords = `${start.lng},${start.lat};${end.lng},${end.lat}`;
+      const url = `https://api.mapbox.com/directions/v5/mapbox/driving-traffic/${coords}?geometries=geojson&overview=full&steps=true&access_token=${mapboxgl.accessToken}&language=es`;
 
+      const response = await fetch(url);
+      if (!response.ok) throw new Error('Error calculando ruta');
+
+      const data = await response.json();
+      if (!data.routes || data.routes.length === 0) {
+        throw new Error('No se encontraron rutas');
+      }
+
+      const route = data.routes[0];
+      return {
+        geometry: route.geometry.coordinates,
+        distance: route.distance,
+        duration: route.duration,
+        summary: `${(route.distance / 1000).toFixed(1)} km, ${Math.round(route.duration / 60)} min`,
+        steps: route.legs?.[0]?.steps || []
+      };
+    } catch (error) {
+      console.error('❌ Error calculando ruta:', error);
+      showToast('error', 'Error de Ruta', 'No se pudo calcular la ruta al destino');
+      return null;
+    }
+  };
 
   const startEmergency = async () => {
     if (emergencyMode === 'atender_emergencia' && !selectedLocation) {
@@ -1912,29 +1942,27 @@ const calculateRoute = async (start, end) => {
 
     try {
       const routeData = await calculateRoute(startLocation, endLocation);
-if (!routeData) return;
+      if (!routeData) return;
 
-const routeId = `route-${emergencyMode === 'atender_emergencia' ? 'emergency' : hospital.id}-${Date.now()}`;
-drawRoute(routeData.geometry, routeId, 0);
+      const routeId = `route-${emergencyMode === 'atender_emergencia' ? 'emergency' : hospital.id}-${Date.now()}`;
+      drawRoute(routeData.geometry, routeId, 0);
 
-setActiveRoutes(prev => [...prev, {
-  routeKey: routeId,
-  ambulanceId: 'UVI-01',
-  geometry: routeData.geometry,
-  distance: (routeData.distance / 1000).toFixed(1),
-  duration: Math.round(routeData.duration / 60)
-}]);
+      setActiveRoutes(prev => [...prev, {
+        routeKey: routeId,
+        ambulanceId: 'UVI-01',
+        geometry: routeData.geometry,
+        distance: (routeData.distance / 1000).toFixed(1),
+        duration: Math.round(routeData.duration / 60)
+      }]);
+
       if (routeData.steps && routeData.steps.length > 0) {
-        const steps = routeData.steps.map((step, index) => ({
-          number: index + 1,
-          instruction: step.maneuver.instruction || `Continuar por ${step.name || 'la vía'}`,
-          distance: (step.distance / 1000).toFixed(1),
-          duration: Math.round(step.duration / 60),
-          maneuver: step.maneuver.type || 'continue'
-        }));
-        setRouteSteps(steps);
-        setCurrentStep(0);
-        setShowRouteSteps(true);
+        setCurrentManeuver(routeData.steps[0]);
+        if (routeData.steps.length > 1) setNextManeuver(routeData.steps[1]);
+        else setNextManeuver(null);
+        setRouteProgress({
+          distanceRemaining: routeData.distance,
+          durationRemaining: routeData.duration
+        });
       }
       
       const patientInfo = includePatientInfo ? {
@@ -2145,163 +2173,45 @@ setActiveRoutes(prev => [...prev, {
     routeSources.current = [];
   };
 
-  const RouteStepsPanel = () => {
-    if (!showRouteSteps || routeSteps.length === 0) return null;
-
-    const getManeuverIcon = (maneuver) => {
-      switch(maneuver) {
-        case 'turn':
-        case 'turn left':
-          return '↰';
-        case 'turn right':
-          return '↱';
-        case 'sharp left':
-          return '↶';
-        case 'sharp right':
-          return '↷';
-        case 'slight left':
-          return '↖';
-        case 'slight right':
-          return '↗';
-        case 'straight':
-          return '↑';
-        case 'uturn':
-          return '↺';
-        case 'ramp':
-          return '⇪';
-        case 'merge':
-          return '⇗';
-        case 'fork':
-          return '⇉';
-        case 'roundabout':
-          return '⟲';
-        default:
-          return '→';
-      }
-    };
+  // Barra de navegación paso a paso minimalista
+  const TurnByTurnBar = () => {
+    if (!currentManeuver) return null;
+    const distanceKm = currentManeuver.distance / 1000;
+    const distanceText = distanceKm < 1 
+      ? `${Math.round(currentManeuver.distance)} m` 
+      : `${distanceKm.toFixed(1)} km`;
+    const maneuverIcon = {
+      'turn left': '↰',
+      'turn right': '↱',
+      'sharp left': '↶',
+      'sharp right': '↷',
+      'slight left': '↖',
+      'slight right': '↗',
+      'straight': '↑',
+      'uturn': '↺',
+      'roundabout': '⟲',
+      'merge': '⇗',
+      'fork': '⇉',
+      'ramp': '⇪'
+    }[currentManeuver.maneuver] || '→';
 
     return (
       <Box
-        ref={routeStepsPanelRef}
-        position="absolute"
-        top={isMobile ? "70px" : "80px"}
-        right={isMobile ? "10px" : "20px"}
-        left={isMobile ? "10px" : "auto"}
-        width={isMobile ? "calc(100% - 20px)" : "350px"}
-        bg={cardBg}
-        color={textColor}
-        p={isMobile ? 3 : 4}
-        borderRadius="md"
-        boxShadow="xl"
-        border="1px"
-        borderColor={borderColor}
-        zIndex="1000"
-        maxHeight={isMobile ? "60vh" : "450px"}
-        overflowY="auto"
+        className="turn-by-turn-bar"
+        onClick={() => {/* opcional: expandir detalles */}}
       >
-        <HStack justify="space-between" mb={3}>
-          <Text fontWeight="bold" color="blue.600" fontSize={isMobile ? "md" : "lg"}>
-            <FaDirections style={{ display: 'inline', marginRight: '8px' }} /> NAVEGACIÓN
+        <Text fontSize="2xl" lineHeight="1">{maneuverIcon}</Text>
+        <Text fontSize="sm" fontWeight="bold" noOfLines={1}>
+          {currentManeuver.instruction}
+        </Text>
+        <Text fontSize="sm" color="gray.300">
+          en {distanceText}
+        </Text>
+        {routeProgress && (
+          <Text fontSize="sm" color="gray.400" ml="auto">
+            {Math.round(routeProgress.durationRemaining / 60)} min
           </Text>
-          <IconButton
-            aria-label="Cerrar panel"
-            icon={<CloseIcon />}
-            size="sm"
-            onClick={() => setShowRouteSteps(false)}
-          />
-        </HStack>
-        
-        <VStack spacing={3} align="stretch">
-          {routeSteps.map((step, index) => (
-            <Box
-              key={index}
-              p={isMobile ? 2 : 3}
-              bg={index === currentStep ? "blue.50" : "transparent"}
-              borderLeft={index === currentStep ? "4px solid #2196F3" : "4px solid transparent"}
-              borderRadius="md"
-              border="1px"
-              borderColor={borderColor}
-              _hover={{ bg: "blue.50" }}
-            >
-              <HStack spacing={3}>
-                <Box
-                  width={isMobile ? "32px" : "40px"}
-                  height={isMobile ? "32px" : "40px"}
-                  borderRadius="md"
-                  bg={index === currentStep ? "#2196F3" : "gray.200"}
-                  color="white"
-                  display="flex"
-                  alignItems="center"
-                  justifyContent="center"
-                  fontSize={isMobile ? "16px" : "20px"}
-                  fontWeight="bold"
-                  boxShadow="sm"
-                >
-                  {getManeuverIcon(step.maneuver)}
-                </Box>
-                <VStack align="start" spacing={1} flex={1}>
-                  <Text fontSize={isMobile ? "xs" : "sm"} fontWeight="medium">
-                    {step.instruction}
-                  </Text>
-                  <Text fontSize="2xs" color="gray.500">
-                    {step.distance} km • {step.duration} min
-                  </Text>
-                </VStack>
-                <Badge 
-                  colorScheme={index === currentStep ? "blue" : "gray"} 
-                  fontSize="2xs"
-                >
-                  {index + 1}
-                </Badge>
-              </HStack>
-            </Box>
-          ))}
-        </VStack>
-        
-        {routeSteps.length > 0 && (
-          <HStack mt={4} justify="space-between" spacing={4}>
-            <Button
-              size="sm"
-              leftIcon={<ChevronLeftIcon />}
-              onClick={() => setCurrentStep(Math.max(0, currentStep - 1))}
-              isDisabled={currentStep === 0}
-              flex={1}
-            >
-              Anterior
-            </Button>
-            <Box textAlign="center" minWidth="80px">
-              <Text fontSize="xs" color="gray.500">
-                Paso
-              </Text>
-              <Text fontSize="sm" fontWeight="bold">
-                {currentStep + 1} de {routeSteps.length}
-              </Text>
-            </Box>
-            <Button
-              size="sm"
-              rightIcon={<ChevronRightIcon />}
-              onClick={() => setCurrentStep(Math.min(routeSteps.length - 1, currentStep + 1))}
-              isDisabled={currentStep === routeSteps.length - 1}
-              flex={1}
-            >
-              Siguiente
-            </Button>
-          </HStack>
         )}
-        
-        <Button 
-          size="sm" 
-          colorScheme="red" 
-          mt={3} 
-          width="100%"
-          onClick={() => {
-            setShowRouteSteps(false);
-            setRouteSteps([]);
-          }}
-          leftIcon={<FaTimes />}
-        >
-          Cerrar Navegación
-        </Button>
       </Box>
     );
   };
@@ -2440,7 +2350,7 @@ setActiveRoutes(prev => [...prev, {
     }, 100);
   };
 
-  // Componente de barra lateral responsiva
+  // --- RENDER PRINCIPAL ---
   const Sidebar = () => {
     if (isMobile && !isSidebarOpen) return null;
 
@@ -2604,26 +2514,15 @@ setActiveRoutes(prev => [...prev, {
             </Card>
           )}
 
-          {/* HOSPITALES ACTIVOS - Solo conectados via MapaHospital */}
-          <Card
-            border="1px"
-            borderColor="green.200"
-            bg="rgba(240, 255, 240, 0.7)"
-            sx={{ backdropFilter: 'blur(8px)' }}
-          >
+          {/* HOSPITALES ACTIVOS */}
+          <Card border="1px" borderColor="green.200" bg="rgba(240, 255, 240, 0.7)">
             <CardBody p={isMobile ? 2 : 3}>
               <HStack justify="space-between" mb={2}>
                 <Text fontSize={isMobile ? "sm" : "sm"} fontWeight="bold" color="green.700">
                   <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', background: '#4CAF50', marginRight: 8, boxShadow: '0 0 8px #4CAF50', animation: 'pulseGreen 2s infinite' }} />
                   HOSPITALES ACTIVOS ({hospitals.filter(h => h.connected && h.activo).length})
                 </Text>
-                <Button 
-                  size="xs" 
-                  onClick={refreshHospitals}
-                  variant="ghost"
-                  leftIcon={<FaSync />}
-                  colorScheme="green"
-                >
+                <Button size="xs" onClick={refreshHospitals} variant="ghost" leftIcon={<FaSync />} colorScheme="green">
                   Sinc.
                 </Button>
               </HStack>
@@ -2918,7 +2817,6 @@ setActiveRoutes(prev => [...prev, {
     </Box>
   );
 
-  // Botón flotante para móvil (mostrar/ocultar sidebar)
   const FloatingMenuButton = () => {
     if (!isMobile || isSidebarOpen) return null;
 
@@ -2960,10 +2858,8 @@ setActiveRoutes(prev => [...prev, {
           position="relative"
           overflow="hidden"
         >
-          {/* Sidebar */}
           <Sidebar />
 
-          {/* Mapa */}
           <Box 
             flex={1} 
             position="relative"
@@ -2978,15 +2874,15 @@ setActiveRoutes(prev => [...prev, {
               }} 
             />
             
-            {/* Panel de pasos de ruta */}
-            <RouteStepsPanel />
+            {/* Barra de navegación paso a paso minimalista */}
+            <TurnByTurnBar />
             
             {/* Notificaciones */}
             {hospitalNotification && (
               <Box
                 position="absolute"
-                top={isMobile ? "10px" : "20px"}
-                right={isMobile ? "10px" : (showRouteSteps ? (isMobile ? "10px" : "380px") : "20px")}
+                top={isMobile ? "50px" : "70px"}
+                right={isMobile ? "10px" : "20px"}
                 left={isMobile ? "10px" : "auto"}
                 bg={hospitalNotification.type === 'accepted' ? "green.500" : 
                     hospitalNotification.type === 'rejected' ? "red.500" : 
@@ -2997,7 +2893,6 @@ setActiveRoutes(prev => [...prev, {
                 boxShadow="xl"
                 maxWidth={isMobile ? "calc(100% - 20px)" : "400px"}
                 zIndex="1000"
-                transition="right 0.3s ease"
               >
                 <Alert status={hospitalNotification.type === 'accepted' ? 'success' : 
                               hospitalNotification.type === 'rejected' ? 'error' : 
@@ -3018,10 +2913,8 @@ setActiveRoutes(prev => [...prev, {
             )}
           </Box>
 
-          {/* Botón flotante para móvil */}
           <FloatingMenuButton />
 
-          {/* Indicador de seguimiento */}
           {isMapFollowing && pos && (
             <Box
               position="absolute"
@@ -3043,7 +2936,7 @@ setActiveRoutes(prev => [...prev, {
         </Box>
       </Box>
 
-      {/* Drawer de emergencia */}
+      {/* Drawer de emergencia (sin cambios) */}
       <Drawer
         isOpen={isEmergencyDrawerOpen}
         placement="right"
@@ -3062,13 +2955,11 @@ setActiveRoutes(prev => [...prev, {
 
           <DrawerBody>
             <VStack spacing={isMobile ? 4 : 6} align="stretch" pt={4}>
-              {/* Paso 1: Selección de modo */}
               {emergencyStep === 'mode' && (
                 <Box>
                   <Text fontSize={isMobile ? "md" : "lg"} fontWeight="bold" mb={4} textAlign="center">
                     ¿Qué tipo de servicio necesita?
                   </Text>
-                  
                   <VStack spacing={3}>
                     <Button
                       size="lg"
@@ -3113,13 +3004,11 @@ setActiveRoutes(prev => [...prev, {
                 </Box>
               )}
 
-              {/* Paso 2: Información del paciente */}
               {emergencyStep === 'patient' && (
                 <Box>
                   <Text fontSize={isMobile ? "md" : "lg"} fontWeight="bold" mb={4}>
                     Información del Paciente
                   </Text>
-                  
                   <Accordion defaultIndex={[0]} allowMultiple>
                     <AccordionItem>
                       <AccordionButton>
@@ -3200,13 +3089,11 @@ setActiveRoutes(prev => [...prev, {
                 </Box>
               )}
 
-              {/* Paso 2: Ubicación de emergencia */}
               {emergencyStep === 'location' && (
                 <Box>
                   <Text fontSize={isMobile ? "md" : "lg"} fontWeight="bold" mb={4}>
                     <FaMapMarkerAlt style={{ display: 'inline', marginRight: '8px' }} /> Ubicación de la Emergencia
                   </Text>
-                  
                   <VStack spacing={3}>
                     <InputGroup size="lg">
                       <Input
@@ -3284,7 +3171,6 @@ setActiveRoutes(prev => [...prev, {
                 </Box>
               )}
 
-              {/* Paso 3: Selección de hospital */}
               {emergencyStep === 'hospital' && (
                 <Box>
                   <Text fontSize={isMobile ? "md" : "lg"} fontWeight="bold" mb={4}>
@@ -3372,7 +3258,6 @@ setActiveRoutes(prev => [...prev, {
                 </Box>
               )}
 
-              {/* Navegación entre pasos */}
               <HStack spacing={3} width="100%" justify="space-between" pt={4}>
                 <Button 
                   variant="outline" 
@@ -3421,7 +3306,7 @@ setActiveRoutes(prev => [...prev, {
         </DrawerContent>
       </Drawer>
 
-      {/* Drawer de hospitales */}
+      {/* Drawer de hospitales (sin cambios) */}
       <Drawer
         isOpen={isHospitalDrawerOpen}
         placement="right"
@@ -3437,7 +3322,6 @@ setActiveRoutes(prev => [...prev, {
 
           <DrawerBody>
             <VStack spacing={4} align="stretch" pt={4}>
-              {/* Resumen */}
               <Box 
                 p={3} 
                 borderRadius="xl" 

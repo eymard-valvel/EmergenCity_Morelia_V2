@@ -1,4 +1,4 @@
-// MapaHospitalOptimizado.jsx - VERSIÓN CON GEOCODING DIRECTO (MAPBOX + FALLBACK NOMINATIM)
+// MapaHospitalOptimizado.jsx - VERSIÓN CON GEOCODING DIRECTO, RUTAS EN TIEMPO REAL Y MULTI-RUTA
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
@@ -124,7 +124,8 @@ export default function MapaHospitalOptimizado() {
   const ws = useRef(null);
   const hospitalMarker = useRef(null);
   const ambulanceMarkers = useRef({});
-  const routeLayerIds = useRef([]);
+  const routeLayersByAmbulance = useRef({}); // { ambulanceId: [layerIds] }
+  const routeSourcesByAmbulance = useRef({}); // { ambulanceId: [sourceIds] }
   const reconnectTimeout = useRef(null);
   const connectionAttempts = useRef(0);
   const maxConnectionAttempts = 5;
@@ -143,7 +144,7 @@ export default function MapaHospitalOptimizado() {
   const [hospitalInfo, setHospitalInfo] = useState(null);
   const [ambulances, setAmbulances] = useState([]);
   const [wsConnected, setWsConnected] = useState(false);
-  const [activeRoute, setActiveRoute] = useState(null);
+  const [activeRoutes, setActiveRoutes] = useState([]); // array de rutas activas
   const [trafficEnabled, setTrafficEnabled] = useState(true);
   const [isConnecting, setIsConnecting] = useState(false);
   const [isGeocoding, setIsGeocoding] = useState(false);
@@ -211,7 +212,6 @@ export default function MapaHospitalOptimizado() {
       console.warn('⚠️ Falló Nominatim Geocoding:', error);
     }
 
-    // Si nada funcionó, regresar null para usar coordenadas por defecto
     setIsGeocoding(false);
     return null;
   };
@@ -240,28 +240,22 @@ export default function MapaHospitalOptimizado() {
           telefono: stored.telefono || ''
         };
 
-        // Geocodificar si no hay coordenadas válidas (o si se quiere forzar actualización)
         if (hospitalData.direccion && (!hospitalData.lat || !hospitalData.lng)) {
           showToast('info', 'Geocodificando', 'Buscando coordenadas exactas del hospital...');
-
           const geoResult = await geocodeAddressDirect(hospitalData.direccion);
           setIsGeocoding(false);
 
           if (geoResult) {
             hospitalData.lat = geoResult.lat;
             hospitalData.lng = geoResult.lng;
-
             localStorage.setItem("hospitalInfo", JSON.stringify({
               ...stored,
               lat: geoResult.lat,
               lng: geoResult.lng
             }));
-
-            //showToast('success', 'Ubicación Encontrada', `Coordenadas: ${geoResult.lat.toFixed(4)}, ${geoResult.lng.toFixed(4)}`);
           } else {
             hospitalData.lat = 19.7024;
             hospitalData.lng = -101.1969;
-           // showToast('warning', 'Ubicación Aproximada', 'No se pudo geocodificar la dirección exacta. Usando referencia de Morelia.');
           }
         }
 
@@ -341,15 +335,14 @@ export default function MapaHospitalOptimizado() {
               handlePatientTransferNotification(data);
               break;
 
-            case 'route_update':
-              if (data.routeGeometry) {
-                drawRouteOnMap(data.routeGeometry);
-                setActiveRoute({
-                  ambulanceId: data.ambulanceId,
-                  geometry: data.routeGeometry,
-                  distance: data.distance,
-                  duration: data.duration
-                });
+            case 'route_updated':
+              handleRouteUpdated(data);
+              break;
+
+            case 'active_routes_update':
+              // Recibido cuando el hospital se registra y hay rutas activas hacia él
+              if (data.routes && data.routes.length > 0) {
+                data.routes.forEach(route => handleRouteUpdated(route));
               }
               break;
 
@@ -396,7 +389,7 @@ export default function MapaHospitalOptimizado() {
                 setPatientNotifications(prev =>
                   prev.filter(n => n.notificationId !== data.notificationId)
                 );
-                clearRoute();
+                clearAmbulanceRoute(data.ambulanceId); // limpiar ruta si se rechaza
                 showToast('warning', 'Paciente Rechazado', 'Se ha notificado a la ambulancia');
               }
               break;
@@ -415,7 +408,6 @@ export default function MapaHospitalOptimizado() {
 
       ws.current.onclose = (event) => {
         if (!isMounted.current) return;
-
         console.log('🔌 WebSocket cerrado:', event.code, event.reason);
         setWsConnected(false);
         setIsConnecting(false);
@@ -432,7 +424,6 @@ export default function MapaHospitalOptimizado() {
 
       ws.current.onerror = (error) => {
         if (!isMounted.current) return;
-
         console.error('❌ Error WebSocket:', error);
         setWsConnected(false);
         setIsConnecting(false);
@@ -578,11 +569,9 @@ export default function MapaHospitalOptimizado() {
 
   const add3DBuildings = () => {
     if (!map.current) return;
-
     try {
       const layers = map.current.getStyle().layers;
       const labelLayerId = layers.find(layer => layer.type === 'symbol' && layer.layout['text-field'])?.id;
-
       if (map.current.getSource('composite')) {
         map.current.addLayer({
           id: '3d-buildings-hospital',
@@ -606,7 +595,6 @@ export default function MapaHospitalOptimizado() {
 
   const toggleTraffic = () => {
     if (!map.current) return;
-
     if (trafficEnabled) {
       if (map.current.getLayer('traffic-layer-hospital')) {
         map.current.removeLayer('traffic-layer-hospital');
@@ -623,12 +611,10 @@ export default function MapaHospitalOptimizado() {
   // ---------- MARKER MANAGEMENT ----------
   const placeHospitalMarker = () => {
     if (!map.current || !hospitalInfo) return;
-
     try {
       if (hospitalMarker.current) {
         hospitalMarker.current.remove();
       }
-
       const el = document.createElement('div');
       el.innerHTML = `
         <div style="
@@ -669,7 +655,6 @@ export default function MapaHospitalOptimizado() {
         .addTo(map.current);
 
       console.log(`🏥 Marcador del hospital colocado en: ${hospitalInfo.lat}, ${hospitalInfo.lng}`);
-
     } catch (error) {
       console.error('❌ Error colocando marcador del hospital:', error);
     }
@@ -677,7 +662,6 @@ export default function MapaHospitalOptimizado() {
 
   const updateAmbulanceMarkers = (ambulancesList) => {
     if (!map.current) return;
-
     Object.values(ambulanceMarkers.current).forEach(marker => {
       try { marker.remove(); } catch (e) {}
     });
@@ -685,7 +669,6 @@ export default function MapaHospitalOptimizado() {
 
     ambulancesList.forEach(ambulance => {
       if (!ambulance.location || !ambulance.location.lat || !ambulance.location.lng) return;
-
       const el = document.createElement('div');
       el.innerHTML = `
         <div style="
@@ -742,7 +725,6 @@ export default function MapaHospitalOptimizado() {
       if (ambulance) {
         setSelectedAmbulance(ambulance);
         showToast('info', 'Ambulancia Seleccionada', ambulance.id);
-
         if (ambulance.location) {
           map.current.flyTo({
             center: [ambulance.location.lng, ambulance.location.lat],
@@ -756,11 +738,9 @@ export default function MapaHospitalOptimizado() {
 
   const handleAmbulanceLocationUpdate = (data) => {
     if (!data.ambulanceId || !data.location) return;
-
     const marker = ambulanceMarkers.current[data.ambulanceId];
     if (marker) {
       marker.setLngLat([data.location.lng, data.location.lat]);
-
       setAmbulances(prev => prev.map(amb =>
         amb.id === data.ambulanceId
           ? { ...amb, location: data.location, speed: data.speed, heading: data.heading }
@@ -774,21 +754,41 @@ export default function MapaHospitalOptimizado() {
       hospitalMarker.current.remove();
       hospitalMarker.current = null;
     }
-
     Object.values(ambulanceMarkers.current).forEach(marker => {
       try { marker.remove(); } catch (e) {}
     });
     ambulanceMarkers.current = {};
+
+    // Limpiar rutas
+    Object.keys(routeLayersByAmbulance.current).forEach(ambId => {
+      clearAmbulanceRoute(ambId);
+    });
   };
 
-  // ---------- ROUTE MANAGEMENT ----------
-  const drawRouteOnMap = (routeGeometry, routeId = 'hospital-route') => {
-    if (!map.current || !routeGeometry) return;
+  // ---------- MANEJO DE RUTAS (MÚLTIPLES AMBULANCIAS) ----------
+  const clearAmbulanceRoute = (ambulanceId) => {
+    if (!map.current) return;
+    const layers = routeLayersByAmbulance.current[ambulanceId] || [];
+    const sources = routeSourcesByAmbulance.current[ambulanceId] || [];
+    layers.forEach(lid => { if (map.current.getLayer(lid)) map.current.removeLayer(lid); });
+    sources.forEach(sid => { if (map.current.getSource(sid)) map.current.removeSource(sid); });
+    delete routeLayersByAmbulance.current[ambulanceId];
+    delete routeSourcesByAmbulance.current[ambulanceId];
 
-    clearRoute();
+    setActiveRoutes(prev => prev.filter(r => r.ambulanceId !== ambulanceId));
+  };
+
+  const drawAmbulanceRoute = (ambulanceId, routeGeometry, distance, duration) => {
+    if (!map.current || !routeGeometry) return;
+    // Limpiar ruta anterior de esa ambulancia
+    clearAmbulanceRoute(ambulanceId);
+
+    const sourceId = `route-${ambulanceId}-${Date.now()}`;
+    const layerId = sourceId;
+    const glowLayerId = `${sourceId}-glow`;
 
     try {
-      map.current.addSource(routeId, {
+      map.current.addSource(sourceId, {
         type: 'geojson',
         data: {
           type: 'Feature',
@@ -801,151 +801,110 @@ export default function MapaHospitalOptimizado() {
       });
 
       map.current.addLayer({
-        id: routeId,
+        id: layerId,
         type: 'line',
-        source: routeId,
+        source: sourceId,
         layout: {
           'line-join': 'round',
           'line-cap': 'round'
         },
         paint: {
-          'line-color': '#2196F3',
+          'line-color': ambulanceId === 'UVI-01' ? '#D32F2F' : '#2196F3',
           'line-width': isMobile ? 5 : 6,
           'line-opacity': 0.9
         }
       });
 
       map.current.addLayer({
-        id: routeId + '-glow',
+        id: glowLayerId,
         type: 'line',
-        source: routeId,
+        source: sourceId,
         layout: {
           'line-join': 'round',
           'line-cap': 'round'
         },
         paint: {
-          'line-color': '#2196F3',
+          'line-color': ambulanceId === 'UVI-01' ? '#D32F2F' : '#2196F3',
           'line-width': isMobile ? 10 : 12,
           'line-opacity': 0.3,
           'line-blur': 1.5
         }
-      }, routeId);
+      }, layerId);
 
-      routeLayerIds.current = [routeId, routeId + '-glow'];
-
-      const bounds = new mapboxgl.LngLatBounds();
-      routeGeometry.forEach(coord => {
-        bounds.extend([coord[0], coord[1]]);
-      });
-      if (hospitalInfo) {
-        bounds.extend([hospitalInfo.lng, hospitalInfo.lat]);
+      // Registrar capas y fuentes
+      if (!routeLayersByAmbulance.current[ambulanceId]) {
+        routeLayersByAmbulance.current[ambulanceId] = [];
+        routeSourcesByAmbulance.current[ambulanceId] = [];
       }
+      routeLayersByAmbulance.current[ambulanceId].push(layerId, glowLayerId);
+      routeSourcesByAmbulance.current[ambulanceId].push(sourceId);
 
-      map.current.fitBounds(bounds, {
-        padding: isMobile ? 60 : 80,
-        duration: 1500,
-        pitch: 45
-      });
+      // Ajustar vista para incluir el hospital y el inicio de la ruta
+      const bounds = new mapboxgl.LngLatBounds();
+      bounds.extend([hospitalInfo.lng, hospitalInfo.lat]);
+      routeGeometry.forEach(coord => bounds.extend([coord[0], coord[1]]));
+      map.current.fitBounds(bounds, { padding: isMobile ? 60 : 80, duration: 1500, pitch: 45 });
 
     } catch (error) {
-      console.error('❌ Error dibujando ruta:', error);
+      console.error('❌ Error dibujando ruta para', ambulanceId, error);
     }
   };
 
-  const clearRoute = () => {
-    if (!map.current) return;
+  const handleRouteUpdated = (data) => {
+    const { ambulanceId, hospitalId, routeGeometry, distance, duration } = data;
+    // Solo interesan rutas hacia este hospital
+    if (hospitalId && hospitalId !== hospitalInfo?.id) return;
 
-    routeLayerIds.current.forEach(layerId => {
-      if (map.current.getLayer(layerId)) {
-        map.current.removeLayer(layerId);
-      }
-      if (map.current.getSource(layerId)) {
-        map.current.removeSource(layerId);
-      }
-    });
-    routeLayerIds.current = [];
-    setActiveRoute(null);
-  };
-
-  const calculateRouteToAmbulance = async (ambulance) => {
-    if (!ambulance || !ambulance.location || !hospitalInfo) {
-      showToast('warning', 'Datos Incompletos', 'No se puede calcular la ruta');
+    if (routeGeometry) {
+      drawAmbulanceRoute(ambulanceId, routeGeometry, distance, duration);
+    } else {
+      // Si no hay geometría, podría ser una cancelación; igual limpiamos
+      clearAmbulanceRoute(ambulanceId);
       return;
     }
 
-    try {
-      const response = await fetch(`${apiBaseUrl}/directions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          startLng: ambulance.location.lng,
-          startLat: ambulance.location.lat,
-          endLng: hospitalInfo.lng,
-          endLat: hospitalInfo.lat
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error('Error calculando ruta');
+    // Actualizar lista de rutas activas
+    setActiveRoutes(prev => {
+      const existing = prev.findIndex(r => r.ambulanceId === ambulanceId);
+      const newRoute = {
+        ambulanceId,
+        hospitalId: hospitalId || hospitalInfo?.id,
+        distance,
+        duration,
+        geometry: routeGeometry
+      };
+      if (existing >= 0) {
+        const updated = [...prev];
+        updated[existing] = newRoute;
+        return updated;
+      } else {
+        return [...prev, newRoute];
       }
+    });
+  };
 
-      const routeData = await response.json();
-
-      drawRouteOnMap(routeData.geometry);
-      setActiveRoute({
-        ambulanceId: ambulance.id,
-        geometry: routeData.geometry,
-        distance: routeData.distance,
-        duration: routeData.duration
-      });
-
-      showToast('success', 'Ruta Calculada',
-        `${(routeData.distance / 1000).toFixed(1)} km, ${Math.round(routeData.duration / 60)} min`);
-
-    } catch (error) {
-      console.error('❌ Error calculando ruta:', error);
-      showToast('error', 'Error de Ruta', 'No se pudo calcular la ruta');
-    }
+  const handleNavigationCancelled = (data) => {
+    clearAmbulanceRoute(data.ambulanceId);
+    showToast('info', 'Navegación Cancelada', `Ambulancia ${data.ambulanceId} canceló el traslado`);
   };
 
   // ---------- NOTIFICATION HANDLING ----------
   const handlePatientTransferNotification = (data) => {
     console.log('🚨 Notificación de traslado recibida:', data);
-
     const notification = {
       ...data,
       id: data.notificationId || `notif_${Date.now()}`,
       timestamp: new Date().toLocaleString(),
       status: 'pending'
     };
-
     setPatientNotifications(prev => [...prev, notification]);
     setSelectedNotification(notification);
 
     if (data.routeGeometry) {
-      drawRouteOnMap(data.routeGeometry);
-      setActiveRoute({
-        ambulanceId: data.ambulanceId,
-        geometry: data.routeGeometry,
-        distance: data.distance,
-        duration: data.duration
-      });
+      drawAmbulanceRoute(data.ambulanceId, data.routeGeometry, data.distance, data.duration);
     }
-
-    showToast('info', 'Nuevo Paciente en Camino',
-      `Ambulancia ${data.ambulanceId} - ETA: ${data.eta || '?'} min`);
-
+    showToast('info', 'Nuevo Paciente en Camino', `Ambulancia ${data.ambulanceId} - ETA: ${data.eta || '?'} min`);
     onNotificationOpen();
-  };
-
-  const handleNavigationCancelled = (data) => {
-    clearRoute();
-    setPatientNotifications(prev =>
-      prev.filter(n => n.ambulanceId !== data.ambulanceId)
-    );
-    showToast('info', 'Navegación Cancelada', 'Ambulancia canceló el traslado');
   };
 
   const acceptPatient = (notification) => {
@@ -953,18 +912,13 @@ export default function MapaHospitalOptimizado() {
       showToast('error', 'Error de Conexión', 'No hay conexión con el servidor');
       return;
     }
-
     ws.current.send(JSON.stringify({
       type: 'hospital_accept_patient',
       notificationId: notification.notificationId,
       hospitalId: hospitalInfo.id,
       hospitalInfo: hospitalInfo
     }));
-
-    setPatientNotifications(prev =>
-      prev.filter(n => n.notificationId !== notification.notificationId)
-    );
-
+    setPatientNotifications(prev => prev.filter(n => n.notificationId !== notification.notificationId));
     showToast('success', 'Paciente Aceptado', 'Preparar área de recepción');
     onNotificationClose();
   };
@@ -974,19 +928,14 @@ export default function MapaHospitalOptimizado() {
       showToast('error', 'Error de Conexión', 'No hay conexión con el servidor');
       return;
     }
-
     ws.current.send(JSON.stringify({
       type: 'hospital_reject_patient',
       notificationId: notification.notificationId,
       hospitalId: hospitalInfo.id,
       reason: 'Capacidad limitada - No hay camas disponibles'
     }));
-
-    setPatientNotifications(prev =>
-      prev.filter(n => n.notificationId !== notification.notificationId)
-    );
-
-    clearRoute();
+    setPatientNotifications(prev => prev.filter(n => n.notificationId !== notification.notificationId));
+    clearAmbulanceRoute(notification.ambulanceId);
     showToast('warning', 'Paciente Rechazado', 'Se ha notificado a la ambulancia');
     onNotificationClose();
   };
@@ -996,12 +945,10 @@ export default function MapaHospitalOptimizado() {
       showToast('warning', 'Mensaje Vacío', 'Escribe un mensaje para el conductor');
       return;
     }
-
     if (!ws.current || ws.current.readyState !== WebSocket.OPEN) {
       showToast('error', 'Error de Conexión', 'No hay conexión con el servidor');
       return;
     }
-
     ws.current.send(JSON.stringify({
       type: 'hospital_note',
       ambulanceId: selectedAmbulance.id,
@@ -1014,7 +961,6 @@ export default function MapaHospitalOptimizado() {
         timestamp: new Date().toLocaleTimeString()
       }
     }));
-
     showToast('success', 'Mensaje Enviado', 'Comunicación enviada al conductor');
     setNoteMessage('');
     setPatientInfo('');
@@ -1026,26 +972,22 @@ export default function MapaHospitalOptimizado() {
       showToast('error', 'Error de Conexión', 'No hay conexión con el servidor');
       return;
     }
-
     ws.current.send(JSON.stringify({
-      type: 'request_route_update',
-      ambulanceId: ambulanceId
+      type: 'request_route_recompute',
+      ambulanceId: ambulanceId,
+      hospitalId: hospitalInfo.id
     }));
-
     showToast('info', 'Solicitando Actualización', 'Actualizando información de ruta...');
   };
 
   const generarPDF = async () => {
     const input = reportRef.current;
-
     if (!input) {
       showToast('error', 'Error', 'No se encontró el contenido del reporte para imprimir.');
       return;
     }
-
     try {
       showToast('info', 'Generando PDF', 'Capturando contenido... por favor espera.');
-
       const canvas = await html2canvas(input, {
         scale: 2,
         useCORS: true,
@@ -1053,30 +995,23 @@ export default function MapaHospitalOptimizado() {
         windowWidth: input.scrollWidth,
         windowHeight: input.scrollHeight
       });
-
       const imgData = canvas.toDataURL('image/png');
       const pdf = new jsPDF('p', 'mm', 'a4');
       const pdfWidth = pdf.internal.pageSize.getWidth();
       const imgHeight = (canvas.height * pdfWidth) / canvas.width;
-
       let heightLeft = imgHeight;
       let position = 0;
-
       pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, imgHeight);
       heightLeft -= pdf.internal.pageSize.getHeight();
-
       while (heightLeft >= 0) {
         position = heightLeft - imgHeight;
         pdf.addPage();
         pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, imgHeight);
         heightLeft -= pdf.internal.pageSize.getHeight();
       }
-
       const nombreArchivo = `Reporte_${selectedReport?.paciente?.nombre || 'Paciente'}_${Date.now()}.pdf`;
       pdf.save(nombreArchivo);
-
       showToast('success', 'PDF Descargado', 'El reporte se ha guardado correctamente.');
-
     } catch (error) {
       console.error("Error generando PDF:", error);
       showToast('error', 'Error PDF', 'No se pudo generar el documento.');
@@ -1085,7 +1020,6 @@ export default function MapaHospitalOptimizado() {
 
   const asignarDoctor = () => {
     generarPDF();
-
     if (ws.current && ws.current.readyState === WebSocket.OPEN) {
       ws.current.send(JSON.stringify({
         type: 'asignar_paciente_doctor',
@@ -1093,10 +1027,8 @@ export default function MapaHospitalOptimizado() {
         hospitalId: hospitalInfo.id,
         reporte: selectedReport
       }));
-
       console.log(`📤 Asignando paciente a doctor ${doctorSeleccionado}`);
     }
-
     setTimeout(() => {
       showToast('success', 'Asignado', `Paciente asignado al doctor y reporte descargado.`);
       onReportModalClose();
@@ -1118,7 +1050,6 @@ export default function MapaHospitalOptimizado() {
 
   const centerOnHospital = () => {
     if (!map.current || !hospitalInfo) return;
-
     map.current.flyTo({
       center: [hospitalInfo.lng, hospitalInfo.lat],
       zoom: 16,
@@ -1212,9 +1143,9 @@ export default function MapaHospitalOptimizado() {
                 </Box>
               )}
 
-              {activeRoute && !isMobile && (
+              {activeRoutes.length > 0 && !isMobile && (
                 <Badge colorScheme="purple" fontSize="sm" p={2} borderRadius="md">
-                  🕐 {Math.round(activeRoute.duration / 60)} min
+                  🛣️ {activeRoutes.length} rutas
                 </Badge>
               )}
 
@@ -1293,6 +1224,45 @@ export default function MapaHospitalOptimizado() {
                 </CardBody>
               </Card>
 
+              {/* Active Routes (múltiples) */}
+              {activeRoutes.length > 0 && (
+                <Card bg="purple.50" border="1px" borderColor="purple.200">
+                  <CardBody>
+                    <Text fontWeight="bold" mb={2} color="purple.800" fontSize={isMobile ? "sm" : "md"}>
+                      🛣️ Rutas Activas ({activeRoutes.length})
+                    </Text>
+                    <VStack spacing={2} align="stretch">
+                      {activeRoutes.map(route => (
+                        <Box key={route.ambulanceId} p={2} bg="white" borderRadius="md" border="1px" borderColor="purple.100">
+                          <HStack justify="space-between">
+                            <Text fontSize="sm" fontWeight="bold" color="purple.700">
+                              {route.ambulanceId}
+                            </Text>
+                            <Badge colorScheme="purple" fontSize="2xs">
+                              {Math.round(route.duration / 60)} min
+                            </Badge>
+                          </HStack>
+                          <Text fontSize="xs" color="gray.600">
+                            {(route.distance / 1000).toFixed(1)} km
+                          </Text>
+                          <HStack mt={1} spacing={1}>
+                            <Button size="xs" colorScheme="blue" onClick={() => {
+                              if (route.geometry) {
+                                const bounds = new mapboxgl.LngLatBounds();
+                                route.geometry.forEach(coord => bounds.extend([coord[0], coord[1]]));
+                                bounds.extend([hospitalInfo.lng, hospitalInfo.lat]);
+                                map.current.fitBounds(bounds, { padding: 60, duration: 1000 });
+                              }
+                            }}>🗺️</Button>
+                            <Button size="xs" colorScheme="red" onClick={() => clearAmbulanceRoute(route.ambulanceId)}>🗑️</Button>
+                          </HStack>
+                        </Box>
+                      ))}
+                    </VStack>
+                  </CardBody>
+                </Card>
+              )}
+
               {/* Ambulances List */}
               <Box>
                 <HStack justify="space-between" mb={2}>
@@ -1361,11 +1331,15 @@ export default function MapaHospitalOptimizado() {
                             )}
                           </HStack>
 
-                          {activeRoute && activeRoute.ambulanceId === ambulance.id && (
+                          {/* Mostrar info de ruta si la ambulancia está en ruta hacia este hospital */}
+                          {activeRoutes.some(r => r.ambulanceId === ambulance.id) && (
                             <Box mt={1.5} p={2} bg="rgba(66,153,225,0.08)" borderRadius="md" border="1px" borderColor="blue.100">
                               <Text fontSize="xs" fontWeight="bold" color="blue.700">📊 Ruta Activa</Text>
                               <Text fontSize="2xs" color="blue.600">
-                                🕐 {Math.round(activeRoute.duration / 60)} min • 📏 {(activeRoute.distance / 1000).toFixed(1)} km
+                                {(() => {
+                                  const route = activeRoutes.find(r => r.ambulanceId === ambulance.id);
+                                  return route ? `🕐 ${Math.round(route.duration / 60)} min • 📏 ${(route.distance / 1000).toFixed(1)} km` : '';
+                                })()}
                               </Text>
                             </Box>
                           )}
@@ -1396,7 +1370,15 @@ export default function MapaHospitalOptimizado() {
                               variant="outline"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                calculateRouteToAmbulance(ambulance);
+                                // Solicitar actualización de ruta hacia este hospital
+                                if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+                                  ws.current.send(JSON.stringify({
+                                    type: 'request_route_recompute',
+                                    ambulanceId: ambulance.id,
+                                    hospitalId: hospitalInfo.id
+                                  }));
+                                  showToast('info', 'Actualizando', 'Calculando ruta óptima...');
+                                }
                               }}
                               fontSize="2xs"
                               px={2}
@@ -1439,41 +1421,6 @@ export default function MapaHospitalOptimizado() {
                 )}
               </Box>
 
-              {/* Active Route Info */}
-              {activeRoute && (
-                <Card bg="purple.50" border="1px" borderColor="purple.200">
-                  <CardBody>
-                    <Text fontWeight="bold" mb={2} color="purple.800">📊 Ruta Activa</Text>
-                    <VStack align="start" spacing={1}>
-                      <Text fontSize="sm"><strong>Ambulancia:</strong> {activeRoute.ambulanceId}</Text>
-                      <Text fontSize="sm"><strong>Distancia:</strong> {(activeRoute.distance / 1000).toFixed(1)} km</Text>
-                      <Text fontSize="sm"><strong>Tiempo estimado:</strong> {Math.round(activeRoute.duration / 60)} min</Text>
-                    </VStack>
-                    <Progress value={70} size="sm" colorScheme="purple" mt={3} borderRadius="full" />
-                    <Button
-                      size="sm"
-                      colorScheme="blue"
-                      width="100%"
-                      mt={3}
-                      onClick={() => {
-                        if (activeRoute.geometry) {
-                          const bounds = new mapboxgl.LngLatBounds();
-                          activeRoute.geometry.forEach(coord => {
-                            bounds.extend([coord[0], coord[1]]);
-                          });
-                          if (hospitalInfo) {
-                            bounds.extend([hospitalInfo.lng, hospitalInfo.lat]);
-                          }
-                          map.current.fitBounds(bounds, { padding: 80, duration: 1000 });
-                        }
-                      }}
-                    >
-                      🗺️ Ajustar Vista
-                    </Button>
-                  </CardBody>
-                </Card>
-              )}
-
               {/* Quick Actions */}
               <Box className="glass-card" p={isMobile ? 2 : 3}>
                 <VStack spacing={2}>
@@ -1509,8 +1456,8 @@ export default function MapaHospitalOptimizado() {
           <Box flex={1} position="relative">
             <div ref={mapContainer} style={{ width: '100%', height: '100%' }} />
 
-            {/* Route Info Overlay */}
-            {activeRoute && (
+            {/* Route Info Overlay (mostrar si hay rutas activas) - versión simplificada */}
+            {activeRoutes.length > 0 && (
               <Box
                 position="absolute"
                 top={isMobile ? "60px" : "20px"}
@@ -1520,61 +1467,32 @@ export default function MapaHospitalOptimizado() {
                 p={isMobile ? 3 : 4}
                 boxShadow="xl"
                 zIndex="1000"
-                minWidth={isMobile ? "auto" : "320px"}
-                maxWidth={isMobile ? "calc(100% - 20px)" : "360px"}
+                minWidth={isMobile ? "auto" : "280px"}
+                maxWidth={isMobile ? "calc(100% - 20px)" : "320px"}
                 animation="slideUp 0.3s ease"
               >
-                <HStack justify="space-between" mb={2}>
-                  <Text fontWeight="bold" color="blue.600" fontSize={isMobile ? "sm" : "md"}>
-                    📊 Ruta - {activeRoute.ambulanceId}
-                  </Text>
-                  <Badge colorScheme="purple" variant="solid" borderRadius="full" px={2}>
-                    {Math.round(activeRoute.duration / 60)} min
-                  </Badge>
-                </HStack>
-                <VStack align="start" spacing={0.5}>
-                  <Text fontSize="sm" color="gray.600">
-                    <strong>🕐 ETA:</strong> {Math.round(activeRoute.duration / 60)} min • <strong>📏</strong> {(activeRoute.distance / 1000).toFixed(1)} km
-                  </Text>
-                  <Text fontSize="xs" color="gray.500"><strong>🏥</strong> {hospitalInfo.nombre}</Text>
+                <Text fontWeight="bold" color="blue.600" fontSize={isMobile ? "sm" : "md"} mb={2}>
+                  📊 Rutas en Tiempo Real
+                </Text>
+                <VStack spacing={2} align="stretch">
+                  {activeRoutes.map(route => (
+                    <HStack key={route.ambulanceId} justify="space-between" p={1} bg="blue.50" borderRadius="md">
+                      <Text fontSize="xs" fontWeight="medium">{route.ambulanceId}</Text>
+                      <Badge colorScheme="purple">{Math.round(route.duration / 60)} min</Badge>
+                      <Text fontSize="xs">{(route.distance / 1000).toFixed(1)} km</Text>
+                    </HStack>
+                  ))}
                 </VStack>
-                <Progress value={65} size="xs" colorScheme="blue" mt={2} borderRadius="full" />
-                <HStack mt={2} spacing={2}>
-                  <Button
-                    size="xs"
-                    colorScheme="blue"
-                    onClick={() => {
-                      if (activeRoute.geometry) {
-                        const bounds = new mapboxgl.LngLatBounds();
-                        activeRoute.geometry.forEach(coord => {
-                          bounds.extend([coord[0], coord[1]]);
-                        });
-                        if (hospitalInfo) {
-                          bounds.extend([hospitalInfo.lng, hospitalInfo.lat]);
-                        }
-                        map.current.fitBounds(bounds, { padding: 80, duration: 1000 });
-                      }
-                    }}
-                    flex={1}
-                  >
-                    🗺️ Vista
-                  </Button>
-                  <Button
-                    size="xs"
-                    colorScheme="red"
-                    variant="ghost"
-                    onClick={() => clearRoute()}
-                    flex={1}
-                  >
-                    🗑️ Limpiar
-                  </Button>
-                </HStack>
+                <Button size="xs" mt={2} width="100%" colorScheme="red" onClick={() => {
+                  activeRoutes.forEach(r => clearAmbulanceRoute(r.ambulanceId));
+                }}>Limpiar todas</Button>
               </Box>
             )}
           </Box>
         </Box>
       </Box>
 
+      {/* Modales (Nota, Notificación, Reporte) - se mantienen igual que en la versión original */}
       {/* Note Modal */}
       <Modal isOpen={isNoteOpen} onClose={onNoteClose} size="md">
         <ModalOverlay />
@@ -1587,7 +1505,6 @@ export default function MapaHospitalOptimizado() {
               <Text fontSize="sm" color="gray.600">
                 Para: <strong>{selectedAmbulance?.id}</strong> - Placa {selectedAmbulance?.placa}
               </Text>
-
               <Textarea
                 placeholder="Mensaje para el conductor (ej. instrucciones, estado del área de recepción...)"
                 value={noteMessage}
@@ -1595,7 +1512,6 @@ export default function MapaHospitalOptimizado() {
                 rows={4}
                 size="lg"
               />
-
               <Textarea
                 placeholder="Información adicional del paciente (nombre, condiciones, etc.)"
                 value={patientInfo}
@@ -1725,7 +1641,7 @@ export default function MapaHospitalOptimizado() {
         </ModalContent>
       </Modal>
 
-      {/* Reporte Médico Modal */}
+      {/* Reporte Médico Modal (se mantiene intacto) */}
       <Modal isOpen={isReportModalOpen} onClose={onReportModalClose} size="xl" scrollBehavior="inside">
         <ModalOverlay backdropFilter="blur(5px)" />
         <ModalContent borderTop="5px solid #3182ce">
