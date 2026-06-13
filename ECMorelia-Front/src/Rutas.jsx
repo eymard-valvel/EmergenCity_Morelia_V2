@@ -1,4 +1,4 @@
-import { Routes, Route, BrowserRouter } from "react-router-dom";
+import { Routes, Route, BrowserRouter,  } from "react-router-dom";
 import App from "./App";
 import { OperadorFormulario } from "./components/Registro/OperadorFormulario";
 import { MapLayout, Mapa, Ambulancias, Hospitales, Operadores, Paramedicos, Medicos } from "./components/Mapa";
@@ -22,7 +22,7 @@ import MapaHospital from './components/Mapa/MapaHospital';
 function Rutas() {
 	return (
 		<AuthProvider>
-			<BrowserRouter>
+			<BrowserRouter >
 				<Routes>
 					<Route path="/" element={<App />} />
 					<Route path="mapa" element={<Mapa />} />
