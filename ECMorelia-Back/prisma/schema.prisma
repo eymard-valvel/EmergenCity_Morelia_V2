@@ -92,7 +92,7 @@ model receptor {
   id              Int      @id @default(autoincrement())
   nombre          String?  @db.VarChar(50)
   licencia_medica String?  @unique @db.VarChar(50)
-  turno           Shifts?
+  // turno           Shifts?
   password        String?  @db.VarChar(72)
 }
 

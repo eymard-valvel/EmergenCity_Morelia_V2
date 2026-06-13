@@ -28,7 +28,7 @@ const databaseData = {
   receptor: {
     nombre: 'Luis Martínez',
     licencia_medica: 'REC001',
-    turno: 'nocturno',
+    // turno: 'nocturno',
     password: 'hashed_password_1'
   }
 }
