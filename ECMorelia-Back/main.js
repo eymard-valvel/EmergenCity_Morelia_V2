@@ -19,6 +19,8 @@ const operador = require('./routes/operador.js')
 const doctor = require('./routes/doctor.js')
 const reportePrehospitalario = require('./routes/reportePrehospitalario.js');
 
+const receptor = require('./routes/receptor.js')
+
 // CORS
 app.use(cors({
     origin: '*',
@@ -238,6 +240,8 @@ app.use('/hospital', hospital)
 app.use('/operador', operador)
 app.use('/doctor', doctor)
 app.use('/reporte-prehospitalario', reportePrehospitalario);
+
+app.use('/receptor', receptor)
 
 // ==================== RUTAS WEBSOCKET PARA AMBULANCIAS ====================
 app.get('/api/ambulances/active', (req, res) => {
