@@ -10,6 +10,7 @@ import { DoctorFormulario } from "./components/Registro/DoctorFormulario";
 import { HospitalFormulario } from "./components/Registro/HospitalFormulario";
 import { AuthProvider } from "./auth/AuthProvider";
 import { ParamedicoFormulario } from "./components/Registro/ParamedicoFormulario";
+import { ReceptorFormulario } from "./components/Registro/ReceptorFormulario"; // ✅ NUEVO
 import VideoCall from "./components/teleconsulta/VideoCall"; // Sala de espera
 import VideoLlamada from "./components/teleconsulta/VideoLlamada"; // Videollamada activa
 import DoctorLayout from "./components/doctor/DoctorLayout";
@@ -32,6 +33,7 @@ function Rutas() {
 						<Route path="doctor" element={<DoctorFormulario />} />
 						<Route path="hospitales" element={<HospitalFormulario />} />
 						<Route path="paramedicos" element={<ParamedicoFormulario />} />
+						<Route path="receptor" element={<ReceptorFormulario />} />
 					</Route>
 					<Route path="/login" element={<Login />} />
 					<Route path="/recover-password" element={<RContrasena />} />
@@ -56,7 +58,8 @@ function Rutas() {
 						<Route element={<DoctorLayout />} path="/doctor">
 							<Route path="records" element={<ReportesPage />} />
 						</Route>
-						<Route element={<ReportePaciente />} path="/reportepaciente"></Route>	
+						<Route element={<ReportePaciente />} path="/reportepaciente"></Route>
+						<Route path="receptor" element={<ReceptorDashboard />} />
 					</Route>
 				</Routes>
 			</BrowserRouter>

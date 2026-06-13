@@ -38,14 +38,16 @@ const roles = [
     { role: "Operador", value: "operador" },
     { role: "Paramedico", value: "paramedicos" },
     { role: "Hospital", value: "hospitales" },
-    { role: "Doctor", value: "doctor" }
+    { role: "Doctor", value: "doctor" },
+    { role: "Receptor", value: "receptor" } 
 ];
 
 const routes = {
     operador: "/navegaciongps",
     paramedicos: "/reportepaciente",
     hospitales: "/navmapa",
-    doctor: "/doctor"
+    doctor: "/doctor",
+    receptor: "/receptor"
 };
 
 const Login = () => {
