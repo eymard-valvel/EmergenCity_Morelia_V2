@@ -12,9 +12,9 @@ const validationSchema = Yup.object().shape({
     licencia_medica: Yup.string()
         .required("La licencia médica es requerida")
         .matches(/^[A-Z0-9]+$/, "Solo mayúsculas y números"),
-    turno: Yup.string()
+    /*turno: Yup.string()
         .required("El turno es requerido")
-        .oneOf(["diurno", "nocturno"], "Turno inválido"),
+        .oneOf(["diurno", "nocturno"], "Turno inválido"),*/
     password: Yup.string()
         .required("Contraseña requerida")
         .min(6, "Mínimo 6 caracteres")
