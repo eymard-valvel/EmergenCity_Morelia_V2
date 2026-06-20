@@ -18,6 +18,7 @@ import ReportePaciente from "./components/reportepaciente/ReportePaciente";
 import ReportesPage from "./components/doctor/ReportesPage";
 import MapaOperador from './components/Mapa/MapaOperador';
 import MapaHospital from './components/Mapa/MapaHospital';
+import ReceptorDashboard from "./components/receptor/ReceptorDashboard"; // ✅ NUEVO
 
 
 function Rutas() {
