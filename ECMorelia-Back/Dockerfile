@@ -2,7 +2,7 @@ FROM node:24
 
 WORKDIR /backend
 
-COPY ./ECMorelia-Back /backend
+COPY . .
 
 RUN npm install
 

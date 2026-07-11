@@ -1,5 +1,5 @@
 services:
-  postgresql_database:
+  database_postgresql:
     image: postgres
     environment:
       POSTGRES_DB: 'ecmorelia_database'
@@ -11,10 +11,15 @@ services:
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql
   backend-de-nodejs:
     build:
-      context: .
+      context: ./ECMorelia-Back
       dockerfile: Dockerfile
     image: ecmorelia_backend_image
     ports:
       - '3000:3000'
-
-  
+  frontend-de-vite:
+    build:
+      context: ./ECMorelia-Front
+      dockerfile: Dockerfile
+    image: ecmorelia_frontend_image
+    ports: 
+      - '5173:5173'
