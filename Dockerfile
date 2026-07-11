@@ -1,10 +1,10 @@
-FROM node
+FROM node:24
 
 WORKDIR /backend
 
 COPY ./ECMorelia-Back /backend
 
-RUN npm install 
+RUN npm install
 
 EXPOSE 3000
 

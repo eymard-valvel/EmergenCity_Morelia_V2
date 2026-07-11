@@ -1,6 +1,7 @@
 ## Como ejecutar las imagenes de Docker, y en general, el proyecto en local. 
 
 1. Verificar tener instalado Docker Desktop y PostgreSQL (verificar si se encuentra instalado en terminal con el comando psql). 
+IMPORTANTE: Borrar la carpeta /node_modules dentro de la carpeta ECMorelia-Back, para que se instalen las dependencias desde cero a la imagen. 
 
 2. Ejecutar el comando en la carpeta principal del proyecto: 
 ```bash
