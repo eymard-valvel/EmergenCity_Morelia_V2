@@ -146,13 +146,13 @@ const Inicio = () => {
                                 <span className="relative z-10">Doctor</span>
                                 <div className="absolute inset-0 bg-sky-blue translate-y-[101%] group-hover:translate-y-0 transition-transform duration-300"></div>
                             </button>
-                            <button
+                            {/*<button
                                 className="group relative overflow-hidden px-6 py-4 rounded-2xl border-2 border-sky-blue text-sky-blue font-bold text-lg hover:text-white transition-all duration-300 shadow-md hover:shadow-sky-blue/40"
                                 onClick={() => handleButtonClick("receptor")}
                             >
                                 <span className="relative z-10">Receptor</span>
                                 <div className="absolute inset-0 bg-sky-blue translate-y-[101%] group-hover:translate-y-0 transition-transform duration-300"></div>
-                            </button>
+                            </button>*/}
                         </div>
                     </div>
                 </div>
