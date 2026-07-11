@@ -1,15 +1,20 @@
-## Como levantar el proyecto?
+## Como ejecutar las imagenes de Docker, y en general, el proyecto en local. 
 
-- Primero, debes tener la base de datos de postgre y agregar la ruta de la db en el archivo ENV en DATABASE_URL=
+1. Verificar tener instalado Docker Desktop y PostgreSQL (verificar si se encuentra instalado en terminal con el comando psql). 
 
-- Ejecuta el siguiente comando de prisma
-
+2. Ejecutar el comando en la carpeta principal del proyecto: 
+```bash
+docker compose build
+docker compose up -d
 ```
-npx prisma migrate dev --name init
-```
+Verificar tambien si la creación de los volúmenes es correcta en Docker Desktop. 
 
-- Desde cada carpeta deberas ejecutar el comando
-
+3. (Opcional) Para verificar si se puede acceder a la BD, ejecutar el siguiente comando en terminal: 
+```bash
+psql -h localhost -p 5432 -U posgres -d ecmorelia_db
 ```
-npm run dev
+Verificar la creación de las tablas con: 
+```bash
+\c
 ```
+La contraseña es 1234 (perdón por la tardanza). 

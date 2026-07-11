@@ -9,7 +9,7 @@ services:
       - '5432:5432'
     volumes:
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql
-  backend_de_node_js:
+  backend-de-nodejs:
     build:
       context: .
       dockerfile: Dockerfile
