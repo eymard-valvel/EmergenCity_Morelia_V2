@@ -34,7 +34,7 @@ function Rutas() {
 						<Route path="doctor" element={<DoctorFormulario />} />
 						<Route path="hospitales" element={<HospitalFormulario />} />
 						<Route path="paramedicos" element={<ParamedicoFormulario />} />
-						{/* <Route path="receptor" element={<ReceptorFormulario />} /> */}
+						<Route path="receptor" element={<ReceptorFormulario />} />
 					</Route>
 					<Route path="/login" element={<Login />} />
 					<Route path="/recover-password" element={<RContrasena />} />

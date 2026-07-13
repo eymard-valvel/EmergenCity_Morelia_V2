@@ -39,7 +39,7 @@ const roles = [
     { role: "Paramedico", value: "paramedicos" },
     { role: "Hospital", value: "hospitales" },
     { role: "Doctor", value: "doctor" },
-    //{ role: "Receptor", value: "receptor" } 
+    { role: "Receptor", value: "receptor" } 
 ];
 
 const routes = {
