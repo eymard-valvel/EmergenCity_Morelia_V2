@@ -24,7 +24,7 @@ const validationSchema = Yup.object().shape({
 const initialValues = {
     nombre: "",
     licencia_medica: "",
-    turno: "diurno",
+    //turno: "diurno",
     password: ""
 };
 
