@@ -93,7 +93,7 @@ export const ReceptorFormulario = () => {
                                     value={formik.values.licencia_medica} onChange={formik.handleChange} />
                                 {formik.errors.licencia_medica && <p className="text-red-500 font-bold">{formik.errors.licencia_medica}</p>}
                             </div>
-                            <div>
+                            {/*<div>
                                 <label className="block text-blue-950 uppercase font-bold text-2xl text-left">TURNO</label>
                                 <select name="turno"
                                     className="mt-2 border-2 w-full p-2 rounded-md"
@@ -102,7 +102,7 @@ export const ReceptorFormulario = () => {
                                     <option value="nocturno">Nocturno</option>
                                 </select>
                                 {formik.errors.turno && <p className="text-red-500 font-bold">{formik.errors.turno}</p>}
-                            </div>
+                            </div>*/}
                             <div>
                                 <label className="block text-blue-950 uppercase font-bold text-2xl text-left">CONTRASEÑA</label>
                                 <input type="password" name="password" placeholder="Contraseña (mínimo 6 caracteres)"
