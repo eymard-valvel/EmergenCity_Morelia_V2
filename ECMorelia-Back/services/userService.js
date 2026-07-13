@@ -43,6 +43,7 @@ class OperadorService {
   async verifyUser(user, rol, id) {
     try {
       // ✅ Se agrega 'receptor' como rol válido
+      //CambiosRealizados
       const validRoles = ['operador', 'paramedicos', 'doctor', 'receptor']
       if (!validRoles.includes(rol)) {
         throw new Error('Role not supported for login')
