@@ -1,0 +1,221 @@
+/* src/pln/VoiceAssistant.css */
+
+.voice-assistant-btn {
+    position: fixed;
+    bottom: 90px;
+    right: 20px;
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #1d8cf8, #0a6fd4);
+    color: white;
+    border: none;
+    font-size: 28px;
+    box-shadow: 0 4px 16px rgba(29, 140, 248, 0.4);
+    cursor: pointer;
+    z-index: 1000;
+    transition: all 0.3s ease;
+}
+.voice-assistant-btn:hover {
+    transform: scale(1.08);
+    box-shadow: 0 6px 24px rgba(29, 140, 248, 0.5);
+}
+.voice-assistant-btn:active {
+    transform: scale(0.95);
+}
+
+.voice-modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 2000;
+    animation: fadeIn 0.25s ease-out;
+}
+
+.voice-modal {
+    background: #ffffff;
+    border-radius: 20px;
+    max-width: 520px;
+    width: 92%;
+    padding: 24px 28px 28px;
+    box-shadow: 0 24px 48px rgba(0, 0, 0, 0.3);
+    animation: slideUp 0.3s ease-out;
+}
+[data-theme="dark"] .voice-modal {
+    background: #1f262a;
+    color: #e6eef6;
+}
+
+.voice-modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+}
+.voice-modal-header h3 {
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 700;
+}
+.voice-modal-close {
+    background: none;
+    border: none;
+    font-size: 30px;
+    cursor: pointer;
+    color: inherit;
+    opacity: 0.6;
+    transition: opacity 0.2s;
+    padding: 0 4px;
+}
+.voice-modal-close:hover {
+    opacity: 1;
+}
+
+.voice-instruction {
+    margin: 0 0 12px 0;
+    font-weight: 600;
+    font-size: 0.95rem;
+    padding: 8px 12px;
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.04);
+}
+.voice-instruction.recording {
+    background: rgba(255, 77, 79, 0.12);
+    color: #cf1322;
+}
+[data-theme="dark"] .voice-instruction {
+    background: rgba(255, 255, 255, 0.06);
+}
+[data-theme="dark"] .voice-instruction.recording {
+    background: rgba(255, 77, 79, 0.2);
+    color: #ff7875;
+}
+
+.voice-transcript-box {
+    background: rgba(0, 0, 0, 0.04);
+    border-radius: 10px;
+    padding: 14px 16px;
+    min-height: 90px;
+    max-height: 180px;
+    overflow-y: auto;
+    margin-bottom: 16px;
+    border: 1px solid rgba(0, 0, 0, 0.06);
+    font-size: 0.95rem;
+    line-height: 1.5;
+}
+[data-theme="dark"] .voice-transcript-box {
+    background: rgba(255, 255, 255, 0.04);
+    border-color: rgba(255, 255, 255, 0.06);
+}
+.voice-transcript-box p {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.voice-transcript-box .interim {
+    color: #888;
+    font-style: italic;
+}
+[data-theme="dark"] .voice-transcript-box .interim {
+    color: #999;
+}
+
+.voice-error {
+    background: rgba(255, 77, 79, 0.12);
+    color: #cf1322;
+    padding: 10px 14px;
+    border-radius: 8px;
+    margin-bottom: 14px;
+    font-size: 0.9rem;
+    border-left: 4px solid #ff4d4f;
+}
+[data-theme="dark"] .voice-error {
+    background: rgba(255, 77, 79, 0.2);
+    color: #ff7875;
+}
+
+.voice-record-btn {
+    padding: 12px 20px;
+    border: none;
+    border-radius: 10px;
+    background: linear-gradient(135deg, #1d8cf8, #0a6fd4);
+    color: white;
+    font-weight: 700;
+    font-size: 1rem;
+    cursor: pointer;
+    transition: all 0.25s ease;
+    min-height: 48px;
+}
+.voice-record-btn.recording {
+    background: linear-gradient(135deg, #ff4d4f, #cf1322);
+    animation: pulse 1.5s infinite;
+}
+.voice-record-btn:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 16px rgba(29, 140, 248, 0.3);
+}
+.voice-record-btn.recording:hover:not(:disabled) {
+    box-shadow: 0 4px 16px rgba(255, 77, 79, 0.3);
+}
+.voice-record-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none !important;
+}
+
+.voice-processing {
+    text-align: center;
+    margin-top: 12px;
+    font-weight: 500;
+    color: #fa8c16;
+}
+.voice-processing .spinner {
+    display: inline-block;
+    animation: spin 1s linear infinite;
+    margin-right: 6px;
+}
+[data-theme="dark"] .voice-processing {
+    color: #ffa940;
+}
+
+@keyframes slideUp {
+    from {
+        transform: translateY(30px);
+        opacity: 0;
+    }
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+@keyframes pulse {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.7;
+    }
+}
+@keyframes spin {
+    from {
+        transform: rotate(0deg);
+    }
+    to {
+        transform: rotate(360deg);
+    }
+}
