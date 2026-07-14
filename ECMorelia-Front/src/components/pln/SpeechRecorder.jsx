@@ -1,10 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { parseText } from './nlpService';
 
-/**
- * Componente que permite grabar voz, transcribir y enviar al backend para extraer datos.
- * Recibe una función `onDataExtracted` para actualizar el formulario.
- */
 const SpeechRecorder = ({ onDataExtracted, onError }) => {
   const [isRecording, setIsRecording] = useState(false);
   const [transcript, setTranscript] = useState('');
