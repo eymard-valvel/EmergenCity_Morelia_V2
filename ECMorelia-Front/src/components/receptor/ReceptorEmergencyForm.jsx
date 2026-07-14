@@ -1,0 +1,427 @@
+// src/components/receptor/ReceptorEmergencyForm.jsx
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import mapboxgl from 'mapbox-gl';
+import 'mapbox-gl/dist/mapbox-gl.css';
+import {
+  Box, Flex, VStack, HStack, Heading, Input, Textarea, Button, Spinner,
+  InputGroup, InputRightElement, List, ListItem, Text, Icon, Grid, GridItem, Divider, ButtonGroup,
+  Accordion, AccordionItem, AccordionButton, AccordionPanel, AccordionIcon,
+  NumberInput, NumberInputField, Portal
+} from '@chakra-ui/react';
+import { SearchIcon, CloseIcon, CheckCircleIcon } from '@chakra-ui/icons';
+import {
+  FaMapMarkerAlt, FaHeartbeat, FaCarCrash, FaFire, FaBriefcaseMedical, FaLungs, FaSkullCrossbones, FaBaby, FaFistRaised, FaExclamationCircle, FaEllipsisH
+} from 'react-icons/fa';
+
+mapboxgl.accessToken = 'pk.eyJ1IjoiZXltYXJkMjkiLCJhIjoiY21tcDY4YzNpMGw3bjJzb203YmZyNTVnMyJ9.OvZlnCMfUkUYe6Ib83DUVw';
+
+const DEFAULT_CENTER = { lat: 19.7024, lng: -101.1969 };
+const SEARCH_DEBOUNCE_MS = 250;
+
+const EMERGENCY_TYPES = [
+  { label: 'Accidente Tránsito', icon: FaCarCrash },
+  { label: 'Incendio Estructural', icon: FaFire },
+  { label: 'Paro Cardíaco', icon: FaHeartbeat },
+  { label: 'Trauma Grave', icon: FaBriefcaseMedical },
+  { label: 'Dif. Respiratoria', icon: FaLungs },
+  { label: 'Intoxicación', icon: FaSkullCrossbones },
+  { label: 'Parto en Curso', icon: FaBaby },
+  { label: 'Violencia/Agresión', icon: FaFistRaised },
+  { label: 'Intento Suicidio', icon: FaExclamationCircle },
+  { label: 'Indeterminado', icon: FaEllipsisH },
+];
+
+const QUICK_NOTES = ['Vía Pública', 'Interior Domicilio', 'Escena Insegura', 'Múltiples Víctimas', 'Prensado', 'Arma de Fuego'];
+
+const ReceptorEmergencyForm = ({ ws, wsConnected, onEmergencySent }) => {
+  const mapContainer = useRef(null);
+  const map = useRef(null);
+  
+  const searchRequestId = useRef(0);
+  const reverseGeocodeRequestId = useRef(0);
+  const searchDebounceTimer = useRef(null);
+  const skipNextReverseGeocode = useRef(false);
+
+  const [addressQuery, setAddressQuery] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [selectedLocation, setSelectedLocation] = useState(DEFAULT_CENTER);
+  
+  const [emergencyType, setEmergencyType] = useState('');
+  const [patientAge, setPatientAge] = useState('');
+  const [patientSex, setPatientSex] = useState('');
+  const [patientCondition, setPatientCondition] = useState('');
+  const [notes, setNotes] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showSuccessBanner, setShowSuccessBanner] = useState(false);
+
+  const [expandedIndices, setExpandedIndices] = useState([0]);
+
+  const isFormValid = emergencyType !== '' && patientCondition.trim().length >= 3 && addressQuery.trim() !== '';
+
+  const reverseGeocode = useCallback(async (lng, lat) => {
+    const requestId = ++reverseGeocodeRequestId.current;
+    try {
+      const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${lng},${lat}.json?access_token=${mapboxgl.accessToken}&language=es&types=address,poi,place`;
+      const res = await fetch(url);
+      const data = await res.json();
+      if (requestId !== reverseGeocodeRequestId.current) return;
+      if (data.features?.length > 0) setAddressQuery(data.features[0].place_name);
+    } catch (e) {
+      console.error('RevGeocode Error:', e);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!mapContainer.current) return;
+    const mapInstance = new mapboxgl.Map({
+      container: mapContainer.current,
+      style: 'mapbox://styles/mapbox/dark-v11',
+      center: [DEFAULT_CENTER.lng, DEFAULT_CENTER.lat],
+      zoom: 16,
+      attributionControl: false
+    });
+
+    mapInstance.addControl(new mapboxgl.NavigationControl({ showCompass: false }), 'bottom-right');
+
+    mapInstance.on('move', () => {
+      const center = mapInstance.getCenter();
+      setSelectedLocation({ lat: center.lat, lng: center.lng });
+    });
+
+    mapInstance.on('moveend', () => {
+      if (skipNextReverseGeocode.current) {
+        skipNextReverseGeocode.current = false;
+        return;
+      }
+      const center = mapInstance.getCenter();
+      reverseGeocode(center.lng, center.lat);
+    });
+
+    map.current = mapInstance;
+    return () => mapInstance.remove();
+  }, [reverseGeocode]);
+
+  const searchAddresses = useCallback((query) => {
+    if (searchDebounceTimer.current) clearTimeout(searchDebounceTimer.current);
+    if (!query || query.trim().length < 3) {
+      setSearchResults([]); setIsSearching(false); return;
+    }
+    setIsSearching(true);
+    searchDebounceTimer.current = setTimeout(async () => {
+      const requestId = ++searchRequestId.current;
+      try {
+        const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query.trim())}.json?access_token=${mapboxgl.accessToken}&country=mx&limit=5&language=es`;
+        const res = await fetch(url);
+        const data = await res.json();
+        if (requestId !== searchRequestId.current) return;
+        setSearchResults((data.features || []).map(f => ({
+          id: f.id, place_name: f.place_name, lat: f.center[1], lng: f.center[0],
+        })));
+      } catch (e) {
+        if (requestId === searchRequestId.current) setSearchResults([]);
+      } finally {
+        if (requestId === searchRequestId.current) setIsSearching(false);
+      }
+    }, SEARCH_DEBOUNCE_MS);
+  }, []);
+
+  const selectSearchResult = (result) => {
+    skipNextReverseGeocode.current = true;
+    setAddressQuery(result.place_name);
+    setSearchResults([]);
+    setSelectedLocation({ lat: result.lat, lng: result.lng });
+    map.current?.flyTo({ center: [result.lng, result.lat], zoom: 17 });
+  };
+
+  const clearAddress = () => {
+    setAddressQuery('');
+    setSearchResults([]);
+  };
+
+  const handleSelectType = (type) => {
+    setEmergencyType(type);
+    setExpandedIndices([1]);
+  };
+
+  const handleConfirmSection2 = () => {
+    if(patientCondition.trim().length >= 3) {
+      setExpandedIndices([2]);
+    }
+  };
+
+  const handleQuickNote = (note) => {
+    setNotes(prev => prev ? `${prev} | ${note}` : note);
+  };
+
+  const executeDispatch = async () => {
+    setIsSubmitting(true);
+    const payload = {
+      type: 'emergency_call',
+      callId: `call_${Date.now()}`,
+      location: selectedLocation,
+      address: addressQuery || 'Sin dirección registrada',
+      emergencyType,
+      patientInfo: { age: patientAge, sex: patientSex, condition: patientCondition },
+      notes,
+      timestamp: new Date().toISOString(),
+    };
+
+    try {
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(payload));
+        
+        // Muestra el banner flotante sin bloquear la pantalla
+        setShowSuccessBanner(true);
+        setTimeout(() => {
+          setShowSuccessBanner(false);
+        }, 3000);
+
+        // Resetea el formulario inmediatamente para el siguiente incidente
+        setEmergencyType(''); setPatientAge(''); setPatientSex(''); setPatientCondition(''); setNotes('');
+        setExpandedIndices([0]);
+        
+        if (onEmergencySent) onEmergencySent();
+      } else {
+        throw new Error('Offline');
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <Flex h="100%" w="100%" bg="#000000" direction={{ base: "column", lg: "row" }}>
+      
+      {/* PANEL IZQUIERDO: FORMULARIO ACORDEÓN TÁCTICO */}
+      <Flex 
+        w={{ base: "100%", lg: "450px", xl: "550px" }} 
+        flexShrink={0} 
+        direction="column" 
+        bg="#0a0a0a" 
+        borderRight={{ lg: "1px solid #262626" }} 
+        borderBottom={{ base: "1px solid #262626", lg: "none" }}
+        h={{ base: "60vh", lg: "100%" }}
+      >
+        <Box p={5} borderBottom="1px solid #262626" bg="#171717">
+          <Heading fontSize="16px" color="#e5e5e5" fontWeight="900" letterSpacing="1px" textTransform="uppercase">
+            Matriz de Captura
+          </Heading>
+          <Text fontSize="12px" color={isFormValid ? "#10b981" : "#ef4444"} fontFamily="mono" mt={1} fontWeight="bold">
+            {isFormValid ? "✓ REQUISITOS CUMPLIDOS" : "⚠ SE REQUIEREN DATOS OBLIGATORIOS"}
+          </Text>
+        </Box>
+
+        <Box flex={1} overflowY="auto" sx={{ '&::-webkit-scrollbar': { width: '6px' }, '&::-webkit-scrollbar-thumb': { bg: '#404040', borderRadius: '4px' } }}>
+          <Accordion index={expandedIndices} onChange={(idx) => setExpandedIndices(idx)} allowMultiple>
+            
+            {/* SECCIÓN 1: TIPOLOGÍA */}
+            <AccordionItem border="none" borderBottom="1px solid #262626">
+              <h2>
+                <AccordionButton py={4} bg={emergencyType ? "#1e293b" : "#171717"} _hover={{ bg: '#262626' }}>
+                  <Box as="span" flex='1' textAlign='left' fontSize="12px" fontWeight="bold" color={emergencyType ? "#38bdf8" : "#e5e5e5"} letterSpacing="1px">
+                    1. CLASIFICACIÓN TÁCTICA {emergencyType && <Text as="span" color="#10b981" ml={2}>[{emergencyType}]</Text>}
+                  </Box>
+                  <AccordionIcon color="#a3a3a3" />
+                </AccordionButton>
+              </h2>
+              <AccordionPanel pb={5} bg="#0a0a0a">
+                <Grid templateColumns={{ base: "repeat(1, 1fr)", sm: "repeat(2, 1fr)" }} gap={3}>
+                  {EMERGENCY_TYPES.map((t) => (
+                    <GridItem key={t.label}>
+                      <Button
+                        w="100%" h="44px" justifyContent="flex-start" borderRadius="md"
+                        bg={emergencyType === t.label ? '#0284c7' : '#171717'}
+                        color={emergencyType === t.label ? '#ffffff' : '#a3a3a3'}
+                        border="1px solid" borderColor={emergencyType === t.label ? '#38bdf8' : '#262626'}
+                        _hover={{ bg: emergencyType === t.label ? '#0284c7' : '#262626' }}
+                        onClick={() => handleSelectType(t.label)}
+                        px={4}
+                      >
+                        <Icon as={t.icon} mr={3} boxSize={4} />
+                        <Text fontSize="12px" fontWeight="bold" isTruncated>{t.label}</Text>
+                      </Button>
+                    </GridItem>
+                  ))}
+                </Grid>
+              </AccordionPanel>
+            </AccordionItem>
+
+            {/* SECCIÓN 2: DATOS CLÍNICOS */}
+            <AccordionItem border="none" borderBottom="1px solid #262626">
+              <h2>
+                <AccordionButton py={4} bg={patientCondition.length >= 3 ? "#1e293b" : "#171717"} _hover={{ bg: '#262626' }}>
+                  <Box as="span" flex='1' textAlign='left' fontSize="12px" fontWeight="bold" color={patientCondition.length >= 3 ? "#38bdf8" : "#e5e5e5"} letterSpacing="1px">
+                    2. DATOS DEL OBJETIVO {patientCondition.length >= 3 && <Text as="span" color="#10b981" ml={2}>[✓]</Text>}
+                  </Box>
+                  <AccordionIcon color="#a3a3a3" />
+                </AccordionButton>
+              </h2>
+              <AccordionPanel pb={5} bg="#0a0a0a">
+                <HStack spacing={4} mb={4}>
+                  <Box flex={1}>
+                    <Text fontSize="11px" color="#737373" mb={2} textTransform="uppercase" fontWeight="bold">Edad (0-120)</Text>
+                    <NumberInput value={patientAge} onChange={(v) => setPatientAge(v)} min={0} max={120} clampValueOnBlur keepWithinRange>
+                      <NumberInputField 
+                        bg="#171717" border="1px solid #262626" color="#e5e5e5" borderRadius="md" h="44px" fontSize="14px" fontFamily="mono" placeholder="Años"
+                        _focus={{ borderColor: '#38bdf8', boxShadow: 'none' }}
+                      />
+                    </NumberInput>
+                  </Box>
+                  <Box flex={2}>
+                    <Text fontSize="11px" color="#737373" mb={2} textTransform="uppercase" fontWeight="bold">Sexo</Text>
+                    <ButtonGroup isAttached w="100%" variant="outline">
+                      {['M', 'F', 'N/D'].map(sex => (
+                        <Button
+                          key={sex} flex={1} h="44px" borderRadius="md" fontSize="13px" fontWeight="bold"
+                          bg={patientSex === sex ? '#3f3f46' : '#171717'} color={patientSex === sex ? '#ffffff' : '#a3a3a3'} borderColor="#262626"
+                          onClick={() => setPatientSex(sex)} _hover={{ bg: '#262626' }}
+                        >
+                          {sex}
+                        </Button>
+                      ))}
+                    </ButtonGroup>
+                  </Box>
+                </HStack>
+                <Box mb={4}>
+                  <Text fontSize="11px" color="#ef4444" mb={2} textTransform="uppercase" fontWeight="bold">* Condición Principal (Obligatorio)</Text>
+                  <Input
+                    value={patientCondition} onChange={(e) => setPatientCondition(e.target.value)}
+                    bg="#171717" border="1px solid" borderColor={patientCondition.length >= 3 ? "#10b981" : "#262626"} color="#e5e5e5" borderRadius="md" h="48px" fontSize="14px" placeholder="Ej. Inconsciente, sangrado arterial..."
+                    _focus={{ borderColor: '#38bdf8', boxShadow: 'none' }} w="100%"
+                  />
+                </Box>
+                <Button w="100%" size="sm" colorScheme="blue" variant="outline" isDisabled={patientCondition.trim().length < 3} onClick={handleConfirmSection2}>
+                  Confirmar Datos y Continuar
+                </Button>
+              </AccordionPanel>
+            </AccordionItem>
+
+            {/* SECCIÓN 3: ENTORNO */}
+            <AccordionItem border="none">
+              <h2>
+                <AccordionButton py={4} bg={notes ? "#1e293b" : "#171717"} _hover={{ bg: '#262626' }}>
+                  <Box as="span" flex='1' textAlign='left' fontSize="12px" fontWeight="bold" color={notes ? "#38bdf8" : "#e5e5e5"} letterSpacing="1px">
+                    3. REPORTE DE ENTORNO {notes && <Text as="span" color="#10b981" ml={2}>[✓]</Text>}
+                  </Box>
+                  <AccordionIcon color="#a3a3a3" />
+                </AccordionButton>
+              </h2>
+              <AccordionPanel pb={5} bg="#0a0a0a">
+                <Textarea
+                  value={notes} onChange={(e) => setNotes(e.target.value)}
+                  bg="#171717" border="1px solid #262626" color="#e5e5e5" borderRadius="md" h="100px" fontSize="14px" resize="vertical" mb={3}
+                  placeholder="Describa riesgos en escena, accesos..."
+                  _focus={{ borderColor: '#38bdf8', boxShadow: 'none' }} w="100%"
+                />
+                <Grid templateColumns={{ base: "repeat(2, 1fr)", sm: "repeat(3, 1fr)" }} gap={2}>
+                  {QUICK_NOTES.map(note => (
+                    <Button key={note} size="sm" h="32px" fontSize="10px" borderRadius="md" bg="#1e293b" color="#94a3b8" border="1px solid #334155" _hover={{ bg: '#334155', color: 'white' }} onClick={() => handleQuickNote(note)}>
+                      {note}
+                    </Button>
+                  ))}
+                </Grid>
+              </AccordionPanel>
+            </AccordionItem>
+          </Accordion>
+        </Box>
+
+        {/* BOTÓN DE DESPACHO INMEDIATO DIRECTO */}
+        <Box p={5} bg="#0a0a0a" borderTop="1px solid #262626">
+          <Button
+            w="100%" h="60px" bg={isFormValid ? "#dc2626" : "#262626"} color={isFormValid ? "white" : "#737373"} borderRadius="md" fontSize="15px" fontWeight="900" letterSpacing="1px"
+            _hover={{ bg: isFormValid ? '#b91c1c' : '#262626' }}
+            isDisabled={!wsConnected || !isFormValid || isSubmitting} 
+            isLoading={isSubmitting}
+            onClick={executeDispatch}
+          >
+            {isFormValid ? "AUTORIZAR DESPACHO INMEDIATO" : "FALTAN DATOS OBLIGATORIOS"}
+          </Button>
+        </Box>
+      </Flex>
+
+      {/* PORTAL PARA BANNER FLOTANTE DE ALTA VISIBILIDAD (SIN OSCURECER PANTALLA) */}
+      <Portal>
+        {showSuccessBanner && (
+          <Box
+            position="fixed"
+            top="85px"
+            left="50%"
+            transform="translateX(-50%)"
+            bg="#10b981"
+            color="white"
+            px={6}
+            py={4}
+            borderRadius="xl"
+            boxShadow="0px 15px 40px rgba(16, 185, 129, 0.5)"
+            zIndex="20000"
+            display="flex"
+            alignItems="center"
+            gap={4}
+            border="2px solid #34d399"
+            minW="320px"
+          >
+            <Icon as={CheckCircleIcon} boxSize={6} color="white" />
+            <VStack align="start" spacing={0}>
+              <Text fontWeight="900" fontSize="14px" letterSpacing="1.5px">REPORTE ACTIVO</Text>
+              <Text fontSize="12px" fontWeight="bold" color="#ecfdf5">Transmitido con éxito a unidades en ruta.</Text>
+            </VStack>
+          </Box>
+        )}
+      </Portal>
+
+      {/* PANEL DERECHO: MAPA Y HUD BUSCADOR */}
+      <Box flex={1} position="relative" h={{ base: "40vh", lg: "100%" }}>
+        <Box position="absolute" top={0} left={0} w="100%" zIndex={10} bg="rgba(15, 23, 42, 0.9)" borderBottom="1px solid #1e293b" backdropFilter="blur(8px)">
+          <Flex align="center" px={4} py={3} gap={4}>
+            <Box flexShrink={0} display={{ base: "none", md: "block" }}>
+              <Text fontSize="10px" color="#38bdf8" fontWeight="bold" letterSpacing="1px" mb={0.5}>COORDENADAS OBJETIVO</Text>
+              <HStack spacing={3} fontFamily="mono" fontSize="12px" color="#f8fafc">
+                <Text>LAT: <Text as="span" color="#10b981">{selectedLocation.lat.toFixed(6)}</Text></Text>
+                <Text>LNG: <Text as="span" color="#10b981">{selectedLocation.lng.toFixed(6)}</Text></Text>
+              </HStack>
+            </Box>
+            
+            <Divider orientation="vertical" h="30px" borderColor="#334155" display={{ base: "none", md: "block" }} />
+
+            <Box flex={1} position="relative">
+              <InputGroup size="md" w="100%">
+                <Input
+                  value={addressQuery} onChange={(e) => { setAddressQuery(e.target.value); searchAddresses(e.target.value); }}
+                  bg="#1e293b" border={!addressQuery ? "1px solid #ef4444" : "1px solid #334155"} color="white" borderRadius="md" h="44px" fontSize="13px" fontWeight="bold" w="100%"
+                  placeholder="* Obligatorio: Ingrese vialidad o cruzamientos..."
+                  _focus={{ borderColor: '#38bdf8', boxShadow: 'none' }}
+                />
+                <InputRightElement h="100%" w="44px">
+                  {isSearching ? <Spinner size="sm" color="#38bdf8" /> : addressQuery ? <Button size="xs" variant="ghost" color="#94a3b8" onClick={clearAddress}><CloseIcon boxSize={2.5}/></Button> : <SearchIcon color="#ef4444" />}
+                </InputRightElement>
+              </InputGroup>
+
+              {searchResults.length > 0 && (
+                <List position="absolute" top="100%" left={0} w="100%" mt={2} bg="#1e293b" border="1px solid #334155" borderRadius="md" zIndex={20} shadow="2xl" overflow="hidden">
+                  {searchResults.map((res) => (
+                    <ListItem key={res.id} p={3} fontSize="13px" fontWeight="bold" color="#e2e8f0" borderBottom="1px solid #334155" cursor="pointer" _hover={{ bg: '#334155' }} onClick={() => selectSearchResult(res)}>
+                      <HStack><Icon as={FaMapMarkerAlt} color="#dc2626" /><Text isTruncated>{res.place_name}</Text></HStack>
+                    </ListItem>
+                  ))}
+                </List>
+              )}
+            </Box>
+          </Flex>
+        </Box>
+
+        <div ref={mapContainer} style={{ width: '100%', height: '100%' }} />
+
+        <Box position="absolute" top="50%" left="50%" transform="translate(-50%, -50%)" pointerEvents="none" zIndex={5}>
+          <Box w="30px" h="30px" border="2px solid #ef4444" borderRadius="50%" display="flex" alignItems="center" justifyContent="center" bg="rgba(239, 68, 68, 0.15)">
+            <Box w="6px" h="6px" bg="#ef4444" borderRadius="50%" />
+          </Box>
+        </Box>
+      </Box>
+    </Flex>
+  );
+};
+
+export default ReceptorEmergencyForm;

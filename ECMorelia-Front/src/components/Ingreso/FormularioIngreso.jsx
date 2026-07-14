@@ -81,6 +81,12 @@ const Login = () => {
 
                 const response = await request.json();
 
+                // Dentro de onSubmit, después de const response = await request.json();
+localStorage.setItem("role", response.role);
+localStorage.setItem("user", JSON.stringify({ 
+    nombre: values.nombre || values.licencia_medica 
+}));
+
                 if (values.role === "hospitales") {
                     localStorage.setItem("hospitalInfo", JSON.stringify({
                         id: response.id_hospitales,
@@ -92,6 +98,8 @@ const Login = () => {
                 
                 newCookie({ name: "role", value: response.role });
                 setAuth(response.role);
+                console.log("Rol recibido del backend:", response.role);
+console.log("Ruta a navegar:", routes[values.role]);
                 navigate(routes[values.role]);
 
             } catch (error) {

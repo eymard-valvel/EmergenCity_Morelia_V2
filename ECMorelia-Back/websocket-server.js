@@ -1,4 +1,6 @@
-// websocket-server-optimized.js - VERSIÓN CORREGIDA Y GEOLOCALIZACIÓN MEJORADA
+// websocket-server-optimized.js - VERSIÓN COMPLETA CON ASIGNACIÓN AUTOMÁTICA DE AMBULANCIAS
+// (Mantiene todas las funciones existentes y añade manejo de emergency_call)
+
 const WebSocket = require('ws');
 const http = require('http');
 const express = require('express');
@@ -22,6 +24,8 @@ const pendingNotifications = new Map();
 const activeRoutes = new Map();
 const rejectedHospitals = new Map();
 const pendingEmergencyRoutes = new Map();
+// NUEVO: Almacenamiento de emergencias activas
+const activeEmergencies = new Map();
 
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN || 'pk.eyJ1IjoiZXltYXJkMjkiLCJhIjoiY21tcDY4YzNpMGw3bjJzb203YmZyNTVnMyJ9.OvZlnCMfUkUYe6Ib83DUVw';
 
@@ -181,6 +185,24 @@ function broadcastActiveAmbulances() {
   });
 }
 
+// ---------- NUEVO: BROADCAST DE EMERGENCIAS ACTIVAS ----------
+function broadcastActiveEmergencies() {
+  const list = Array.from(activeEmergencies.values());
+  const message = {
+    type: 'active_emergencies_update',
+    emergencies: list,
+    timestamp: new Date().toISOString()
+  };
+  const messageStr = JSON.stringify(message);
+  wss.clients.forEach(client => {
+    if (client.readyState === WebSocket.OPEN) {
+      try {
+        client.send(messageStr);
+      } catch (e) {}
+    }
+  });
+}
+
 // ---------- CONSULTA DE HOSPITALES DESDE PRISMA ----------
 async function getAllHospitalsFromDB() {
   try {
@@ -218,6 +240,7 @@ app.get('/health', (req, res) => {
     activeHospitals: activeHospitals.size,
     pendingNotifications: pendingNotifications.size,
     activeRoutes: activeRoutes.size,
+    activeEmergencies: activeEmergencies.size,
     timestamp: new Date().toISOString()
   });
 });
@@ -378,8 +401,20 @@ async function handleMessage(ws, data) {
       await handleRegisterHospital(ws, data);
       break;
 
+    case 'register_receptor':
+      console.log(`📞 Receptor registrado: ${data.receptorId || 'desconocido'}`);
+      break;
+
     case 'location_update':
       handleLocationUpdate(data);
+      break;
+
+    case 'emergency_call':
+      await handleEmergencyCall(ws, data);
+      break;
+
+    case 'request_active_emergencies':
+      handleRequestActiveEmergencies(ws);
       break;
 
     case 'patient_transfer_notification':
@@ -461,6 +496,8 @@ async function handleRegisterAmbulance(ws, data) {
 
   // Broadcast a ambulancias y hospitales: nuevo vehículo en servicio
   broadcastActiveAmbulances();
+  // Enviar emergencias activas
+  handleRequestActiveEmergencies(ws);
 }
 
 async function handleRegisterHospital(ws, data) {
@@ -594,6 +631,108 @@ function handleLocationUpdate(data) {
   }
 }
 
+// ---------- NUEVO: ASIGNACIÓN AUTOMÁTICA DE AMBULANCIA ----------
+function findNearestAvailableAmbulance(emergencyLocation) {
+  let best = null;
+  let bestDist = Infinity;
+  for (const [id, amb] of activeAmbulances.entries()) {
+    if (amb.status === 'disponible' && amb.location) {
+      const d = calculateDistance(
+        emergencyLocation.lat, emergencyLocation.lng,
+        amb.location.lat, amb.location.lng
+      );
+      if (d < bestDist) {
+        bestDist = d;
+        best = amb;
+      }
+    }
+  }
+  return best;
+}
+
+async function handleEmergencyCall(ws, data) {
+  const { callId, location, address, emergencyType, patientInfo, notes, timestamp } = data;
+  if (!callId || !location) {
+    return sendError(ws, 'Datos incompletos para emergencia');
+  }
+
+  // Crear registro de emergencia
+  const emergency = {
+    callId,
+    location,
+    address: address || 'Sin dirección',
+    emergencyType: emergencyType || 'No especificado',
+    patientInfo: patientInfo || {},
+    notes: notes || '',
+    timestamp: timestamp || new Date().toISOString(),
+    status: 'pending',
+    assignedAmbulanceId: null,
+    assignedAt: null
+  };
+  activeEmergencies.set(callId, emergency);
+
+  // Buscar ambulancia disponible más cercana
+  const ambulance = findNearestAvailableAmbulance(location);
+  if (ambulance) {
+    emergency.status = 'assigned';
+    emergency.assignedAmbulanceId = ambulance.id;
+    emergency.assignedAt = new Date().toISOString();
+    ambulance.status = 'en_ruta';
+    activeEmergencies.set(callId, emergency);
+
+    // Notificar a la ambulancia
+    if (ambulance.ws && ambulance.ws.readyState === WebSocket.OPEN) {
+      sendMessage(ambulance.ws, {
+        type: 'new_emergency_assigned',
+        callId,
+        location,
+        address,
+        emergencyType,
+        patientInfo,
+        notes,
+        timestamp,
+        estimatedArrival: null, // Se puede calcular después con ruta
+        assignedAt: emergency.assignedAt
+      });
+    }
+
+    // Notificar al receptor
+    sendMessage(ws, {
+      type: 'emergency_assigned_ack',
+      callId,
+      ambulanceId: ambulance.id,
+      assignedAt: emergency.assignedAt,
+      estimatedArrival: null,
+      message: `Ambulancia ${ambulance.id} asignada`
+    });
+
+    console.log(`🚨 Emergencia ${callId} asignada a ambulancia ${ambulance.id}`);
+  } else {
+    emergency.status = 'pending_no_ambulance';
+    activeEmergencies.set(callId, emergency);
+    sendMessage(ws, {
+      type: 'emergency_assignment_failed',
+      callId,
+      message: 'No hay ambulancias disponibles en este momento. Queda en espera.'
+    });
+    console.log(`⚠️ Emergencia ${callId} sin ambulancia disponible`);
+  }
+
+  // Broadcast de lista actualizada a todos
+  broadcastActiveEmergencies();
+  broadcastActiveAmbulances();
+}
+
+function handleRequestActiveEmergencies(ws) {
+  const list = Array.from(activeEmergencies.values());
+  sendMessage(ws, {
+    type: 'active_emergencies_update',
+    emergencies: list,
+    timestamp: new Date().toISOString()
+  });
+}
+
+// ---------- FUNCIONES EXISTENTES (sin cambios) ----------
 async function handlePatientTransferNotification(data) {
   const notificationId = data.notificationId || `notif_${Date.now()}`;
 
@@ -1312,4 +1451,4 @@ server.listen(PORT, () => {
   console.log(`🛣️  Directions API: http://localhost:${PORT}/directions`);
 });
 
-module.exports = { wss, activeAmbulances, activeHospitals, rejectedHospitals };
+module.exports = { wss, activeAmbulances, activeHospitals, rejectedHospitals, activeEmergencies };
