@@ -203,43 +203,47 @@ const ReportePaciente = () => {
   // Función para recibir datos del NLP
 
 const handleNLPData = (data) => {
-  setReporte(prev => ({
-    ...prev,
-    paciente: {
-      ...prev.paciente,
-      nombre: data.paciente.nombre || prev.paciente.nombre,
-      edad: data.paciente.edad || prev.paciente.edad,
-      sexo: data.paciente.sexo || prev.paciente.sexo,
-      motivo_urgencia: data.motivo_urgencia || prev.paciente.motivo_urgencia,
-      descripcion_lesion: data.descripcion_lesion || prev.paciente.descripcion_lesion,
-    },
-    signos_vitales: {
-      ...prev.signos_vitales,
-      frecuencia_cardiaca: data.signos_vitales.frecuencia_cardiaca || prev.signos_vitales.frecuencia_cardiaca,
-      frecuencia_respiratoria: data.signos_vitales.frecuencia_respiratoria || prev.signos_vitales.frecuencia_respiratoria,
-      tension_arterial: data.signos_vitales.tension_arterial || prev.signos_vitales.tension_arterial,
-      saturacion_oxigeno: data.signos_vitales.saturacion_oxigeno || prev.signos_vitales.saturacion_oxigeno,
-      temperatura: data.signos_vitales.temperatura || prev.signos_vitales.temperatura,
-    },
-    hallazgos_escena: data.hallazgos_escena || prev.hallazgos_escena,
-    intervenciones: [...prev.intervenciones, ...(data.intervenciones || [])],
-  }));
+    setReporte(prev => ({
+        ...prev,
+        paciente: {
+            ...prev.paciente,
+            nombre: data.paciente.nombre || prev.paciente.nombre,
+            edad: data.paciente.edad || prev.paciente.edad,
+            sexo: data.paciente.sexo || prev.paciente.sexo,
+            motivo_urgencia: data.motivo_urgencia || prev.paciente.motivo_urgencia,
+            descripcion_lesion: data.descripcion_lesion || prev.paciente.descripcion_lesion,
+        },
+        signos_vitales: {
+            ...prev.signos_vitales,
+            frecuencia_cardiaca: data.signos_vitales.frecuencia_cardiaca || prev.signos_vitales.frecuencia_cardiaca,
+            frecuencia_respiratoria: data.signos_vitales.frecuencia_respiratoria || prev.signos_vitales.frecuencia_respiratoria,
+            tension_arterial: data.signos_vitales.tension_arterial || prev.signos_vitales.tension_arterial,
+            saturacion_oxigeno: data.signos_vitales.saturacion_oxigeno || prev.signos_vitales.saturacion_oxigeno,
+            temperatura: data.signos_vitales.temperatura || prev.signos_vitales.temperatura,
+        },
+        hallazgos_escena: data.hallazgos_escena || prev.hallazgos_escena,
+        intervenciones: data.intervenciones && data.intervenciones.length > 0
+            ? data.intervenciones
+            : prev.intervenciones, // solo reemplazar si hay nuevas
+    }));
 
-  if (data.glasgow) {
-    if (data.glasgow.ocular) setOcular(data.glasgow.ocular);
-    if (data.glasgow.verbal) setVerbal(data.glasgow.verbal);
-    if (data.glasgow.motor) setMotor(data.glasgow.motor);
-  }
+    // Glasgow
+    if (data.glasgow) {
+        if (data.glasgow.ocular) setOcular(data.glasgow.ocular);
+        if (data.glasgow.verbal) setVerbal(data.glasgow.verbal);
+        if (data.glasgow.motor) setMotor(data.glasgow.motor);
+    }
 
-  const ahora = new Date();
-  const horas = String(ahora.getHours()).padStart(2, '0');
-  const minutos = String(ahora.getMinutes()).padStart(2, '0');
-  setReporte(prev => ({
-    ...prev,
-    hora_estimada_llegada: `${horas}:${minutos}`,
-  }));
+    // Hora estimada
+    const ahora = new Date();
+    const horas = String(ahora.getHours()).padStart(2, '0');
+    const minutos = String(ahora.getMinutes()).padStart(2, '0');
+    setReporte(prev => ({
+        ...prev,
+        hora_estimada_llegada: `${horas}:${minutos}`
+    }));
 
-  mostrarNotificacion('Datos extraídos por voz correctamente', 'success');
+    mostrarNotificacion('✅ Datos extraídos correctamente', 'success');
 };
 
   // Al finalizar la grabación, se procesa automáticamente (ya está en VoiceAssistant)

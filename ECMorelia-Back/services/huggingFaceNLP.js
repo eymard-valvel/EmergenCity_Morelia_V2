@@ -2,15 +2,10 @@
 const axios = require('axios');
 
 const HF_API_URL = 'https://api-inference.huggingface.co/models/HUMADEX/spanish_medical_ner';
-const HF_TOKEN = process.env.HUGGINGFACE_TOKEN; // Token de Hugging Face
+const HF_TOKEN = process.env.HUGGINGFACE_TOKEN;
 
-/**
- * Extrae entidades médicas de un texto usando el modelo de Hugging Face
- * Retorna un objeto estructurado con los datos del paciente
- */
 async function extractMedicalEntities(text) {
     try {
-        // Llamada a la API de Hugging Face
         const response = await axios({
             method: 'post',
             url: HF_API_URL,
@@ -19,25 +14,25 @@ async function extractMedicalEntities(text) {
                 'Content-Type': 'application/json'
             },
             data: { inputs: text },
-            timeout: 30000 // 30 segundos
+            timeout: 30000
         });
 
-        // Si la respuesta es exitosa, procesamos las entidades
-        const entities = response.data;
-        return parseEntitiesToStructuredData(entities, text);
+        // La respuesta puede ser un array de arrays o un objeto
+        let entities = response.data;
+        if (Array.isArray(entities) && entities.length > 0 && Array.isArray(entities[0])) {
+            entities = entities[0]; // Tomamos el primer batch
+        }
+
+        return parseEntities(entities, text);
     } catch (error) {
         console.error('Error en Hugging Face API:', error.message);
-        // Si falla la API, hacemos fallback a parseo local
         console.warn('Usando fallback local...');
-        return parseTextLocal(text); // Tu función local existente
+        return parseTextLocal(text);
     }
 }
 
-/**
- * Convierte las entidades de Hugging Face a nuestro formato estructurado
- */
-function parseEntitiesToStructuredData(entities, originalText) {
-    // Inicializamos el resultado
+function parseEntities(entities, originalText) {
+    // Inicializar estructura
     const result = {
         paciente: { nombre: '', edad: '', sexo: '' },
         signos_vitales: {
@@ -54,49 +49,53 @@ function parseEntitiesToStructuredData(entities, originalText) {
         intervenciones: []
     };
 
-    // Agrupamos entidades por tipo
-    const problems = [];
-    const tests = [];
-    const treatments = [];
-
-    entities.forEach(entity => {
-        const word = entity.word || entity.entity;
-        const entityGroup = entity.entity_group || entity.label;
-
-        if (entityGroup === 'PROBLEM') {
-            problems.push(word);
-        } else if (entityGroup === 'TEST') {
-            tests.push(word);
-        } else if (entityGroup === 'TREATMENT') {
-            treatments.push(word);
+    // Agrupar entidades por tipo
+    const groups = { PROBLEM: [], TEST: [], TREATMENT: [] };
+    entities.forEach(ent => {
+        const group = ent.entity_group || ent.label;
+        const word = ent.word || ent.entity || '';
+        if (groups[group]) {
+            groups[group].push(word);
         }
     });
 
-    // 1. Motivo de urgencia: tomamos los PROBLEMS como motivo
-    if (problems.length > 0) {
-        result.motivo_urgencia = problems.join(', ');
-    }
-
-    // 2. Descripción de lesión: buscamos palabras clave en el texto
-    const lesionKeywords = ['trauma', 'herida', 'fractura', 'lesión', 'quemadura', 'golpe', 'contusión'];
-    const foundLesion = lesionKeywords.find(kw => originalText.toLowerCase().includes(kw));
-    if (foundLesion) {
-        // Extraemos la frase que contiene la palabra clave
-        const match = originalText.match(new RegExp(`[^.]*${foundLesion}[^.]*\\.`, 'i'));
-        if (match) {
-            result.descripcion_lesion = match[0].trim();
+    // 1. Motivo de urgencia = todos los PROBLEM concatenados
+    if (groups.PROBLEM.length > 0) {
+        result.motivo_urgencia = groups.PROBLEM.join(', ');
+    } else {
+        // Fallback: buscar frases con palabras clave
+        const keywords = ['dolor', 'fiebre', 'trauma', 'accidente', 'caída', 'náuseas', 'vómito', 'hemorragia'];
+        for (const kw of keywords) {
+            const match = originalText.match(new RegExp(`[^.]*${kw}[^.]*\\.`, 'i'));
+            if (match) {
+                result.motivo_urgencia = match[0].trim();
+                break;
+            }
         }
     }
 
-    // 3. Signos vitales (usamos regex para valores numéricos)
+    // 2. Descripción de lesión: buscar "trauma", "herida", "fractura", etc.
+    const lesionKeywords = ['trauma', 'herida', 'fractura', 'lesión', 'quemadura', 'golpe', 'contusión', 'torácico', 'craneal'];
+    for (const kw of lesionKeywords) {
+        const match = originalText.match(new RegExp(`[^.]*${kw}[^.]*\\.`, 'i'));
+        if (match) {
+            result.descripcion_lesion = match[0].trim();
+            break;
+        }
+    }
+
+    // 3. Signos vitales (regex mejorados)
     const fcMatch = originalText.match(/\b(?:fc|frecuencia\s*card[ií]aca)\s*[:]?\s*(\d{2,3})\b/i);
     if (fcMatch) result.signos_vitales.frecuencia_cardiaca = fcMatch[1];
 
     const frMatch = originalText.match(/\b(?:fr|frecuencia\s*respiratoria)\s*[:]?\s*(\d{2,3})\b/i);
     if (frMatch) result.signos_vitales.frecuencia_respiratoria = frMatch[1];
 
-    const taMatch = originalText.match(/\b(?:ta|tensi[oó]n\s*arterial)\s*[:]?\s*(\d{2,3})\s*[/\s]+(\d{2,3})\b/i);
-    if (taMatch) result.signos_vitales.tension_arterial = `${taMatch[1]}/${taMatch[2]}`;
+    // TA: 150/95 o 150 sobre 95
+    const taMatch = originalText.match(/\b(?:ta|tensi[oó]n\s*arterial)\s*[:]?\s*(\d{2,3})\s*[\/\s]+(?:sobre\s*)?(\d{2,3})\b/i);
+    if (taMatch) {
+        result.signos_vitales.tension_arterial = `${taMatch[1]}/${taMatch[2]}`;
+    }
 
     const spo2Match = originalText.match(/\b(?:spo2|saturaci[oó]n)\s*[:]?\s*(\d{2,3})\b/i);
     if (spo2Match) result.signos_vitales.saturacion_oxigeno = spo2Match[1];
@@ -120,12 +119,16 @@ function parseEntitiesToStructuredData(entities, originalText) {
         }
     }
 
-    // 5. Intervenciones (TREATMENTS de Hugging Face)
-    if (treatments.length > 0) {
-        result.intervenciones = treatments;
+    // 5. Intervenciones (TREATMENT) → ahora como objetos con tipo y descripción
+    if (groups.TREATMENT.length > 0) {
+        result.intervenciones = groups.TREATMENT.map(t => ({
+            tipo_intervencion: t,
+            descripcion: '',
+            hora_intervencion: ''
+        }));
     }
 
-    // 6. Intentar extraer nombre (palabras después de "paciente")
+    // 6. Nombre (después de "paciente")
     const nombreMatch = originalText.match(/(?:paciente|nombre)\s+(?:de\s+)?([A-Za-záéíóúñ\s]+?)(?:\s+(?:de|con|que|y|,|\.|$))/i);
     if (nombreMatch) result.paciente.nombre = nombreMatch[1].trim();
 
@@ -140,14 +143,26 @@ function parseEntitiesToStructuredData(entities, originalText) {
     return result;
 }
 
-/**
- * Función de fallback local (usar tu implementación existente)
- */
+// Fallback local (versión mejorada)
 function parseTextLocal(text) {
-    // Esta es tu función localParser.js existente
-    // La importamos o copiamos aquí
-    const { parseTextLocal } = require('../../src/pln/localParser');
-    return parseTextLocal(text);
+    // Aquí copiamos la misma lógica de parseo local mejorada
+    // (para no duplicar, podemos importar, pero por simplicidad la incluimos)
+    const result = {
+        paciente: { nombre: '', edad: '', sexo: '' },
+        signos_vitales: { frecuencia_cardiaca: '', frecuencia_respiratoria: '', tension_arterial: '', saturacion_oxigeno: '', temperatura: '' },
+        glasgow: { ocular: null, verbal: null, motor: null, total: null },
+        motivo_urgencia: '',
+        descripcion_lesion: '',
+        hallazgos_escena: text,
+        intervenciones: []
+    };
+
+    // ... (misma lógica de regex que arriba, para que sea consistente)
+
+    // Simplemente copiamos el código de los bloques anteriores
+    // pero como es largo, mejor reutilizamos la función parseEntities con un array vacío
+    // que solo use regex.
+    return parseEntities([], text);
 }
 
 module.exports = { extractMedicalEntities };
