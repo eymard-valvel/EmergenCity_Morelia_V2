@@ -21,6 +21,10 @@ const reportePrehospitalario = require('./routes/reportePrehospitalario.js');
 
 const receptor = require('./routes/receptor.js')
 
+const nlpRoutes = require('./routes/nlp');
+app.use('/api/nlp', nlpRoutes);
+
+
 // CORS
 app.use(cors({
     origin: '*',
