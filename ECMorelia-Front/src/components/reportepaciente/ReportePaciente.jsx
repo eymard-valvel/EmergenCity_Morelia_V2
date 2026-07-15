@@ -201,9 +201,8 @@ const ReportePaciente = () => {
   };
 
   // Función para recibir datos del NLP
-
+  
 const handleNLPData = (data) => {
-    // Asegurar que las intervenciones tengan hora actual
     const ahora = new Date();
     const horas = String(ahora.getHours()).padStart(2, '0');
     const minutos = String(ahora.getMinutes()).padStart(2, '0');
@@ -236,14 +235,12 @@ const handleNLPData = (data) => {
         intervenciones: intervencionesConHora.length > 0 ? intervencionesConHora : prev.intervenciones,
     }));
 
-    // Glasgow
     if (data.glasgow) {
         if (data.glasgow.ocular) setOcular(data.glasgow.ocular);
         if (data.glasgow.verbal) setVerbal(data.glasgow.verbal);
         if (data.glasgow.motor) setMotor(data.glasgow.motor);
     }
 
-    // Hora estimada de llegada (actual)
     setReporte(prev => ({
         ...prev,
         hora_estimada_llegada: horaActual

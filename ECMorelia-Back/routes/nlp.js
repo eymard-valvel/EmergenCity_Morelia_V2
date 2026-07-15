@@ -8,10 +8,15 @@ router.post('/parse', async (req, res) => {
         if (!text || !text.trim()) {
             return res.status(400).json({ error: 'Texto vacío' });
         }
-
-        console.log('📝 Procesando con parser definitivo...');
+        console.log('📝 Procesando con parser final...');
         const result = parseMedicalText(text);
-        console.log('✅ Extraído:', Object.keys(result));
+        console.log('✅ Extraído:', {
+            motivo: result.motivo_urgencia.substring(0, 50),
+            lesion: result.descripcion_lesion.substring(0, 50),
+            signos: result.signos_vitales,
+            glasgow: result.glasgow,
+            intervenciones: result.intervenciones.map(i => i.tipo_intervencion)
+        });
         res.json(result);
     } catch (error) {
         console.error('❌ Error:', error);
