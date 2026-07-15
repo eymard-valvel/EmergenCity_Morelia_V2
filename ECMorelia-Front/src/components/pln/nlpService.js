@@ -1,3 +1,4 @@
+// src/pln/nlpService.js
 import { parseTextLocal } from './localParser';
 
 const API_URL = import.meta.env.VITE_API || 'http://localhost:3000/api';
@@ -8,6 +9,7 @@ export const parseText = async (text) => {
     }
 
     try {
+        // Intentar con el backend (ahora con NER local)
         const response = await fetch(`${API_URL}/nlp/parse`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -16,7 +18,7 @@ export const parseText = async (text) => {
 
         if (response.ok) {
             const data = await response.json();
-            console.log('✅ NLP con Hugging Face:', data);
+            console.log('✅ NLP procesado correctamente');
             return data;
         } else {
             console.warn('⚠️ Backend error, usando fallback local');
