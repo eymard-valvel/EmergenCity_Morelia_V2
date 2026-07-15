@@ -1,6 +1,5 @@
 // src/pln/localParser.js
 export function parseTextLocal(text) {
-    // Misma lógica que el backend, pero en JavaScript puro
     const cleanText = text.replace(/\s+/g, ' ').trim();
 
     const result = {
@@ -19,32 +18,37 @@ export function parseTextLocal(text) {
         intervenciones: []
     };
 
-    // Motivo de urgencia
-    const motivoRegex = /(?:motivo\s+(?:de\s+)?(?:urgencia|consulta|ingreso)|por\s+(?:presentar|tener|con))\s*[:]?\s*([^.]+)/i;
-    const motivoMatch = cleanText.match(motivoRegex);
-    if (motivoMatch) {
-        result.motivo_urgencia = motivoMatch[1].trim();
+    // Nombre
+    const nombreMatch = cleanText.match(/paciente\s+([A-Za-záéíóúñ\s]+?)(?=\s+\d+\s*años|\s+sexo|\s+motivo|,|\.)/i);
+    if (nombreMatch) result.paciente.nombre = nombreMatch[1].trim();
+
+    // Edad
+    const edadMatch = cleanText.match(/\b(\d{1,3})\s*(años|año|edad)\b/i);
+    if (edadMatch) result.paciente.edad = parseInt(edadMatch[1], 10);
+
+    // Sexo
+    if (/\b(masculino|hombre|varón)\b/i.test(cleanText)) result.paciente.sexo = 'M';
+    else if (/\b(femenino|mujer)\b/i.test(cleanText)) result.paciente.sexo = 'F';
+
+    // Motivo
+    const motivoStart = cleanText.search(/\b(?:motivo\s+(?:de\s+)?(?:urgencia|consulta)|por\s+(?:presentar|tener|con))\s*[:]?\s*/i);
+    if (motivoStart !== -1) {
+        const fromMotivo = cleanText.substring(motivoStart);
+        const endMatch = fromMotivo.match(/\.|(?=\s+(?:lesión|trauma|herida|signos\s*vitales|glasgow|gcs))/i);
+        const motivo = endMatch ? fromMotivo.substring(0, endMatch.index) : fromMotivo;
+        result.motivo_urgencia = motivo.replace(/^motivo\s+(?:de\s+)?(?:urgencia|consulta)\s*[:]?\s*/i, '').trim();
     } else {
-        const fallbackMatch = cleanText.match(/\b(dolor|fiebre|trauma|accidente|caída|náuseas|vómito|hemorragia|dificultad respiratoria)\s+[^.]+\./i);
-        if (fallbackMatch) {
-            result.motivo_urgencia = fallbackMatch[0].trim();
-        }
+        const fallbackMatch = cleanText.match(/\b(dolor|fiebre|trauma|accidente|caída|náuseas|vómito|hemorragia|dificultad respiratoria)\s+[^.]+/i);
+        if (fallbackMatch) result.motivo_urgencia = fallbackMatch[0].trim();
     }
 
-    // Descripción de lesión
-    const lesionRegex = /(?:lesión|trauma|herida|fractura|quemadura|golpe|contusión)\s+(?:de|en|por)\s+([^.]+)/i;
-    const lesionMatch = cleanText.match(lesionRegex);
-    if (lesionMatch) {
-        result.descripcion_lesion = lesionMatch[0].trim();
-    } else {
-        const keywords = ['trauma', 'herida', 'fractura', 'lesión', 'torácico', 'craneal', 'abdominal'];
-        for (const kw of keywords) {
-            const match = cleanText.match(new RegExp(`[^.]*${kw}[^.]*\\.`, 'i'));
-            if (match) {
-                result.descripcion_lesion = match[0].trim();
-                break;
-            }
-        }
+    // Lesión
+    const lesionStart = cleanText.search(/\b(?:lesión|trauma|herida|fractura|quemadura|golpe|contusión)\s+(?:de|en|por)\s*/i);
+    if (lesionStart !== -1) {
+        const fromLesion = cleanText.substring(lesionStart);
+        const endMatch = fromLesion.match(/\.|(?=\s+(?:signos\s*vitales|glasgow|gcs|escala))/i);
+        const lesion = endMatch ? fromLesion.substring(0, endMatch.index) : fromLesion;
+        result.descripcion_lesion = lesion.trim();
     }
 
     // Signos vitales
@@ -59,30 +63,67 @@ export function parseTextLocal(text) {
     const tempMatch = cleanText.match(/\b(?:temperatura|temp)\s*[:]?\s*(\d{2,3}\.?\d*)\b/i);
     if (tempMatch) result.signos_vitales.temperatura = tempMatch[1];
 
-    // Glasgow
-    const gcsMatch = cleanText.match(/\b(?:glasgow|gcs)\s*[:]?\s*(\d{1,2})\b/i);
+    // Glasgow con números en letras
+    const numberMap = { 'uno':1,'dos':2,'tres':3,'cuatro':4,'cinco':5,'seis':6,'siete':7,'ocho':8,'nueve':9,'diez':10 };
+    const toNumber = (str) => {
+        const lower = str.toLowerCase().trim();
+        if (numberMap[lower]) return numberMap[lower];
+        const num = parseInt(str, 10);
+        return isNaN(num) ? null : num;
+    };
+
+    const gcsMatch = cleanText.match(/\b(?:glasgow|gcs)\s*[:]?\s*([\w]+)\b/i);
     if (gcsMatch) {
-        result.glasgow.total = parseInt(gcsMatch[1], 10);
+        const total = toNumber(gcsMatch[1]);
+        if (total) result.glasgow.total = total;
     } else {
-        const ocular = cleanText.match(/\bocular\s*[:]?\s*(\d)\b/i);
-        if (ocular) result.glasgow.ocular = parseInt(ocular[1], 10);
-        const verbal = cleanText.match(/\bverbal\s*[:]?\s*(\d)\b/i);
-        if (verbal) result.glasgow.verbal = parseInt(verbal[1], 10);
-        const motor = cleanText.match(/\bmotor\s*[:]?\s*(\d)\b/i);
-        if (motor) result.glasgow.motor = parseInt(motor[1], 10);
+        const ocularMatch = cleanText.match(/\bocular\s*[:]?\s*([\w]+)\b/i);
+        if (ocularMatch) result.glasgow.ocular = toNumber(ocularMatch[1]);
+        const verbalMatch = cleanText.match(/\bverbal\s*[:]?\s*([\w]+)\b/i);
+        if (verbalMatch) result.glasgow.verbal = toNumber(verbalMatch[1]);
+        const motorMatch = cleanText.match(/\bmotor\s*[:]?\s*([\w]+)\b/i);
+        if (motorMatch) result.glasgow.motor = toNumber(motorMatch[1]);
         if (result.glasgow.ocular && result.glasgow.verbal && result.glasgow.motor) {
             result.glasgow.total = result.glasgow.ocular + result.glasgow.verbal + result.glasgow.motor;
         }
     }
 
-    // Intervenciones
-    const treatmentKeywords = [
-        'oxigenoterapia', 'oxígeno', 'intubación', 'ventilación', 'desfibrilación',
-        'masaje cardiaco', 'rccp', 'vendaje', 'inmovilización', 'férula', 'catéter',
-        'sonda', 'drenaje', 'aspiración', 'medicación', 'suero', 'vía intravenosa',
-        'iv', 'analgesia', 'anestesia', 'cura', 'limpieza', 'sutura', 'inyección'
-    ];
-    const found = treatmentKeywords.filter(kw => cleanText.toLowerCase().includes(kw));
+    // Intervenciones normalizadas
+    const treatmentMap = {
+        'oxigenoterapia': 'oxigenoterapia',
+        'oxígeno': 'oxigenoterapia',
+        'oxigeno': 'oxigenoterapia',
+        'intubación': 'intubación',
+        'ventilación': 'ventilación',
+        'desfibrilación': 'desfibrilación',
+        'masaje cardiaco': 'masaje cardiaco',
+        'rccp': 'rccp',
+        'vendaje': 'vendaje',
+        'inmovilización': 'inmovilización',
+        'férula': 'férula',
+        'catéter': 'catéter',
+        'sonda': 'sonda',
+        'drenaje': 'drenaje',
+        'aspiración': 'aspiración',
+        'medicación': 'medicación',
+        'suero': 'suero',
+        'vía intravenosa': 'vía intravenosa',
+        'iv': 'vía intravenosa',
+        'analgesia': 'analgesia',
+        'anestesia': 'anestesia',
+        'cura': 'cura',
+        'limpieza': 'limpieza',
+        'sutura': 'sutura',
+        'inyección': 'inyección'
+    };
+
+    const found = [];
+    const lowerText = cleanText.toLowerCase();
+    for (const [key, normalized] of Object.entries(treatmentMap)) {
+        if (lowerText.includes(key)) {
+            found.push(normalized);
+        }
+    }
     const unique = [...new Set(found)];
     if (unique.length > 0) {
         result.intervenciones = unique.map(t => ({
@@ -91,14 +132,6 @@ export function parseTextLocal(text) {
             hora_intervencion: ''
         }));
     }
-
-    // Datos demográficos
-    const nombreMatch = cleanText.match(/(?:paciente|nombre)\s+(?:de\s+)?([A-Za-záéíóúñ\s]+?)(?:\s+(?:de|con|que|y|,|\.|$))/i);
-    if (nombreMatch) result.paciente.nombre = nombreMatch[1].trim();
-    const edadMatch = cleanText.match(/\b(\d{1,3})\s*(años|año|edad)\b/i);
-    if (edadMatch) result.paciente.edad = parseInt(edadMatch[1], 10);
-    if (/\b(masculino|hombre|varón)\b/i.test(cleanText)) result.paciente.sexo = 'M';
-    else if (/\b(femenino|mujer)\b/i.test(cleanText)) result.paciente.sexo = 'F';
 
     return result;
 }

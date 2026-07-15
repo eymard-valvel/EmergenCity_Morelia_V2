@@ -203,7 +203,7 @@ const ReportePaciente = () => {
   // Función para recibir datos del NLP
 
 const handleNLPData = (data) => {
-    // Limpiar intervenciones: eliminar duplicados y vacíos
+    // Limpiar intervenciones (eliminar duplicados)
     const cleanIntervenciones = data.intervenciones
         ? data.intervenciones.filter((iv, index, self) =>
             index === self.findIndex(t => t.tipo_intervencion === iv.tipo_intervencion)
@@ -250,6 +250,7 @@ const handleNLPData = (data) => {
 
     mostrarNotificacion('✅ Datos extraídos correctamente', 'success');
 };
+
   // Al finalizar la grabación, se procesa automáticamente (ya está en VoiceAssistant)
 
   // Validación

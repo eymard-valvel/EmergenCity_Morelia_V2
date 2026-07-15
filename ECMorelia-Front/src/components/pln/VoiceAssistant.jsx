@@ -2,28 +2,37 @@ import React, { useState, useEffect, useRef } from 'react';
 import { parseText } from './nlpService';
 import './VoiceAssistant.css';
 
+// Icono micrófono (SVG simple)
+const MicIcon = () => (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+        <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+        <line x1="12" y1="19" x2="12" y2="23" />
+        <line x1="8" y1="23" x2="16" y2="23" />
+    </svg>
+);
+
 const VoiceAssistant = ({ onDataExtracted, onError, onRecordingComplete }) => {
     const [isOpen, setIsOpen] = useState(false);
     const [isRecording, setIsRecording] = useState(false);
-    const [transcript, setTranscript] = useState('');
+    const [transcript, setTranscript] = useState(''); // texto acumulado final
     const [interimTranscript, setInterimTranscript] = useState('');
     const [processing, setProcessing] = useState(false);
     const [errorMessage, setErrorMessage] = useState('');
     const recognitionRef = useRef(null);
+    const fullTextRef = useRef(''); // acumulador de texto final
 
     useEffect(() => {
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SpeechRecognition) {
-            const msg = '❌ Tu navegador no soporta reconocimiento de voz. Usa Chrome o Edge.';
-            setErrorMessage(msg);
-            onError && onError(msg);
+            setErrorMessage('❌ Tu navegador no soporta reconocimiento de voz. Usa Chrome o Edge.');
             return;
         }
 
         const rec = new SpeechRecognition();
         rec.lang = 'es-ES';
         rec.interimResults = true;
-        rec.continuous = true;
+        rec.continuous = true; // no se detiene por silencio
 
         rec.onresult = (event) => {
             let final = '';
@@ -36,30 +45,31 @@ const VoiceAssistant = ({ onDataExtracted, onError, onRecordingComplete }) => {
                     interim += piece;
                 }
             }
-            setTranscript(final);
+            // Acumular solo los finales
+            if (final) {
+                fullTextRef.current += (fullTextRef.current ? ' ' : '') + final;
+                setTranscript(fullTextRef.current);
+            }
             setInterimTranscript(interim);
-            // Limpiar error cuando se recibe texto
-            if (errorMessage) setErrorMessage('');
         };
 
         rec.onerror = (event) => {
             console.error('Error de reconocimiento:', event.error);
-            setIsRecording(false);
             if (event.error === 'not-allowed') {
-                setErrorMessage('❌ Permiso de micrófono denegado. Habilítalo en la configuración del navegador.');
+                setErrorMessage('❌ Permiso de micrófono denegado. Habilítalo en el navegador.');
             } else if (event.error === 'no-speech') {
                 setErrorMessage('⚠️ No se detectó voz. Intenta de nuevo.');
             } else {
                 setErrorMessage(`❌ Error: ${event.error}`);
             }
-            onError && onError(event.error);
+            setIsRecording(false);
         };
 
         rec.onend = () => {
             setIsRecording(false);
-            // Procesar automáticamente al finalizar la grabación si hay texto
-            if (transcript.trim() && !processing) {
-                handleProcess(transcript);
+            // Si hay texto acumulado y no estamos procesando, procesar automáticamente
+            if (fullTextRef.current.trim() && !processing) {
+                handleProcess(fullTextRef.current);
             }
         };
 
@@ -72,9 +82,10 @@ const VoiceAssistant = ({ onDataExtracted, onError, onRecordingComplete }) => {
         };
     }, []);
 
-    // Abrir modal => iniciar grabación automática
+    // Abrir modal => iniciar grabación
     useEffect(() => {
         if (isOpen && recognitionRef.current && !isRecording && !processing) {
+            fullTextRef.current = ''; // reset al abrir
             setTranscript('');
             setInterimTranscript('');
             setErrorMessage('');
@@ -92,21 +103,17 @@ const VoiceAssistant = ({ onDataExtracted, onError, onRecordingComplete }) => {
             setErrorMessage('⚠️ No hay texto para procesar.');
             return;
         }
-
         setProcessing(true);
         setErrorMessage('');
-
         try {
             const parsedData = await parseText(text);
             onDataExtracted(parsedData);
             if (onRecordingComplete) onRecordingComplete();
-            // Cerrar el modal automáticamente después de procesar
+            // Cerrar modal tras éxito
             setTimeout(() => setIsOpen(false), 800);
         } catch (error) {
-            console.error('Error al procesar texto:', error);
-            const msg = '❌ Error al procesar el texto. Intenta de nuevo.';
-            setErrorMessage(msg);
-            onError && onError(msg);
+            console.error('Error al procesar:', error);
+            setErrorMessage('❌ Error al procesar el texto. Intenta de nuevo.');
         } finally {
             setProcessing(false);
         }
@@ -114,20 +121,31 @@ const VoiceAssistant = ({ onDataExtracted, onError, onRecordingComplete }) => {
 
     const stopAndProcess = () => {
         if (recognitionRef.current && isRecording) {
-            // Detener la grabación (esto disparará onend y luego procesará)
-            recognitionRef.current.stop();
-        } else if (transcript.trim()) {
-            // Si no está grabando, procesar el texto que ya tenemos
-            handleProcess(transcript);
+            recognitionRef.current.stop(); // onend procesará
+        } else if (fullTextRef.current.trim()) {
+            handleProcess(fullTextRef.current);
         } else {
             setErrorMessage('⚠️ No hay texto para procesar. Graba algo primero.');
+        }
+    };
+
+    const resetAndRecord = () => {
+        if (recognitionRef.current && isRecording) {
+            recognitionRef.current.stop();
+        }
+        fullTextRef.current = '';
+        setTranscript('');
+        setInterimTranscript('');
+        setErrorMessage('');
+        if (recognitionRef.current) {
+            recognitionRef.current.start();
+            setIsRecording(true);
         }
     };
 
     const closeModal = () => {
         if (isRecording && recognitionRef.current) {
             recognitionRef.current.stop();
-            setIsRecording(false);
         }
         setIsOpen(false);
     };
@@ -140,19 +158,19 @@ const VoiceAssistant = ({ onDataExtracted, onError, onRecordingComplete }) => {
                 title="Asistente de voz"
                 aria-label="Abrir asistente de voz"
             >
-                🎤
+                <MicIcon />
             </button>
 
             {isOpen && (
                 <div className="voice-modal-overlay" onClick={closeModal}>
                     <div className="voice-modal" onClick={(e) => e.stopPropagation()}>
                         <div className="voice-modal-header">
-                            <h3>🎙️ Asistente de voz</h3>
+                            <h3>Asistente de voz</h3>
                             <button className="voice-modal-close" onClick={closeModal}>×</button>
                         </div>
                         <div className="voice-modal-body">
                             <p className={`voice-instruction ${isRecording ? 'recording' : ''}`}>
-                                {isRecording ? '🔴 Grabando... habla claramente' : '⏸️ Grabación detenida'}
+                                {isRecording ? '🔴 Grabando... hable con claridad' : '⏸️ Grabación detenida'}
                             </p>
 
                             <div className="voice-transcript-box">
@@ -163,25 +181,29 @@ const VoiceAssistant = ({ onDataExtracted, onError, onRecordingComplete }) => {
                             </div>
 
                             {errorMessage && (
-                                <div className="voice-error">
-                                    {errorMessage}
-                                </div>
+                                <div className="voice-error">{errorMessage}</div>
                             )}
 
-                            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                            <div className="voice-actions">
                                 <button
-                                    className={`voice-record-btn ${isRecording ? 'recording' : ''}`}
+                                    className={`voice-btn primary ${isRecording ? 'recording' : ''}`}
                                     onClick={stopAndProcess}
-                                    disabled={processing || (!isRecording && !transcript.trim())}
-                                    style={{ flex: 1 }}
+                                    disabled={processing || (!isRecording && !fullTextRef.current)}
                                 >
-                                    {isRecording ? '⏹️ Detener y procesar' : '▶️ Procesar texto'}
+                                    {isRecording ? 'Detener y procesar' : 'Procesar texto'}
+                                </button>
+                                <button
+                                    className="voice-btn secondary"
+                                    onClick={resetAndRecord}
+                                    disabled={processing}
+                                >
+                                    Reiniciar
                                 </button>
                             </div>
 
                             {processing && (
                                 <div className="voice-processing">
-                                    <span className="spinner">⏳</span> Procesando con IA médica...
+                                    <span className="spinner">⏳</span> Procesando...
                                 </div>
                             )}
                         </div>

@@ -10,12 +10,12 @@ router.post('/parse', async (req, res) => {
             return res.status(400).json({ error: 'Texto vacío' });
         }
 
-        console.log('📝 Procesando texto con parser local...');
+        console.log('📝 Procesando con parser local...');
         const result = parseMedicalText(text);
-        console.log('✅ Datos extraídos:', Object.keys(result));
+        console.log('✅ Extraído:', Object.keys(result));
         res.json(result);
     } catch (error) {
-        console.error('❌ Error en NLP:', error);
+        console.error('❌ Error:', error);
         res.status(500).json({
             error: 'Error al procesar el texto',
             details: error.message
