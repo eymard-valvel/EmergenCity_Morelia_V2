@@ -1,4 +1,3 @@
-// backend/routes/nlp.js
 const express = require('express');
 const router = express.Router();
 const { parseMedicalText } = require('../services/medicalParser');
@@ -10,7 +9,7 @@ router.post('/parse', async (req, res) => {
             return res.status(400).json({ error: 'Texto vacío' });
         }
 
-        console.log('📝 Procesando con parser local...');
+        console.log('📝 Procesando con parser mejorado...');
         const result = parseMedicalText(text);
         console.log('✅ Extraído:', Object.keys(result));
         res.json(result);
