@@ -9,7 +9,7 @@ router.post('/parse', async (req, res) => {
             return res.status(400).json({ error: 'Texto vacío' });
         }
 
-        console.log('📝 Procesando con parser mejorado...');
+        console.log('📝 Procesando con parser definitivo...');
         const result = parseMedicalText(text);
         console.log('✅ Extraído:', Object.keys(result));
         res.json(result);

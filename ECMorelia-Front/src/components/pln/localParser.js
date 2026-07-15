@@ -1,5 +1,5 @@
 // src/pln/localParser.js
-// Versión sincronizada con el backend - vocabulario paramédico mexicano
+// Versión sincronizada con el backend - última versión
 
 export function parseTextLocal(rawText) {
     const text = rawText.replace(/\s+/g, ' ').trim();
@@ -20,80 +20,99 @@ export function parseTextLocal(rawText) {
         intervenciones: []
     };
 
-    // Diccionarios de palabras clave (vocabulario paramédico)
-    const keywords = {
-        motivo: [
-            'motivo', 'consulta', 'urgencia', 'por', 'presenta', 'refiere',
-            'manifiesta', 'dolor', 'fiebre', 'trauma', 'accidente',
-            'caída', 'náuseas', 'vómito', 'hemorragia', 'disnea',
-            'dificultad respiratoria', 'policontundido'
+    // Diccionarios de palabras clave
+    const dictionaries = {
+        motivoStart: [
+            'motivo', 'motivo de urgencia', 'motivo de consulta', 'motivo de ingreso',
+            'por', 'presenta', 'refiere', 'manifiesta', 'comenta',
+            'dolor', 'fiebre', 'trauma', 'accidente', 'caída',
+            'náuseas', 'vómito', 'hemorragia', 'disnea', 'dificultad respiratoria'
         ],
-        lesion: [
+        lesionStart: [
             'lesión', 'trauma', 'herida', 'fractura', 'quemadura', 'golpe',
             'contusión', 'torácico', 'craneal', 'abdominal', 'pélvico',
             'tce', 'craneoencefálico'
         ],
-        signos: [
-            'signos vitales', 'frecuencia cardíaca', 'fc', 'pulso',
-            'frecuencia respiratoria', 'fr', 'respiración',
-            'presión arterial', 'tensión arterial', 'ta', 'presión', 'tensión',
-            'saturación', 'spo2', 'o2 sat',
-            'temperatura', 'temp'
-        ],
-        glasgow: [
+        sectionEnd: [
+            'signos vitales', 'frecuencia cardíaca', 'fc', 'frecuencia respiratoria',
+            'fr', 'presión arterial', 'tensión arterial', 'ta',
+            'saturación', 'spo2', 'temperatura',
             'glasgow', 'gcs', 'escala de glasgow',
-            'ocular', 'ojos', 'apertura ocular',
-            'verbal', 'respuesta verbal',
-            'motor', 'respuesta motora'
+            'ocular', 'verbal', 'motor'
         ]
     };
 
-    // Dividir en oraciones
-    const sentences = text.match(/[^.]+[.]?/g) || [text];
-    let motivoText = '', lesionText = '';
+    const lowerText = text.toLowerCase();
+    let currentPos = 0;
+    let motivoEnd = -1;
+    let lesionEnd = -1;
 
-    for (const sentence of sentences) {
-        const lower = sentence.toLowerCase();
-        const hasMotivo = keywords.motivo.some(kw => lower.includes(kw));
-        const hasLesion = keywords.lesion.some(kw => lower.includes(kw));
-        const hasSignos = keywords.signos.some(kw => lower.includes(kw));
-        const hasGlasgow = keywords.glasgow.some(kw => lower.includes(kw));
-
-        if (hasGlasgow) {
-            // No asignamos a motivo o lesion
-            continue;
-        } else if (hasSignos) {
-            // No asignamos a motivo o lesion
-            continue;
-        } else if (hasLesion) {
-            lesionText += sentence + ' ';
-        } else if (hasMotivo) {
-            motivoText += sentence + ' ';
+    // Motivo de urgencia
+    let motivoPos = -1;
+    let motivoWord = '';
+    for (const word of dictionaries.motivoStart) {
+        const pos = lowerText.indexOf(word);
+        if (pos !== -1 && (motivoPos === -1 || pos < motivoPos)) {
+            motivoPos = pos;
+            motivoWord = word;
         }
     }
 
-    // Motivo de urgencia
-    if (motivoText) {
-        result.motivo_urgencia = motivoText
-            .replace(/^(motivo\s+(?:de\s+)?(?:urgencia|consulta)\s*[:]?\s*)/i, '')
-            .replace(/^(por\s+(?:presentar|tener|con)\s*)/i, '')
-            .trim();
+    if (motivoPos !== -1) {
+        let nextSection = lowerText.length;
+        for (const endWord of dictionaries.sectionEnd) {
+            const pos = lowerText.indexOf(endWord, motivoPos + motivoWord.length);
+            if (pos !== -1 && pos < nextSection) {
+                nextSection = pos;
+            }
+        }
+        for (const word of dictionaries.lesionStart) {
+            const pos = lowerText.indexOf(word, motivoPos + motivoWord.length);
+            if (pos !== -1 && pos < nextSection) {
+                nextSection = pos;
+            }
+        }
+        motivoEnd = nextSection;
+        let motivoText = text.substring(motivoPos + motivoWord.length, nextSection).trim();
+        motivoText = motivoText.replace(/^[:,\s]+/, '');
+        result.motivo_urgencia = motivoText;
     }
 
     // Descripción de lesión
-    if (lesionText) {
-        result.descripcion_lesion = lesionText
-            .replace(/^(lesión|trauma|herida|fractura|quemadura|golpe|contusión)\s+(?:de|en|por)\s*/i, '')
-            .trim();
+    let lesionPos = -1;
+    let lesionWord = '';
+    const searchStart = motivoEnd !== -1 ? motivoEnd : 0;
+    for (const word of dictionaries.lesionStart) {
+        const pos = lowerText.indexOf(word, searchStart);
+        if (pos !== -1 && (lesionPos === -1 || pos < lesionPos)) {
+            if (motivoPos === -1 || pos > motivoPos) {
+                lesionPos = pos;
+                lesionWord = word;
+            }
+        }
+    }
+
+    if (lesionPos !== -1) {
+        let nextSection = lowerText.length;
+        for (const endWord of dictionaries.sectionEnd) {
+            const pos = lowerText.indexOf(endWord, lesionPos + lesionWord.length);
+            if (pos !== -1 && pos < nextSection) {
+                nextSection = pos;
+            }
+        }
+        lesionEnd = nextSection;
+        let lesionText = text.substring(lesionPos + lesionWord.length, nextSection).trim();
+        lesionText = lesionText.replace(/^[:,\s]+/, '');
+        result.descripcion_lesion = lesionText;
     }
 
     // Signos vitales
     const fullText = text;
     
-    const fcMatch = fullText.match(/\b(?:fc|frecuencia\s*card[ií]aca|pulso)\s*[:]?\s*(\d{2,3})\b/i);
+    const fcMatch = fullText.match(/\b(?:fc|frecuencia\s*card[ií]aca|pulso|cardíaca)\s*[:]?\s*(\d{2,3})\b/i);
     if (fcMatch) result.signos_vitales.frecuencia_cardiaca = fcMatch[1];
     
-    const frMatch = fullText.match(/\b(?:fr|frecuencia\s*respiratoria|respiración)\s*[:]?\s*(\d{2,3})\b/i);
+    const frMatch = fullText.match(/\b(?:fr|frecuencia\s*respiratoria|respiración|respiratoria)\s*[:]?\s*(\d{2,3})\b/i);
     if (frMatch) result.signos_vitales.frecuencia_respiratoria = frMatch[1];
     
     const taMatch = fullText.match(/\b(?:ta|tensi[oó]n\s*(?:arterial)?|presi[oó]n\s*(?:arterial)?)\s*[:]?\s*(\d{2,3})\s*[\/\-\s]+(?:sobre\s*)?(\d{2,3})\b/i);
@@ -157,14 +176,27 @@ export function parseTextLocal(rawText) {
         for (const synonym of data.sinónimos) {
             if (lowerFull.includes(synonym)) {
                 let descripcion = '';
-                const descRegex = new RegExp(`${synonym}[^.]*?((?:a|de|con|por)\\s+[^.,]+|\\d+\\s*(?:litros|ml|mg))`, 'i');
-                const descMatch = fullText.match(descRegex);
-                if (descMatch) {
-                    descripcion = descMatch[1] || '';
+                const synonymIndex = lowerFull.indexOf(synonym);
+                if (synonymIndex !== -1) {
+                    const afterText = fullText.substring(synonymIndex + synonym.length);
+                    const detailMatch = afterText.match(/^[^.,]*?(?:[.,]|$)/);
+                    if (detailMatch) {
+                        let detail = detailMatch[0].trim();
+                        const otherTreatments = Object.values(treatmentMap).flatMap(t => t.sinónimos);
+                        for (const other of otherTreatments) {
+                            if (detail.toLowerCase().includes(other) && detail.toLowerCase().indexOf(other) < 30) {
+                                detail = detail.substring(0, detail.toLowerCase().indexOf(other)).trim();
+                                break;
+                            }
+                        }
+                        if (detail && detail.length > 2 && !detail.match(/^\d+$/)) {
+                            descripcion = detail;
+                        }
+                    }
                 }
                 found.push({
                     tipo_intervencion: data.nombre,
-                    descripcion: descripcion.trim(),
+                    descripcion: descripcion,
                     hora_intervencion: ''
                 });
                 break;
@@ -183,7 +215,7 @@ export function parseTextLocal(rawText) {
     result.intervenciones = unique;
 
     // Datos demográficos
-    const nombreMatch = fullText.match(/paciente\s+([A-Za-záéíóúñ\s]+?)(?=\s+\d+\s*años|\s+sexo|\s+motivo|,|\.|$)/i);
+    const nombreMatch = fullText.match(/paciente\s+([A-Za-záéíóúñ\s]+?)(?=\s+\d+\s*años|\s+sexo|\s+motivo|\s+por|,|\.|$)/i);
     if (nombreMatch) result.paciente.nombre = nombreMatch[1].trim();
     
     const edadMatch = fullText.match(/\b(\d{1,3})\s*(años|año|edad)\b/i);
@@ -200,6 +232,20 @@ export function parseTextLocal(rawText) {
     for (const iv of result.intervenciones) {
         iv.hora_intervencion = horaActual;
     }
+
+    // Limpieza final
+    const signosPattern = /\b(?:signos\s*vitales|frecuencia\s*card[ií]aca|fc|pulso|frecuencia\s*respiratoria|fr|respiración|presi[oó]n\s*arterial|tensi[oó]n\s*arterial|ta|saturaci[oó]n|spo2|o2\s*sat|temperatura|temp)\b/i;
+    const glasgowPattern = /\b(?:glasgow|gcs|escala\s+de\s+glasgow|ocular|verbal|motor|apertura\s+ocular|respuesta\s+verbal|respuesta\s+motora)\b/i;
+    
+    let motivoClean = result.motivo_urgencia.replace(signosPattern, '').replace(glasgowPattern, '');
+    motivoClean = motivoClean.replace(/\s+/g, ' ').trim();
+    motivoClean = motivoClean.replace(/^(de|en|por|con|a)\s+/i, '');
+    result.motivo_urgencia = motivoClean;
+
+    let lesionClean = result.descripcion_lesion.replace(signosPattern, '').replace(glasgowPattern, '');
+    lesionClean = lesionClean.replace(/\s+/g, ' ').trim();
+    lesionClean = lesionClean.replace(/^(de|en|por|con|a)\s+/i, '');
+    result.descripcion_lesion = lesionClean;
 
     return result;
 }
