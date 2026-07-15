@@ -1,7 +1,6 @@
-// backend/routes/nlp.js
 const express = require('express');
 const router = express.Router();
-const { parseMedicalText } = require('../services/localMedicalNER');
+const { extractMedicalEntities } = require('../services/huggingFaceNLP');
 
 router.post('/parse', async (req, res) => {
     try {
@@ -10,14 +9,8 @@ router.post('/parse', async (req, res) => {
             return res.status(400).json({ error: 'Texto vacío' });
         }
 
-        console.log('📝 Procesando texto con NER local...');
-        const startTime = Date.now();
-        
-        const result = await parseMedicalText(text);
-        
-        const elapsed = Date.now() - startTime;
-        console.log(`✅ Procesado en ${elapsed}ms`);
-        
+        console.log('📝 Procesando texto con Hugging Face API...');
+        const result = await extractMedicalEntities(text);
         res.json(result);
     } catch (error) {
         console.error('❌ Error en NLP:', error);
