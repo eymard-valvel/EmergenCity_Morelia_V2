@@ -43,6 +43,13 @@ const ReceptorDashboard = () => {
         if (!isMountedRef.current) return;
         setConnectionStatus('connected');
         reconnectAttempts.current = 0;
+        // Registrar como receptor
+        socket.send(JSON.stringify({
+          type: 'register_receptor',
+          receptorId: user.id || 'receptor_01'
+        }));
+        // Solicitar lista inicial
+        socket.send(JSON.stringify({ type: 'request_active_emergencies' }));
       };
 
       socket.onmessage = (event) => {
@@ -61,6 +68,19 @@ const ReceptorDashboard = () => {
               isClosable: true,
               position: 'top-right'
             });
+            // Solicitar actualización completa
+            socket.send(JSON.stringify({ type: 'request_active_emergencies' }));
+          }
+          if (data.type === 'emergency_assigned_ack') {
+            toast({
+              title: 'EMERGENCIA ASIGNADA',
+              description: `Folio ${data.callId} asignado a ambulancia ${data.ambulanceId}`,
+              status: 'info',
+              duration: 5000,
+              isClosable: true,
+              position: 'top-right'
+            });
+            // Actualizar lista
             socket.send(JSON.stringify({ type: 'request_active_emergencies' }));
           }
         } catch (error) {
@@ -90,7 +110,7 @@ const ReceptorDashboard = () => {
       if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) wsRef.current.close();
     };
-  }, [toast]);
+  }, [toast, user.id]);
 
   const requestRefresh = useCallback(() => {
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -228,6 +248,15 @@ const ReceptorDashboard = () => {
                         <Text color="#94a3b8" fontSize="11px" fontFamily="mono">{new Date(em.timestamp).toLocaleTimeString()}</Text>
                       </Flex>
                       <Text fontSize="14px" fontWeight="bold" color="#38bdf8" isTruncated>{em.emergencyType}</Text>
+                      {em.assignedAmbulanceId && (
+                        <HStack mt={1} spacing={2}>
+                          <Badge colorScheme="green" fontSize="10px">ASIGNADA A: {em.assignedAmbulanceName || em.assignedAmbulanceId}</Badge>
+                          <Text color="#94a3b8" fontSize="10px">🚑 En ruta</Text>
+                        </HStack>
+                      )}
+                      {em.status === 'pending_no_ambulance' && (
+                        <Badge colorScheme="orange" fontSize="10px" mt={1}>SIN AMBULANCIA DISPONIBLE</Badge>
+                      )}
                     </Box>
                   ))
                 )}

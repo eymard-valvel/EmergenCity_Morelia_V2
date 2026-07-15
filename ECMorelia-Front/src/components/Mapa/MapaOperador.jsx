@@ -1,4 +1,4 @@
-// MapaOperadorGPS.jsx - VERSIÓN COMPLETA CON SINCRONIZACIÓN DE EMERGENCIAS Y RUTAS OPTIMIZADAS
+// MapaOperadorGPS.jsx - VERSIÓN COMPLETA CON SINCRONIZACIÓN DE EMERGENCIAS, ASIGNACIÓN AUTOMÁTICA Y NAVEGACIÓN TURN-BY-TURN
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
@@ -314,6 +314,12 @@ const getApiBaseUrl = () => {
 };
 
 export default function MapaOperadorGPS() {
+  // ========== IDENTIFICACIÓN DE LA AMBULANCIA ==========
+  // En producción, esto vendría del perfil del usuario logueado
+  const AMBULANCE_ID = 'UVI-01';
+  const AMBULANCE_PLACA = 'ABC123';
+  const AMBULANCE_NOMBRE = 'Unidad de Vida UVI-01';
+
   // ========== REFS ==========
   const mapContainer = useRef(null);
   const map = useRef(null);
@@ -396,6 +402,8 @@ export default function MapaOperadorGPS() {
   
   // ========== ESTADO PARA EMERGENCIA ASIGNADA ==========
   const [assignedEmergency, setAssignedEmergency] = useState(null);
+  // Modal de notificación de emergencia asignada
+  const { isOpen: isEmergencyModalOpen, onOpen: onEmergencyModalOpen, onClose: onEmergencyModalClose } = useDisclosure();
 
   const toast = useToast();
   const { colorMode } = useColorMode();
@@ -764,7 +772,7 @@ export default function MapaOperadorGPS() {
                 🚑
               </div>
               <div>
-                <strong style="color: #FF4444; font-size: ${isMobile ? '14px' : '16px'};">AMBULANCIA UVI-01</strong>
+                <strong style="color: #FF4444; font-size: ${isMobile ? '14px' : '16px'};">${AMBULANCE_NOMBRE}</strong>
                 <div style="font-size: ${isMobile ? '10px' : '12px'}; color: #666;">Estado: ${ambulanceStatus.toUpperCase()}</div>
               </div>
             </div>
@@ -819,12 +827,12 @@ export default function MapaOperadorGPS() {
                 🚑
               </div>
               <div>
-                <strong style="color: #FF4444; font-size: ${isMobile ? '14px' : '16px'};">AMBULANCIA UVI-01</strong>
+                <strong style="color: #FF4444; font-size: ${isMobile ? '14px' : '16px'};">${AMBULANCE_NOMBRE}</strong>
                 <div style="font-size: ${isMobile ? '10px' : '12px'}; color: #666;">Estado: ${ambulanceStatus.toUpperCase()}</div>
               </div>
             </div>
             
-            <div style="margin: ${isMobile ? '8px 0' : '12px 0'}; font-size: ${isMobile ? '12px' : '14px'};">
+            <div style="margin: ${isMobile ? '8px' : '12px'}; font-size: ${isMobile ? '12px' : '14px'};">
               <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
                 <span style="color: #666;">Velocidad:</span>
                 <span style="font-weight: bold; color: ${speed > 80 ? '#FF4444' : speed > 40 ? '#FF9800' : '#4CAF50'}">${speed} km/h</span>
@@ -876,7 +884,7 @@ export default function MapaOperadorGPS() {
       setIsConnecting(true);
       connectionAttempts.current += 1;
 
-      ws.current = new WebSocket(import.meta.env.VITE_WS_URL);
+      ws.current = new WebSocket(import.meta.env.VITE_WS_URL || 'ws://localhost:3002/ws');
 
       ws.current.onopen = () => {
         if (!isMounted.current) return;
@@ -886,11 +894,13 @@ export default function MapaOperadorGPS() {
         setIsConnecting(false);
         connectionAttempts.current = 0;
         
+        // Registrar esta ambulancia con su ID, placa y nombre
         safeSend({
           type: 'register_ambulance',
           ambulance: {
-            id: 'UVI-01',
-            placa: 'ABC123',
+            id: AMBULANCE_ID,
+            placa: AMBULANCE_PLACA,
+            nombre: AMBULANCE_NOMBRE,
             tipo: 'UVI Móvil',
             status: ambulanceStatus,
             location: pos
@@ -898,7 +908,8 @@ export default function MapaOperadorGPS() {
         });
 
         safeSend({ type: 'request_hospitals_list' });
-        showToast('success', 'Sistema Conectado', 'Conectado al servidor WebSocket');
+        safeSend({ type: 'request_active_emergencies' });
+        showToast('success', 'Sistema Conectado', 'Ambulancia registrada en el sistema');
       };
 
       ws.current.onmessage = (event) => {
@@ -968,6 +979,10 @@ export default function MapaOperadorGPS() {
             // ========== NUEVO: EMERGENCIA ASIGNADA ==========
             case 'new_emergency_assigned':
               handleNewEmergencyAssigned(data);
+              break;
+            case 'active_emergencies_update':
+              // Actualizar lista de emergencias (para información general)
+              console.log('📋 Emergencias activas:', data.emergencies?.length || 0);
               break;
             case 'error':
               showToast('error', 'Error del Sistema', data.message);
@@ -1333,7 +1348,7 @@ export default function MapaOperadorGPS() {
   // ========== MANEJO DE RUTAS ==========
   const handleRouteUpdate = (data) => {
     if (data.routeGeometry) {
-      const routeId = `route-${data.ambulanceId || 'UVI-01'}-${data.hospitalId || 'dest'}`;
+      const routeId = `route-${data.ambulanceId || AMBULANCE_ID}-${data.hospitalId || 'dest'}`;
       drawRoute(data.routeGeometry, routeId, 0);
       
       if (data.steps && data.steps.length > 0) {
@@ -1356,7 +1371,7 @@ export default function MapaOperadorGPS() {
       
       const newRoute = {
         routeKey: routeId,
-        ambulanceId: data.ambulanceId || 'UVI-01',
+        ambulanceId: data.ambulanceId || AMBULANCE_ID,
         hospitalId: data.hospitalId,
         geometry: data.routeGeometry,
         distance: data.distance,
@@ -1548,12 +1563,12 @@ export default function MapaOperadorGPS() {
       if (data.isEmergencyRoute) removeEmergencyMarker();
       safeSend({
         type: 'request_route_recompute',
-        ambulanceId: 'UVI-01',
+        ambulanceId: AMBULANCE_ID,
         hospitalId: data.hospitalId
       });
       const newRoute = {
         routeKey: routeId,
-        ambulanceId: 'UVI-01',
+        ambulanceId: AMBULANCE_ID,
         hospitalId: data.hospitalId,
         distance: data.distance,
         duration: data.duration,
@@ -1626,6 +1641,7 @@ export default function MapaOperadorGPS() {
   const handleNewEmergencyAssigned = (data) => {
     console.log('🚨 Nueva emergencia asignada:', data);
     
+    // Guardar la emergencia asignada
     setAssignedEmergency({
       callId: data.callId,
       location: data.location,
@@ -1637,10 +1653,15 @@ export default function MapaOperadorGPS() {
       assignedAt: data.assignedAt
     });
 
+    // Mostrar notificación push con modal de alerta
     showToast('error', '🚨 EMERGENCIA ASIGNADA', 
       `Folio: ${data.callId} - ${data.emergencyType || 'Emergencia'} en ${data.address || 'ubicación desconocida'}`
     );
 
+    // Abrir modal de confirmación de emergencia
+    onEmergencyModalOpen();
+
+    // Colocar marcador de emergencia en el mapa
     if (data.location && data.location.lat && data.location.lng) {
       placeAssignedEmergencyMarker(data.location, data.address);
       map.current.flyTo({
@@ -1651,6 +1672,7 @@ export default function MapaOperadorGPS() {
       });
     }
 
+    // Cambiar estado de la ambulancia a "en_ruta"
     setAmbulanceStatus('en_ruta');
     setIsNavigating(true);
 
@@ -1662,6 +1684,7 @@ export default function MapaOperadorGPS() {
       address: data.address
     });
 
+    // Calcular ruta hacia la emergencia
     if (pos) {
       calculateRoute(pos, { lat: data.location.lat, lng: data.location.lng })
         .then(routeData => {
@@ -1670,7 +1693,7 @@ export default function MapaOperadorGPS() {
             drawRoute(routeData.geometry, routeId, 0);
             setActiveRoutes(prev => [...prev, {
               routeKey: routeId,
-              ambulanceId: 'UVI-01',
+              ambulanceId: AMBULANCE_ID,
               geometry: routeData.geometry,
               distance: (routeData.distance / 1000).toFixed(1),
               duration: Math.round(routeData.duration / 60),
@@ -1756,7 +1779,7 @@ export default function MapaOperadorGPS() {
             <strong>Ubicación:</strong> ${address || 'No disponible'}
           </div>
           <div style="font-size: ${isMobile ? '12px' : '14px'}; color: #666;">
-            <div><strong>Tipo:</strong> ${emergencyType || 'No especificado'}</div>
+            <div><strong>Tipo:</strong> ${assignedEmergency?.emergencyType || 'No especificado'}</div>
             <div><strong>Folio:</strong> ${assignedEmergency?.callId || 'N/A'}</div>
             <div><strong>Asignada:</strong> ${new Date(assignedEmergency?.assignedAt).toLocaleTimeString()}</div>
           </div>
@@ -1801,6 +1824,12 @@ export default function MapaOperadorGPS() {
       setDestination(null);
       clearAllRoutes();
       showToast('success', 'Emergencia Completada', 'Marcador eliminado y estado restaurado');
+      // Notificar al servidor que la emergencia ha sido completada (opcional)
+      safeSend({
+        type: 'emergency_completed',
+        ambulanceId: AMBULANCE_ID,
+        callId: assignedEmergency?.callId
+      });
     };
   };
 
@@ -1813,7 +1842,7 @@ export default function MapaOperadorGPS() {
     }
   };
 
-  // ========== BUSCADOR MEJORADO (igual que en Receptor) ==========
+  // ========== BUSCADOR MEJORADO ==========
   const searchAddresses = useCallback((query) => {
     if (searchDebounceTimer.current) clearTimeout(searchDebounceTimer.current);
     if (!query || query.trim().length < 3) {
@@ -1981,7 +2010,7 @@ export default function MapaOperadorGPS() {
     showToast('info', 'Navegando a Emergencia', 'Ubicación de emergencia centrada en el mapa');
   };
 
-  // ========== CALCULAR RUTA (CORREGIDO: ORIGEN = AMBULANCIA, DESTINO = EMERGENCIA/HOSPITAL) ==========
+  // ========== CALCULAR RUTA (ORIGEN = AMBULANCIA, DESTINO = EMERGENCIA/HOSPITAL) ==========
   const calculateRoute = async (start, end) => {
     if (!start || !end) {
       showToast('error', 'Error de Ruta', 'Ubicaciones no válidas');
@@ -2059,7 +2088,7 @@ export default function MapaOperadorGPS() {
 
       setActiveRoutes(prev => [...prev, {
         routeKey: routeId,
-        ambulanceId: 'UVI-01',
+        ambulanceId: AMBULANCE_ID,
         geometry: routeData.geometry,
         distance: (routeData.distance / 1000).toFixed(1),
         duration: Math.round(routeData.duration / 60)
@@ -2092,7 +2121,7 @@ export default function MapaOperadorGPS() {
       if (emergencyMode === 'trasladar_paciente') {
         safeSend({
           type: 'patient_transfer_notification',
-          ambulanceId: 'UVI-01',
+          ambulanceId: AMBULANCE_ID,
           hospitalId: hospital.id,
           patientInfo: patientInfo,
           ambulanceLocation: startLocation,
@@ -2164,7 +2193,7 @@ export default function MapaOperadorGPS() {
         drawRoute(routeData.geometry, newRouteId, 0);
         setActiveRoutes(prev => [...prev, {
           routeKey: newRouteId,
-          ambulanceId: 'UVI-01',
+          ambulanceId: AMBULANCE_ID,
           geometry: routeData.geometry,
           distance: (routeData.distance / 1000).toFixed(1),
           duration: Math.round(routeData.duration / 60),
@@ -2202,7 +2231,7 @@ export default function MapaOperadorGPS() {
     if (destination) {
       safeSend({
         type: 'cancel_navigation',
-        ambulanceId: 'UVI-01',
+        ambulanceId: AMBULANCE_ID,
         hospitalId: destination.id,
         isEmergencyRoute: pendingEmergencyRoute?.isEmergencyRoute || false
       });
@@ -2211,7 +2240,7 @@ export default function MapaOperadorGPS() {
     if (emergencyMarker.current) {
       safeSend({
         type: 'cancel_emergency_marker',
-        ambulanceId: 'UVI-01'
+        ambulanceId: AMBULANCE_ID
       });
     }
 
@@ -2228,7 +2257,7 @@ export default function MapaOperadorGPS() {
     const route = activeRoutes.find(r => r.routeKey === routeKey);
     safeSend({
       type: 'cancel_navigation',
-      ambulanceId: 'UVI-01',
+      ambulanceId: AMBULANCE_ID,
       routeKey: routeKey,
       isEmergencyRoute: route?.isEmergencyRoute || false
     });
@@ -2389,7 +2418,7 @@ export default function MapaOperadorGPS() {
   const sendLocationUpdate = (location, speed, heading) => {
     safeSend({
       type: 'location_update',
-      ambulanceId: 'UVI-01',
+      ambulanceId: AMBULANCE_ID,
       location: location,
       speed: speed,
       heading: heading,
@@ -2566,6 +2595,12 @@ export default function MapaOperadorGPS() {
                 setDestination(null);
                 clearAllRoutes();
                 showToast('success', 'Emergencia Completada', 'Marcador eliminado');
+                // Notificar al servidor que la emergencia ha sido completada
+                safeSend({
+                  type: 'emergency_completed',
+                  ambulanceId: AMBULANCE_ID,
+                  callId: assignedEmergency?.callId
+                });
               }}
               leftIcon={<FaCheck />}
               variant="solid"
@@ -2579,7 +2614,7 @@ export default function MapaOperadorGPS() {
               colorScheme="red" 
               size={isMobile ? "sm" : "md"}
               onClick={() => {
-                safeSend({ type: 'cancel_emergency_marker', ambulanceId: 'UVI-01' });
+                safeSend({ type: 'cancel_emergency_marker', ambulanceId: AMBULANCE_ID });
               }}
               leftIcon={<FaTimes />}
               variant="outline"
@@ -2902,10 +2937,11 @@ export default function MapaOperadorGPS() {
             <HStack>
               <FaAmbulance style={{ fontSize: isMobile ? '16px' : '20px' }} />
               <Text fontSize={fontSizeTitle} fontWeight="bold" color={textColor}>
-                AMBULANCIA UVI-01
+                {AMBULANCE_NOMBRE}
               </Text>
               <Badge ml={2} colorScheme={
                 ambulanceStatus === 'en_ruta' ? "red" : 
+                ambulanceStatus === 'ocupado' ? "orange" :
                 ambulanceStatus === 'disponible' ? "green" : "yellow"
               } fontSize={badgeSize}>
                 {ambulanceStatus.toUpperCase()}
@@ -2917,7 +2953,7 @@ export default function MapaOperadorGPS() {
               )}
             </HStack>
             <Text fontSize="2xs" color={textColor}>
-              Sistema de Navegación GPS • {isNavigating ? 'NAVEGACIÓN ACTIVA' : 'DISPONIBLE'}
+              Placa: {AMBULANCE_PLACA} • {isNavigating ? 'NAVEGACIÓN ACTIVA' : 'DISPONIBLE'}
             </Text>
           </VStack>
         </HStack>
@@ -3015,6 +3051,131 @@ export default function MapaOperadorGPS() {
     );
   };
 
+  // ========== MODAL DE NOTIFICACIÓN DE EMERGENCIA ASIGNADA ==========
+  const EmergencyAssignmentModal = () => {
+    if (!assignedEmergency) return null;
+    return (
+      <Modal isOpen={isEmergencyModalOpen} onClose={onEmergencyModalClose} size="lg" isCentered closeOnOverlayClick={false}>
+        <ModalOverlay backdropFilter="blur(4px)" bg="rgba(0,0,0,0.7)" />
+        <ModalContent borderRadius="xl" border="3px solid #D50000">
+          <ModalHeader bg="red.600" color="white" borderTopRadius="xl" display="flex" alignItems="center" gap={3}>
+            <FaExclamationTriangle size={24} />
+            🚨 EMERGENCIA ASIGNADA
+          </ModalHeader>
+          <ModalBody py={6}>
+            <VStack spacing={4} align="stretch">
+              <Alert status="error" borderRadius="md">
+                <AlertIcon />
+                <Box>
+                  <AlertTitle fontSize="lg">¡Nueva emergencia asignada a su unidad!</AlertTitle>
+                  <AlertDescription>
+                    <Text fontWeight="bold">Folio: {assignedEmergency.callId}</Text>
+                  </AlertDescription>
+                </Box>
+              </Alert>
+              
+              <SimpleGrid columns={isMobile ? 1 : 2} spacing={4}>
+                <Card>
+                  <CardBody>
+                    <Text fontSize="sm" color="gray.500">Tipo de emergencia</Text>
+                    <Text fontWeight="bold">{assignedEmergency.emergencyType}</Text>
+                  </CardBody>
+                </Card>
+                <Card>
+                  <CardBody>
+                    <Text fontSize="sm" color="gray.500">Asignada a las</Text>
+                    <Text fontWeight="bold">{new Date(assignedEmergency.assignedAt).toLocaleTimeString()}</Text>
+                  </CardBody>
+                </Card>
+              </SimpleGrid>
+              
+              <Card>
+                <CardBody>
+                  <Text fontSize="sm" color="gray.500">Ubicación</Text>
+                  <Text fontWeight="medium">{assignedEmergency.address || 'No disponible'}</Text>
+                  <Text fontSize="xs" color="gray.400" mt={1}>
+                    Lat: {assignedEmergency.location.lat.toFixed(6)}, Lng: {assignedEmergency.location.lng.toFixed(6)}
+                  </Text>
+                </CardBody>
+              </Card>
+              
+              {assignedEmergency.patientInfo && Object.keys(assignedEmergency.patientInfo).length > 0 && (
+                <Card>
+                  <CardBody>
+                    <Text fontSize="sm" color="gray.500">Información del paciente</Text>
+                    <SimpleGrid columns={2} spacing={2} mt={2}>
+                      {assignedEmergency.patientInfo.age && (
+                        <Box><Text fontSize="xs" color="gray.500">Edad</Text><Text fontSize="sm">{assignedEmergency.patientInfo.age}</Text></Box>
+                      )}
+                      {assignedEmergency.patientInfo.sex && (
+                        <Box><Text fontSize="xs" color="gray.500">Sexo</Text><Text fontSize="sm">{assignedEmergency.patientInfo.sex}</Text></Box>
+                      )}
+                      {assignedEmergency.patientInfo.condition && (
+                        <Box><Text fontSize="xs" color="gray.500">Condición</Text><Text fontSize="sm">{assignedEmergency.patientInfo.condition}</Text></Box>
+                      )}
+                    </SimpleGrid>
+                  </CardBody>
+                </Card>
+              )}
+              
+              {assignedEmergency.notes && (
+                <Card>
+                  <CardBody>
+                    <Text fontSize="sm" color="gray.500">Notas adicionales</Text>
+                    <Text fontSize="sm">{assignedEmergency.notes}</Text>
+                  </CardBody>
+                </Card>
+              )}
+            </VStack>
+          </ModalBody>
+
+          <ModalFooter gap={3} flexWrap="wrap">
+            <Button 
+              colorScheme="green" 
+              size="lg" 
+              flex={1}
+              leftIcon={<FaCheck />}
+              onClick={() => {
+                onEmergencyModalClose();
+                // El conductor acepta la emergencia, ya se tiene la ruta calculada.
+                showToast('success', 'Emergencia Aceptada', 'Dirigiéndose al punto de emergencia');
+              }}
+            >
+              ACEPTAR Y NAVEGAR
+            </Button>
+            <Button 
+              colorScheme="red" 
+              size="lg" 
+              flex={1}
+              leftIcon={<FaTimes />}
+              variant="outline"
+              onClick={() => {
+                onEmergencyModalClose();
+                // Si el conductor rechaza, se cancela la asignación
+                safeSend({
+                  type: 'cancel_emergency_marker',
+                  ambulanceId: AMBULANCE_ID
+                });
+                if (assignedEmergencyMarker.current) {
+                  assignedEmergencyMarker.current.remove();
+                  assignedEmergencyMarker.current = null;
+                }
+                setAssignedEmergency(null);
+                setAmbulanceStatus('disponible');
+                setIsNavigating(false);
+                setDestination(null);
+                clearAllRoutes();
+                showToast('warning', 'Emergencia Rechazada', 'La unidad no puede atender esta emergencia');
+              }}
+            >
+              RECHAZAR
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+    );
+  };
+
   // ========== RENDER PRINCIPAL ==========
   return (
     <ChakraProvider theme={theme}>
@@ -3107,12 +3268,18 @@ export default function MapaOperadorGPS() {
                 fontWeight="bold"
                 textAlign="center"
                 maxWidth="90%"
+                cursor="pointer"
+                onClick={() => onEmergencyModalOpen()}
               >
                 🚨 EMERGENCIA ASIGNADA - Folio: {assignedEmergency.callId}
                 <br />
                 <span style={{ fontSize: '0.8em', fontWeight: 'normal' }}>
                   {assignedEmergency.address || 'Ubicación desconocida'}
                 </span>
+                <br />
+                <Button size="xs" colorScheme="whiteAlpha" mt={1} onClick={(e) => { e.stopPropagation(); onEmergencyModalOpen(); }}>
+                  Ver detalles
+                </Button>
               </Box>
             )}
           </Box>
@@ -3382,7 +3549,7 @@ export default function MapaOperadorGPS() {
                       <Box>
                         <AlertTitle>Ruta a Emergencia</AlertTitle>
                         <AlertDescription>
-                          Se calculará la ruta más rápida desde la emergencia hasta su ubicación
+                          Se calculará la ruta más rápida desde su ubicación hasta el punto de emergencia
                         </AlertDescription>
                       </Box>
                     </Alert>
@@ -3656,6 +3823,9 @@ export default function MapaOperadorGPS() {
           </DrawerBody>
         </DrawerContent>
       </Drawer>
+
+      {/* ========== MODAL DE EMERGENCIA ASIGNADA ========== */}
+      <EmergencyAssignmentModal />
     </ChakraProvider>
   );
 }

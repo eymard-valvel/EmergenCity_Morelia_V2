@@ -171,13 +171,11 @@ const ReceptorEmergencyForm = ({ ws, wsConnected, onEmergencySent }) => {
       if (ws?.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify(payload));
         
-        // Muestra el banner flotante sin bloquear la pantalla
         setShowSuccessBanner(true);
         setTimeout(() => {
           setShowSuccessBanner(false);
         }, 3000);
 
-        // Resetea el formulario inmediatamente para el siguiente incidente
         setEmergencyType(''); setPatientAge(''); setPatientSex(''); setPatientCondition(''); setNotes('');
         setExpandedIndices([0]);
         
