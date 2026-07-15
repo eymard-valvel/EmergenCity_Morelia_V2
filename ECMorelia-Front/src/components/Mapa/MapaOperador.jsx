@@ -2285,9 +2285,9 @@ export default function MapaOperadorGPS() {
 
     if (!mapContainer.current) return;
 
-    const mapStyle = colorMode === 'light' 
-      ? 'mapbox://styles/mapbox/navigation-day-v1'
-      : 'mapbox://styles/mapbox/navigation-night-v1';
+const mapStyle = colorMode === 'light' 
+  ? 'mapbox://styles/mapbox/streets-v12'
+  : 'mapbox://styles/mapbox/streets-v12';
 
     const mapInstance = new mapboxgl.Map({
       container: mapContainer.current,

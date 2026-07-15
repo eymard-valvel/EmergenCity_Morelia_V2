@@ -6,7 +6,7 @@ import {
   Box, Flex, VStack, HStack, Heading, Input, Textarea, Button, Spinner,
   InputGroup, InputRightElement, List, ListItem, Text, Icon, Grid, GridItem, Divider, ButtonGroup,
   Accordion, AccordionItem, AccordionButton, AccordionPanel, AccordionIcon,
-  NumberInput, NumberInputField, Portal
+  NumberInput, NumberInputField, Portal, useToast
 } from '@chakra-ui/react';
 import { SearchIcon, CloseIcon, CheckCircleIcon } from '@chakra-ui/icons';
 import {
@@ -34,6 +34,7 @@ const EMERGENCY_TYPES = [
 const QUICK_NOTES = ['Vía Pública', 'Interior Domicilio', 'Escena Insegura', 'Múltiples Víctimas', 'Prensado', 'Arma de Fuego'];
 
 const ReceptorEmergencyForm = ({ ws, wsConnected, onEmergencySent }) => {
+  const toast = useToast();
   const mapContainer = useRef(null);
   const map = useRef(null);
   
@@ -154,71 +155,79 @@ const ReceptorEmergencyForm = ({ ws, wsConnected, onEmergencySent }) => {
     setNotes(prev => prev ? `${prev} | ${note}` : note);
   };
 
-const executeDispatch = async () => {
-  if (!ws || ws.readyState !== WebSocket.OPEN) {
-    showToast('error', 'Sin conexión', 'No se puede enviar la emergencia');
-    return;
-  }
+  const executeDispatch = async () => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      toast({
+        title: 'Sin conexión',
+        description: 'No se puede enviar la emergencia porque el WebSocket no está abierto.',
+        status: 'error',
+        duration: 5000,
+        isClosable: true,
+        position: 'top-right'
+      });
+      return;
+    }
 
-  setIsSubmitting(true);
-  const payload = {
-    type: 'emergency_call',
-    callId: `call_${Date.now()}`,
-    location: selectedLocation,
-    address: addressQuery || 'Sin dirección registrada',
-    emergencyType,
-    patientInfo: { age: patientAge, sex: patientSex, condition: patientCondition },
-    notes,
-    timestamp: new Date().toISOString(),
+    setIsSubmitting(true);
+    const payload = {
+      type: 'emergency_call',
+      callId: `call_${Date.now()}`,
+      location: selectedLocation,
+      address: addressQuery || 'Sin dirección registrada',
+      emergencyType,
+      patientInfo: { age: patientAge, sex: patientSex, condition: patientCondition },
+      notes,
+      timestamp: new Date().toISOString(),
+    };
+
+    console.log('📤 Enviando payload:', payload);
+
+    try {
+      ws.send(JSON.stringify(payload));
+      console.log('✅ Mensaje enviado correctamente');
+      
+      setShowSuccessBanner(true);
+      setTimeout(() => {
+        setShowSuccessBanner(false);
+      }, 3000);
+
+      toast({
+        title: 'Reporte enviado',
+        description: 'Esperando asignación de ambulancia...',
+        status: 'info',
+        duration: 5000,
+        isClosable: true,
+        position: 'top-right'
+      });
+
+      // Limpiar formulario (pero mantener dirección y mapa)
+      setEmergencyType('');
+      setPatientAge('');
+      setPatientSex('');
+      setPatientCondition('');
+      setNotes('');
+      setExpandedIndices([0]);
+      
+      if (onEmergencySent) onEmergencySent();
+
+    } catch (error) {
+      console.error('❌ Error al enviar:', error);
+      toast({
+        title: 'Error de envío',
+        description: error.message || 'No se pudo enviar la emergencia.',
+        status: 'error',
+        duration: 5000,
+        isClosable: true,
+        position: 'top-right'
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
-
-  console.log('📤 Enviando payload:', payload);
-
-  try {
-    ws.send(JSON.stringify(payload));
-    console.log('✅ Mensaje enviado correctamente');
-    
-    setShowSuccessBanner(true);
-    setTimeout(() => setShowSuccessBanner(false), 3000);
-
-    // Limpiar formulario
-    setEmergencyType('');
-    setPatientAge('');
-    setPatientSex('');
-    setPatientCondition('');
-    setNotes('');
-    setExpandedIndices([0]);
-    
-    if (onEmergencySent) onEmergencySent();
-
-    // Mostrar toast de confirmación de envío
-    toast({
-      title: 'Reporte enviado',
-      description: 'Esperando asignación de ambulancia...',
-      status: 'info',
-      duration: 5000,
-      isClosable: true,
-      position: 'top-right'
-    });
-
-  } catch (error) {
-    console.error('❌ Error al enviar:', error);
-    toast({
-      title: 'Error de envío',
-      description: error.message,
-      status: 'error',
-      duration: 5000,
-      isClosable: true,
-    });
-  } finally {
-    setIsSubmitting(false);
-  }
-};
 
   return (
     <Flex h="100%" w="100%" bg="#000000" direction={{ base: "column", lg: "row" }}>
       
-      {/* PANEL IZQUIERDO: FORMULARIO ACORDEÓN TÁCTICO */}
       <Flex 
         w={{ base: "100%", lg: "450px", xl: "550px" }} 
         flexShrink={0} 
@@ -240,7 +249,6 @@ const executeDispatch = async () => {
         <Box flex={1} overflowY="auto" sx={{ '&::-webkit-scrollbar': { width: '6px' }, '&::-webkit-scrollbar-thumb': { bg: '#404040', borderRadius: '4px' } }}>
           <Accordion index={expandedIndices} onChange={(idx) => setExpandedIndices(idx)} allowMultiple>
             
-            {/* SECCIÓN 1: TIPOLOGÍA */}
             <AccordionItem border="none" borderBottom="1px solid #262626">
               <h2>
                 <AccordionButton py={4} bg={emergencyType ? "#1e293b" : "#171717"} _hover={{ bg: '#262626' }}>
@@ -272,7 +280,6 @@ const executeDispatch = async () => {
               </AccordionPanel>
             </AccordionItem>
 
-            {/* SECCIÓN 2: DATOS CLÍNICOS */}
             <AccordionItem border="none" borderBottom="1px solid #262626">
               <h2>
                 <AccordionButton py={4} bg={patientCondition.length >= 3 ? "#1e293b" : "#171717"} _hover={{ bg: '#262626' }}>
@@ -322,7 +329,6 @@ const executeDispatch = async () => {
               </AccordionPanel>
             </AccordionItem>
 
-            {/* SECCIÓN 3: ENTORNO */}
             <AccordionItem border="none">
               <h2>
                 <AccordionButton py={4} bg={notes ? "#1e293b" : "#171717"} _hover={{ bg: '#262626' }}>
@@ -351,7 +357,6 @@ const executeDispatch = async () => {
           </Accordion>
         </Box>
 
-        {/* BOTÓN DE DESPACHO INMEDIATO DIRECTO */}
         <Box p={5} bg="#0a0a0a" borderTop="1px solid #262626">
           <Button
             w="100%" h="60px" bg={isFormValid ? "#dc2626" : "#262626"} color={isFormValid ? "white" : "#737373"} borderRadius="md" fontSize="15px" fontWeight="900" letterSpacing="1px"
@@ -365,7 +370,6 @@ const executeDispatch = async () => {
         </Box>
       </Flex>
 
-      {/* PORTAL PARA BANNER FLOTANTE DE ALTA VISIBILIDAD (SIN OSCURECER PANTALLA) */}
       <Portal>
         {showSuccessBanner && (
           <Box
@@ -395,7 +399,6 @@ const executeDispatch = async () => {
         )}
       </Portal>
 
-      {/* PANEL DERECHO: MAPA Y HUD BUSCADOR */}
       <Box flex={1} position="relative" h={{ base: "40vh", lg: "100%" }}>
         <Box position="absolute" top={0} left={0} w="100%" zIndex={10} bg="rgba(15, 23, 42, 0.9)" borderBottom="1px solid #1e293b" backdropFilter="blur(8px)">
           <Flex align="center" px={4} py={3} gap={4}>

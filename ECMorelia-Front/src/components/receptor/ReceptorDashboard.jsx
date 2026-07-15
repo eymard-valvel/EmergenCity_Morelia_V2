@@ -68,20 +68,17 @@ const ReceptorDashboard = () => {
               isClosable: true,
               position: 'top-right'
             });
-            // Solicitar actualización completa
             socket.send(JSON.stringify({ type: 'request_active_emergencies' }));
           }
           if (data.type === 'emergency_assigned_ack') {
-            console.log('✅ Asignación confirmada:', data);
-  toast({
-    title: '🚨 EMERGENCIA ASIGNADA',
-    description: `Folio ${data.callId} asignado a ${data.ambulanceName || data.ambulanceId}`,
-    status: 'info',
-    duration: 7000,
-    isClosable: true,
-    position: 'top-right'
-  });
-            // Actualizar lista
+            toast({
+              title: '🚨 EMERGENCIA ASIGNADA',
+              description: `Folio ${data.callId} asignado a ${data.ambulanceName || data.ambulanceId}`,
+              status: 'info',
+              duration: 7000,
+              isClosable: true,
+              position: 'top-right'
+            });
             socket.send(JSON.stringify({ type: 'request_active_emergencies' }));
           }
         } catch (error) {
@@ -134,7 +131,6 @@ const ReceptorDashboard = () => {
 
   return (
     <Box h="100vh" w="100vw" bg="#000000" overflow="hidden" display="flex" flexDirection="column">
-      {/* HEADER INSTITUCIONAL C5 */}
       <Flex 
         as="nav" 
         h="65px" 
@@ -187,13 +183,11 @@ const ReceptorDashboard = () => {
         </HStack>
       </Flex>
 
-      {/* WORKSPACE PRINCIPAL */}
       <Flex flex={1} w="100%" overflow="hidden" position="relative">
         <Box flex={1} h="100%" overflow="hidden" minW={0}>
           <ReceptorEmergencyForm ws={ws} wsConnected={wsConnected} onEmergencySent={requestRefresh} />
         </Box>
 
-        {/* BOTÓN LATERAL DE MONITOREO */}
         {!monitorOpen && (
           <Button
             position="absolute"
