@@ -154,41 +154,66 @@ const ReceptorEmergencyForm = ({ ws, wsConnected, onEmergencySent }) => {
     setNotes(prev => prev ? `${prev} | ${note}` : note);
   };
 
-  const executeDispatch = async () => {
-    setIsSubmitting(true);
-    const payload = {
-      type: 'emergency_call',
-      callId: `call_${Date.now()}`,
-      location: selectedLocation,
-      address: addressQuery || 'Sin dirección registrada',
-      emergencyType,
-      patientInfo: { age: patientAge, sex: patientSex, condition: patientCondition },
-      notes,
-      timestamp: new Date().toISOString(),
-    };
+const executeDispatch = async () => {
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    showToast('error', 'Sin conexión', 'No se puede enviar la emergencia');
+    return;
+  }
 
-    try {
-      if (ws?.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify(payload));
-        
-        setShowSuccessBanner(true);
-        setTimeout(() => {
-          setShowSuccessBanner(false);
-        }, 3000);
-
-        setEmergencyType(''); setPatientAge(''); setPatientSex(''); setPatientCondition(''); setNotes('');
-        setExpandedIndices([0]);
-        
-        if (onEmergencySent) onEmergencySent();
-      } else {
-        throw new Error('Offline');
-      }
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setIsSubmitting(false);
-    }
+  setIsSubmitting(true);
+  const payload = {
+    type: 'emergency_call',
+    callId: `call_${Date.now()}`,
+    location: selectedLocation,
+    address: addressQuery || 'Sin dirección registrada',
+    emergencyType,
+    patientInfo: { age: patientAge, sex: patientSex, condition: patientCondition },
+    notes,
+    timestamp: new Date().toISOString(),
   };
+
+  console.log('📤 Enviando payload:', payload);
+
+  try {
+    ws.send(JSON.stringify(payload));
+    console.log('✅ Mensaje enviado correctamente');
+    
+    setShowSuccessBanner(true);
+    setTimeout(() => setShowSuccessBanner(false), 3000);
+
+    // Limpiar formulario
+    setEmergencyType('');
+    setPatientAge('');
+    setPatientSex('');
+    setPatientCondition('');
+    setNotes('');
+    setExpandedIndices([0]);
+    
+    if (onEmergencySent) onEmergencySent();
+
+    // Mostrar toast de confirmación de envío
+    toast({
+      title: 'Reporte enviado',
+      description: 'Esperando asignación de ambulancia...',
+      status: 'info',
+      duration: 5000,
+      isClosable: true,
+      position: 'top-right'
+    });
+
+  } catch (error) {
+    console.error('❌ Error al enviar:', error);
+    toast({
+      title: 'Error de envío',
+      description: error.message,
+      status: 'error',
+      duration: 5000,
+      isClosable: true,
+    });
+  } finally {
+    setIsSubmitting(false);
+  }
+};
 
   return (
     <Flex h="100%" w="100%" bg="#000000" direction={{ base: "column", lg: "row" }}>

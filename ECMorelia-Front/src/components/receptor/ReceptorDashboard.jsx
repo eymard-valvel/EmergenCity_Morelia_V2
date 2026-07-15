@@ -72,14 +72,15 @@ const ReceptorDashboard = () => {
             socket.send(JSON.stringify({ type: 'request_active_emergencies' }));
           }
           if (data.type === 'emergency_assigned_ack') {
-            toast({
-              title: 'EMERGENCIA ASIGNADA',
-              description: `Folio ${data.callId} asignado a ambulancia ${data.ambulanceId}`,
-              status: 'info',
-              duration: 5000,
-              isClosable: true,
-              position: 'top-right'
-            });
+            console.log('✅ Asignación confirmada:', data);
+  toast({
+    title: '🚨 EMERGENCIA ASIGNADA',
+    description: `Folio ${data.callId} asignado a ${data.ambulanceName || data.ambulanceId}`,
+    status: 'info',
+    duration: 7000,
+    isClosable: true,
+    position: 'top-right'
+  });
             // Actualizar lista
             socket.send(JSON.stringify({ type: 'request_active_emergencies' }));
           }

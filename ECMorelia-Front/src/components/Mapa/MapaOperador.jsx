@@ -914,6 +914,7 @@ export default function MapaOperadorGPS() {
 
       ws.current.onmessage = (event) => {
         if (!isMounted.current) return;
+        console.log('📨 Mensaje recibido en ambulancia:', data.type);
         
         try {
           const data = JSON.parse(event.data);
@@ -1640,6 +1641,7 @@ export default function MapaOperadorGPS() {
   // ========== NUEVO: MANEJO DE EMERGENCIA ASIGNADA ==========
   const handleNewEmergencyAssigned = (data) => {
     console.log('🚨 Nueva emergencia asignada:', data);
+    console.log('🚨 Emergencia asignada recibida en ambulancia:', data);
     
     // Guardar la emergencia asignada
     setAssignedEmergency({

@@ -401,6 +401,7 @@ wss.on('connection', (ws, req) => {
 });
 
 async function handleMessage(ws, data) {
+  console.log(`📨 Mensaje recibido (${data.type}) desde:`, ws._socket?.remoteAddress || 'desconocido');
   switch (data.type) {
     case 'register_ambulance':
       await handleRegisterAmbulance(ws, data);
@@ -668,6 +669,8 @@ function findNearestAvailableAmbulance(emergencyLocation) {
 }
 
 async function handleEmergencyCall(ws, data) {
+  console.log(`🚨 Procesando emergencia ${data.callId} en ubicación:`, data.location);
+console.log('Ambulancias disponibles:', Array.from(activeAmbulances.values()).filter(a => a.status === 'disponible').map(a => a.id));
   const { callId, location, address, emergencyType, patientInfo, notes, timestamp } = data;
   if (!callId || !location) {
     return sendError(ws, 'Datos incompletos para emergencia');
@@ -698,9 +701,12 @@ async function handleEmergencyCall(ws, data) {
     emergency.assignedAt = new Date().toISOString();
     ambulance.status = 'en_ruta';
     activeEmergencies.set(callId, emergency);
+    console.log(`✅ Emergencia ${callId} asignada a ambulancia ${ambulance.id} (${ambulance.nombre})`);
+
 
     // Notificar a la ambulancia
     if (ambulance.ws && ambulance.ws.readyState === WebSocket.OPEN) {
+      console.log(`📤 Enviando new_emergency_assigned a ambulancia ${ambulance.id}`);
       sendMessage(ambulance.ws, {
         type: 'new_emergency_assigned',
         callId,
@@ -713,6 +719,8 @@ async function handleEmergencyCall(ws, data) {
         estimatedArrival: null,
         assignedAt: emergency.assignedAt
       });
+    }else{
+      console.error(`❌ No se pudo enviar a ambulancia ${ambulance.id}: WebSocket no abierto`);
     }
 
     // Notificar al receptor (y a todos) con confirmación
@@ -727,6 +735,7 @@ async function handleEmergencyCall(ws, data) {
 
     console.log(`🚨 Emergencia ${callId} asignada a ambulancia ${ambulance.id}`);
   } else {
+    console.warn(`⚠️ No hay ambulancia disponible para ${callId}`);
     emergency.status = 'pending_no_ambulance';
     activeEmergencies.set(callId, emergency);
     sendMessage(ws, {
