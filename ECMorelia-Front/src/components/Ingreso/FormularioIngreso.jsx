@@ -9,7 +9,7 @@ import { newCookie } from "../../helpers/cookies";
 
 // Assets
 import logo from '../img/Logo.png';
-import usuario from '../img/formularioIngresoIcono.png';
+import usuario from '../img/ingreso_imagen.jpg';
 
 // Esquema de Validación
 const validationSchema = Yup.object().shape({
@@ -117,36 +117,36 @@ console.log("Ruta a navegar:", routes[values.role]);
     }, []);
 
     return (
-        <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
+        <div className="min-h-screen bg-neutral-300/50 flex flex-col font-sans">
             {/* --- NAVIGATION BAR --- */}
-            <nav className="fixed top-0 w-full bg-gradient-to-r from-bluish-gray to-sky-blue p-3 flex items-center justify-between shadow-md z-50 px-6">
+            <nav className="fixed top-0 w-full bg-gradient-to-r from-bluish-gray to-sky-400 p-3 flex items-center justify-center shadow-md z-50 px-6">
                 <div className="flex items-center gap-3 cursor-pointer" onClick={() => navigate("/")}>
                     <img src={logo} alt="Logo" className="w-10 md:w-12" />
-                    <h1 className="text-white font-black tracking-tighter text-lg md:text-xl">EMERGENCITY</h1>
+                    <h1 className="text-neutral-300 font-black tracking-tighter text-4xl">EMERGENCITY</h1>
                 </div>
             </nav>
 
             {/* --- MAIN CONTAINER --- */}
             <main className="flex-1 flex items-center justify-center p-4 mt-20 md:mt-16">
-                <div className="bg-white rounded-3xl shadow-2xl flex flex-col md:flex-row w-full max-w-5xl overflow-hidden min-h-[550px]">
+                <div className="bg-white rounded-3xl shadow-2xl flex flex-col md:flex-row w-full max-w-6xl overflow-hidden min-h-[550px]">
                     
                     {/* --- LEFT SECTION: ART/ICON --- */}
-                    <div className="hidden md:flex md:w-1/2 bg-slate-100 items-center justify-center p-12 relative">
+                    <div className="hidden md:flex md:w-1/2 bg-slate-100 items-center justify-center relative">
                         <div className="absolute top-0 left-0 w-full h-full opacity-10 bg-[radial-gradient(#0ea5e9_1px,transparent_1px)] [background-size:20px_20px]"></div>
                         <img 
                             src={usuario} 
                             alt="Auth Illustration" 
-                            className="relative z-10 w-full max-w-sm drop-shadow-2xl animate-float"
+                            className="h-full l-full object-cover"
                         />
                     </div>
 
                     {/* --- RIGHT SECTION: FORM --- */}
-                    <div className="w-full md:w-1/2 p-8 md:p-14 flex flex-col justify-center">
-                        <header className="text-center mb-8">
-                            <h2 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-sky-blue to-coral-red inline-block">
+                    <div className="w-full md:w-1/2 p-8 md:p-12 flex flex-col justify-center">
+                        <header className="text-center mb-8 flex-col h-[14%]">
+                            <h2 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-neutral-500 to-neutral-500 inline-block">
                                 BIENVENIDO
                             </h2>
-                            <p className="text-slate-500 font-medium mt-2">Introduce tus credenciales de acceso</p>
+                            <p className="text-slate-500 font-medium mt-2 text-neutral-500">Introduce tus credenciales de acceso</p>
                         </header>
 
                         {loginError && (
@@ -158,7 +158,7 @@ console.log("Ruta a navegar:", routes[values.role]);
                         <form onSubmit={formik.handleSubmit} className="space-y-5">
                             {/* Role Dropdown */}
                             <div className="flex flex-col gap-1.5">
-                                <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Tipo de Usuario</label>
+                                <label className="text-xs font-bold text-neutral-700 uppercase tracking-widest ml-1">Tipo de Usuario</label>
                                 <Dropdown
                                     id="role"
                                     value={formik.values.role}
@@ -170,7 +170,7 @@ console.log("Ruta a navegar:", routes[values.role]);
                                         setUserType(e.value);
                                     }}
                                     placeholder="Selecciona tu rol"
-                                    className={`w-full py-1.5 rounded-xl border-2 transition-all ${formik.touched.role && formik.errors.role ? 'border-red-300' : 'border-slate-100 hover:border-sky-blue/30'}`}
+                                    className={` w-full py-1.5 rounded-xl border-2 transition-all ${formik.touched.role && formik.errors.role ? 'border-red-300' : 'border-slate-100 hover:border-sky-blue/30'}`}
                                 />
                                 {formik.touched.role && formik.errors.role && <small className="text-red-500 font-semibold ml-1">{formik.errors.role}</small>}
                             </div>
@@ -178,7 +178,7 @@ console.log("Ruta a navegar:", routes[values.role]);
                             {/* Dynamic Field: Hospital Name */}
                             {userType === "hospitales" && (
                                 <div className="flex flex-col gap-1.5 animate-fade-down">
-                                    <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Nombre Hospital</label>
+                                    <label className="text-xs font-bold text-neutral-700 uppercase tracking-widest ml-1">Nombre Hospital</label>
                                     <input
                                         name="nombre"
                                         type="text"
@@ -193,7 +193,7 @@ console.log("Ruta a navegar:", routes[values.role]);
                             {/* Dynamic Field: Medical License */}
                             {userType && userType !== "hospitales" && (
                                 <div className="flex flex-col gap-1.5 animate-fade-down">
-                                    <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Licencia Médica</label>
+                                    <label className="text-xs font-bold text-neutral-700 uppercase tracking-widest ml-1">Licencia Médica</label>
                                     <input
                                         name="licencia_medica"
                                         type="text"
@@ -207,7 +207,7 @@ console.log("Ruta a navegar:", routes[values.role]);
 
                             {/* Password */}
                             <div className="flex flex-col gap-1.5">
-                                <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Contraseña</label>
+                                <label className="text-xs font-bold text-neutral-700 uppercase tracking-widest ml-1">Contraseña</label>
                                 <input
                                     name="password"
                                     type="password"
@@ -224,24 +224,24 @@ console.log("Ruta a navegar:", routes[values.role]);
                                 disabled={formik.isSubmitting}
                                 className="w-full bg-gradient-to-r from-coral-red to-red-500 text-white font-black py-4 rounded-2xl shadow-lg shadow-red-200 hover:shadow-red-300 hover:-translate-y-0.5 transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed mt-4"
                             >
-                                {formik.isSubmitting ? 'VERIFICANDO...' : 'ENTRAR AL SISTEMA'}
+                                {formik.isSubmitting ? 'VERIFICANDO...' : 'INGRESAR'}
                             </button>
 
                             {/* Footer Links */}
-                            <footer className="flex flex-col gap-3 pt-6 border-t border-slate-100 mt-4">
+                            <footer className="flex flex-col gap-3 pt-8 border-t border-neutral-200 mt-4">
                                 <button 
                                     type="button" 
-                                    className="text-sm font-bold text-sky-blue hover:text-blue-600 transition-colors"
+                                    className="text-lg font-bold text-sky-500 hover:text-sky-700 transition-colors"
                                     onClick={() => navigate(`/signup/${formik.values.role || 'operador'}`)}
                                 >
-                                    ¿Nuevo en Emergencity? <span className="underline italic">Crea una cuenta</span>
+                                    <span className="underline italic">Crear cuenta de acceso</span>
                                 </button>
                                 <button 
                                     type="button" 
-                                    className="text-xs font-semibold text-slate-400 hover:text-slate-600 transition-colors"
+                                    className="text-lg font-semibold text-sky-500 hover:text-sky-700 transition-colors p-1"
                                     onClick={() => navigate("/recover-password")}
                                 >
-                                    Recuperar acceso
+                                    <span className="underline italic">Recuperar acceso</span>
                                 </button>
                             </footer>
                         </form>
