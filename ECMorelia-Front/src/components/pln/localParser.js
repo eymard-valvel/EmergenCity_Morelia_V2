@@ -1,80 +1,8 @@
 // src/pln/localParser.js
-// Versión sincronizada con el backend - Extracción por secciones
+// VERSIÓN DEFINITIVA - Sincronizada con el backend
 
 export function parseTextLocal(rawText) {
     const text = rawText.replace(/\s+/g, ' ').trim();
-    const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
-    
-    // Clasificar oraciones
-    const sections = {
-        motivo: [],
-        lesion: [],
-        signos: [],
-        glasgow: [],
-        intervenciones: [],
-        demograficos: [],
-        otros: []
-    };
-
-    const keywords = {
-        motivo: [
-            'motivo', 'consulta', 'urgencia', 'por', 'presenta', 'refiere',
-            'manifiesta', 'dolor', 'fiebre', 'trauma', 'accidente', 'caída',
-            'náuseas', 'vómito', 'hemorragia', 'disnea', 'dificultad respiratoria'
-        ],
-        lesion: [
-            'lesión', 'trauma', 'herida', 'fractura', 'quemadura', 'golpe',
-            'contusión', 'torácico', 'craneal', 'abdominal', 'tce'
-        ],
-        signos: [
-            'signos vitales', 'frecuencia cardíaca', 'fc', 'pulso',
-            'frecuencia respiratoria', 'fr', 'respiración',
-            'presión arterial', 'tensión arterial', 'ta', 'presión', 'tensión',
-            'saturación', 'spo2', 'o2 sat', 'temperatura', 'temp'
-        ],
-        glasgow: [
-            'glasgow', 'gcs', 'escala de glasgow',
-            'ocular', 'ojos', 'apertura ocular',
-            'verbal', 'respuesta verbal',
-            'motor', 'respuesta motora'
-        ],
-        intervenciones: [
-            'oxigenoterapia', 'oxígeno', 'o2', 'vía intravenosa', 'iv', 'catéter',
-            'suero', 'vendaje', 'inmovilización', 'férula', 'medicación',
-            'analgesia', 'anestesia', 'rcp', 'masaje cardíaco'
-        ],
-        demograficos: [
-            'paciente', 'nombre', 'años', 'edad', 'sexo', 'masculino', 'femenino', 'hombre', 'mujer'
-        ]
-    };
-
-    function classifySentence(sentence) {
-        const lower = sentence.toLowerCase();
-        const assigned = new Set();
-        for (const [section, words] of Object.entries(keywords)) {
-            for (const word of words) {
-                if (lower.includes(word)) {
-                    assigned.add(section);
-                    break;
-                }
-            }
-        }
-        if (assigned.size === 0) return 'otros';
-        else if (assigned.has('glasgow')) return 'glasgow';
-        else if (assigned.has('signos')) return 'signos';
-        else if (assigned.has('intervenciones')) return 'intervenciones';
-        else if (assigned.has('lesion')) return 'lesion';
-        else if (assigned.has('motivo')) return 'motivo';
-        else if (assigned.has('demograficos')) return 'demograficos';
-        else return 'otros';
-    }
-
-    for (const sentence of sentences) {
-        const section = classifySentence(sentence);
-        if (sections[section]) {
-            sections[section].push(sentence.trim());
-        }
-    }
 
     const result = {
         paciente: { nombre: '', edad: '', sexo: '' },
@@ -92,60 +20,107 @@ export function parseTextLocal(rawText) {
         intervenciones: []
     };
 
-    // Motivo
-    if (sections.motivo.length > 0) {
-        let motivoText = sections.motivo.join(' ');
-        motivoText = motivoText
-            .replace(/^(motivo\s+(?:de\s+)?(?:urgencia|consulta)\s*[:]?\s*)/i, '')
-            .replace(/^(por\s+(?:presentar|tener|con)\s*)/i, '')
-            .trim();
-        const stopWords = ['lesión', 'trauma', 'signos vitales', 'glasgow'];
-        for (const sw of stopWords) {
-            const idx = motivoText.toLowerCase().search(new RegExp(`\\b${sw}\\b`));
-            if (idx !== -1) {
-                motivoText = motivoText.substring(0, idx).trim();
-                break;
+    // Diccionarios
+    const sections = {
+        motivo: [
+            'motivo de urgencia', 'motivo de consulta', 'motivo', 
+            'por', 'presenta', 'refiere', 'manifiesta', 'comenta',
+            'dolor', 'fiebre', 'trauma', 'accidente', 'caída',
+            'náuseas', 'vómito', 'hemorragia', 'disnea',
+            'dificultad respiratoria', 'policontundido', 'politraumatizado',
+            'quemadura', 'intoxicación', 'convulsión', 'desmayo'
+        ],
+        lesion: [
+            'lesión', 'trauma', 'herida', 'fractura', 'quemadura',
+            'golpe', 'contusión', 'torácico', 'craneal', 'abdominal',
+            'pélvico', 'extremidades', 'tce', 'craneoencefálico',
+            'policontundido', 'laceración', 'desgarro', 'esguince'
+        ],
+        signos: [
+            'signos vitales', 'frecuencia cardíaca', 'fc', 'pulso',
+            'frecuencia respiratoria', 'fr', 'respiración',
+            'presión arterial', 'tensión arterial', 'ta', 'presión', 'tensión',
+            'saturación', 'spo2', 'o2 sat', 'oxígeno',
+            'temperatura', 'temp', 'fiebre'
+        ],
+        glasgow: [
+            'glasgow', 'gcs', 'escala de glasgow',
+            'ocular', 'ojos', 'apertura ocular',
+            'verbal', 'respuesta verbal',
+            'motor', 'respuesta motora'
+        ]
+    };
+
+    // Función auxiliar extractBetween (misma lógica que backend)
+    function extractBetween(text, startWords, endWords) {
+        let bestMatch = '';
+        for (const sw of startWords) {
+            const startIdx = text.toLowerCase().indexOf(sw.toLowerCase());
+            if (startIdx === -1) continue;
+            let endIdx = text.length;
+            for (const ew of endWords) {
+                const idx = text.toLowerCase().indexOf(ew.toLowerCase(), startIdx + sw.length);
+                if (idx !== -1 && idx < endIdx) endIdx = idx;
+            }
+            const cutWords = ['signos vitales', 'glasgow', 'gcs', 'se administró', 'se colocó', 'se puso'];
+            for (const cw of cutWords) {
+                const idx = text.toLowerCase().indexOf(cw.toLowerCase(), startIdx + sw.length);
+                if (idx !== -1 && idx < endIdx) endIdx = idx;
+            }
+            const extracted = text.substring(startIdx, endIdx).trim();
+            if (extracted.length > bestMatch.length) {
+                bestMatch = extracted;
             }
         }
-        result.motivo_urgencia = motivoText;
+        return bestMatch;
+    }
+
+    // Motivo
+    let motivoRaw = extractBetween(
+        text,
+        sections.motivo,
+        ['lesión', 'trauma', 'signos vitales', 'glasgow', 'gcs', 'se administró', 'se colocó', 'se puso']
+    );
+    if (motivoRaw) {
+        for (const kw of sections.motivo) {
+            const regex = new RegExp(`^${kw}\\s*[:]?\\s*`, 'i');
+            motivoRaw = motivoRaw.replace(regex, '');
+        }
+        result.motivo_urgencia = motivoRaw.trim();
+    } else {
+        const fallbackMatch = text.match(/\b(dolor|fiebre|trauma|accidente|caída|náuseas|vómito|hemorragia|disnea)\s+[^.]+/i);
+        if (fallbackMatch) result.motivo_urgencia = fallbackMatch[0].trim();
     }
 
     // Lesión
-    if (sections.lesion.length > 0) {
-        let lesionText = sections.lesion.join(' ');
-        lesionText = lesionText
-            .replace(/^(lesión|trauma|herida|fractura|quemadura|golpe|contusión)\s+(?:de|en|por)\s*/i, '')
-            .trim();
-        const stopWords = ['signos vitales', 'glasgow'];
-        for (const sw of stopWords) {
-            const idx = lesionText.toLowerCase().search(new RegExp(`\\b${sw}\\b`));
-            if (idx !== -1) {
-                lesionText = lesionText.substring(0, idx).trim();
-                break;
-            }
+    let lesionRaw = extractBetween(
+        text,
+        sections.lesion,
+        ['signos vitales', 'glasgow', 'gcs', 'se administró', 'se colocó', 'se puso']
+    );
+    if (lesionRaw) {
+        for (const kw of sections.lesion) {
+            const regex = new RegExp(`^${kw}\\s*[:]?\\s*`, 'i');
+            lesionRaw = lesionRaw.replace(regex, '');
         }
-        result.descripcion_lesion = lesionText;
+        result.descripcion_lesion = lesionRaw.trim();
     }
 
     // Signos vitales
-    const signosText = sections.signos.join(' ') || text;
-    const fcMatch = signosText.match(/\b(?:fc|frecuencia\s*card[ií]aca|pulso)\s*[:]?\s*(\d{2,3})\b/i);
+    const fullText = text;
+    const fcMatch = fullText.match(/\b(?:fc|frecuencia\s*card[ií]aca|pulso)\s*[:]?\s*(\d{2,3})\b/i);
     if (fcMatch) result.signos_vitales.frecuencia_cardiaca = fcMatch[1];
-    const frMatch = signosText.match(/\b(?:fr|frecuencia\s*respiratoria|respiración)\s*[:]?\s*(\d{2,3})\b/i);
+    const frMatch = fullText.match(/\b(?:fr|frecuencia\s*respiratoria|respiración)\s*[:]?\s*(\d{2,3})\b/i);
     if (frMatch) result.signos_vitales.frecuencia_respiratoria = frMatch[1];
-    const taMatch = signosText.match(/\b(?:ta|tensi[oó]n\s*(?:arterial)?|presi[oó]n\s*(?:arterial)?)\s*[:]?\s*(\d{2,3})\s*[\/\-\s]+(?:sobre\s*)?(\d{2,3})\b/i);
+    const taMatch = fullText.match(/\b(?:ta|tensi[oó]n\s*(?:arterial)?|presi[oó]n\s*(?:arterial)?)\s*[:]?\s*(\d{2,3})\s*[\/\-\s]+(?:sobre\s*)?(\d{2,3})\b/i);
     if (taMatch) result.signos_vitales.tension_arterial = `${taMatch[1]}/${taMatch[2]}`;
-    const spo2Match = signosText.match(/\b(?:spo2|saturaci[oó]n|o2\s*sat)\s*[:]?\s*(\d{2,3})\b/i);
+    const spo2Match = fullText.match(/\b(?:spo2|saturaci[oó]n|o2\s*sat)\s*[:]?\s*(\d{2,3})\b/i);
     if (spo2Match) result.signos_vitales.saturacion_oxigeno = spo2Match[1];
-    const tempMatch = signosText.match(/\b(?:temperatura|temp)\s*[:]?\s*(\d{2,3}\.?\d*)\b/i);
+    const tempMatch = fullText.match(/\b(?:temperatura|temp)\s*[:]?\s*(\d{2,3}\.?\d*)\b/i);
     if (tempMatch) result.signos_vitales.temperatura = tempMatch[1];
 
     // Glasgow
-    const glasgowText = sections.glasgow.join(' ') || text;
-    const numberMap = {
-        'uno': 1, 'dos': 2, 'tres': 3, 'cuatro': 4, 'cinco': 5,
-        'seis': 6, 'siete': 7, 'ocho': 8, 'nueve': 9, 'diez': 10
-    };
+    const numberMap = { 'uno':1,'dos':2,'tres':3,'cuatro':4,'cinco':5,'seis':6,'siete':7,'ocho':8,'nueve':9,'diez':10 };
     const toNumber = (str) => {
         if (!str) return null;
         const lower = str.toLowerCase().trim();
@@ -153,17 +128,16 @@ export function parseTextLocal(rawText) {
         const num = parseInt(str, 10);
         return isNaN(num) ? null : num;
     };
-
-    const gcsMatch = glasgowText.match(/\b(?:glasgow|gcs|escala\s+de\s+glasgow)\s*[:]?\s*([\w]+)\b/i);
+    const gcsMatch = fullText.match(/\b(?:glasgow|gcs|escala\s+de\s+glasgow)\s*[:]?\s*([\w]+)\b/i);
     if (gcsMatch) {
         const total = toNumber(gcsMatch[1]);
         if (total) result.glasgow.total = total;
     } else {
-        const ocularMatch = glasgowText.match(/\b(?:ocular|ojos|apertura\s+ocular)\s*[:]?\s*([\w]+)\b/i);
+        const ocularMatch = fullText.match(/\b(?:ocular|ojos|apertura\s+ocular)\s*[:]?\s*([\w]+)\b/i);
         if (ocularMatch) result.glasgow.ocular = toNumber(ocularMatch[1]);
-        const verbalMatch = glasgowText.match(/\b(?:verbal|respuesta\s+verbal)\s*[:]?\s*([\w]+)\b/i);
+        const verbalMatch = fullText.match(/\b(?:verbal|respuesta\s+verbal)\s*[:]?\s*([\w]+)\b/i);
         if (verbalMatch) result.glasgow.verbal = toNumber(verbalMatch[1]);
-        const motorMatch = glasgowText.match(/\b(?:motor|respuesta\s+motora)\s*[:]?\s*([\w]+)\b/i);
+        const motorMatch = fullText.match(/\b(?:motor|respuesta\s+motora)\s*[:]?\s*([\w]+)\b/i);
         if (motorMatch) result.glasgow.motor = toNumber(motorMatch[1]);
         if (result.glasgow.ocular && result.glasgow.verbal && result.glasgow.motor) {
             result.glasgow.total = result.glasgow.ocular + result.glasgow.verbal + result.glasgow.motor;
@@ -171,10 +145,9 @@ export function parseTextLocal(rawText) {
     }
 
     // Intervenciones
-    const interventionText = sections.intervenciones.join(' ') || text;
     const treatmentMap = {
-        'oxigenoterapia': { nombre: 'oxigenoterapia', sinónimos: ['oxigenoterapia', 'oxígeno', 'oxigeno', 'o2'] },
-        'vía intravenosa': { nombre: 'vía intravenosa', sinónimos: ['vía intravenosa', 'iv', 'catéter', 'suero'] },
+        'oxigenoterapia': { nombre: 'oxigenoterapia', sinónimos: ['oxigenoterapia', 'oxígeno', 'oxigeno', 'o2', 'mascarilla'] },
+        'vía intravenosa': { nombre: 'vía intravenosa', sinónimos: ['vía intravenosa', 'iv', 'catéter', 'suero', 'bien travenosa'] },
         'intubación': { nombre: 'intubación', sinónimos: ['intubación', 'intubar'] },
         'ventilación': { nombre: 'ventilación', sinónimos: ['ventilación', 'ventilar'] },
         'desfibrilación': { nombre: 'desfibrilación', sinónimos: ['desfibrilación', 'desfibrilar', 'choque'] },
@@ -185,21 +158,24 @@ export function parseTextLocal(rawText) {
     };
 
     const found = [];
-    const lowerIntervention = interventionText.toLowerCase();
-
+    const lowerFull = fullText.toLowerCase();
     for (const [key, data] of Object.entries(treatmentMap)) {
         for (const synonym of data.sinónimos) {
-            if (lowerIntervention.includes(synonym)) {
+            const idx = lowerFull.indexOf(synonym);
+            if (idx !== -1) {
                 let descripcion = '';
-                const idx = lowerIntervention.indexOf(synonym);
-                const start = Math.max(0, idx - 30);
-                const end = Math.min(lowerIntervention.length, idx + 80);
-                const context = interventionText.substring(start, end);
-                const detalleRegex = /((?:a|de|con|por)\s+[^.,;:]+?)(?:[,;:]|\.|$)/i;
-                const detalleMatch = context.match(detalleRegex);
-                if (detalleMatch && detalleMatch[1].length < 40) {
-                    descripcion = detalleMatch[1].trim();
+                const startIdx = idx + synonym.length;
+                let endIdx = fullText.length;
+                const nextIntervention = lowerFull.substring(startIdx).search(/\b(?:oxigenoterapia|oxígeno|iv|suero|catéter|vendaje|inmovilización|medicación|rcp)\b/i);
+                if (nextIntervention !== -1 && nextIntervention < 100) {
+                    endIdx = startIdx + nextIntervention;
+                } else {
+                    const dotIdx = fullText.indexOf('.', startIdx);
+                    const commaIdx = fullText.indexOf(',', startIdx);
+                    if (dotIdx !== -1 && dotIdx < endIdx) endIdx = dotIdx + 1;
+                    if (commaIdx !== -1 && commaIdx < endIdx) endIdx = commaIdx + 1;
                 }
+                descripcion = fullText.substring(startIdx, endIdx).trim();
                 found.push({
                     tipo_intervencion: data.nombre,
                     descripcion: descripcion,
@@ -209,7 +185,6 @@ export function parseTextLocal(rawText) {
             }
         }
     }
-
     const seen = new Set();
     const unique = [];
     for (const iv of found) {
@@ -220,22 +195,42 @@ export function parseTextLocal(rawText) {
     }
     result.intervenciones = unique;
 
-    // Datos demográficos
-    const demograficosText = sections.demograficos.join(' ') || text;
-    const nombreMatch = demograficosText.match(/paciente\s+([A-Za-záéíóúñ\s]+?)(?=\s+\d+\s*años|\s+sexo|\s+motivo|,|\.|$)/i);
+    // Demográficos
+    const nombreMatch = fullText.match(/paciente\s+([A-Za-záéíóúñ\s]+?)(?=\s+\d+\s*años|\s+sexo|\s+motivo|,|\.|$)/i);
     if (nombreMatch) result.paciente.nombre = nombreMatch[1].trim();
-    const edadMatch = demograficosText.match(/\b(\d{1,3})\s*(años|año|edad)\b/i);
+    const edadMatch = fullText.match(/\b(\d{1,3})\s*(años|año|edad)\b/i);
     if (edadMatch) result.paciente.edad = parseInt(edadMatch[1], 10);
-    if (/\b(masculino|hombre|varón)\b/i.test(demograficosText)) result.paciente.sexo = 'M';
-    else if (/\b(femenino|mujer)\b/i.test(demograficosText)) result.paciente.sexo = 'F';
+    if (/\b(masculino|hombre|varón)\b/i.test(fullText)) result.paciente.sexo = 'M';
+    else if (/\b(femenino|mujer)\b/i.test(fullText)) result.paciente.sexo = 'F';
 
-    // Hora
+    // Hora actual
     const ahora = new Date();
     const horas = String(ahora.getHours()).padStart(2, '0');
     const minutos = String(ahora.getMinutes()).padStart(2, '0');
     const horaActual = `${horas}:${minutos}`;
     for (const iv of result.intervenciones) {
         iv.hora_intervencion = horaActual;
+    }
+    result.hora_estimada = horaActual;
+
+    // Limpieza final
+    const signosPattern = /\b(?:signos\s*vitales|frecuencia\s*card[ií]aca|fc|pulso|frecuencia\s*respiratoria|fr|presi[oó]n\s*arterial|ta|saturaci[oó]n|spo2|temperatura|temp)\b/i;
+    const glasgowPattern = /\b(?:glasgow|gcs|escala\s+de\s+glasgow|ocular|verbal|motor)\b/i;
+    if (result.motivo_urgencia) {
+        let clean = result.motivo_urgencia;
+        let cutIdx = clean.search(signosPattern);
+        if (cutIdx !== -1) clean = clean.substring(0, cutIdx);
+        cutIdx = clean.search(glasgowPattern);
+        if (cutIdx !== -1) clean = clean.substring(0, cutIdx);
+        result.motivo_urgencia = clean.trim();
+    }
+    if (result.descripcion_lesion) {
+        let clean = result.descripcion_lesion;
+        let cutIdx = clean.search(signosPattern);
+        if (cutIdx !== -1) clean = clean.substring(0, cutIdx);
+        cutIdx = clean.search(glasgowPattern);
+        if (cutIdx !== -1) clean = clean.substring(0, cutIdx);
+        result.descripcion_lesion = clean.trim();
     }
 
     return result;

@@ -201,13 +201,14 @@ const ReportePaciente = () => {
   };
 
   // Función para recibir datos del NLP
-  
+
 const handleNLPData = (data) => {
     const ahora = new Date();
     const horas = String(ahora.getHours()).padStart(2, '0');
     const minutos = String(ahora.getMinutes()).padStart(2, '0');
     const horaActual = `${horas}:${minutos}`;
 
+    // Asegurar que las intervenciones tengan hora
     const intervencionesConHora = (data.intervenciones || []).map(iv => ({
         ...iv,
         hora_intervencion: iv.hora_intervencion || horaActual
@@ -235,20 +236,21 @@ const handleNLPData = (data) => {
         intervenciones: intervencionesConHora.length > 0 ? intervencionesConHora : prev.intervenciones,
     }));
 
+    // Actualizar Glasgow
     if (data.glasgow) {
         if (data.glasgow.ocular) setOcular(data.glasgow.ocular);
         if (data.glasgow.verbal) setVerbal(data.glasgow.verbal);
         if (data.glasgow.motor) setMotor(data.glasgow.motor);
     }
 
+    // Hora estimada de llegada
     setReporte(prev => ({
         ...prev,
-        hora_estimada_llegada: horaActual
+        hora_estimada_llegada: data.hora_estimada || horaActual
     }));
 
     mostrarNotificacion('✅ Datos extraídos correctamente', 'success');
 };
-
   // Al finalizar la grabación, se procesa automáticamente (ya está en VoiceAssistant)
 
   // Validación
