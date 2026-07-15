@@ -1660,6 +1660,7 @@ export default function MapaOperadorGPS() {
       `Folio: ${data.callId} - ${data.emergencyType || 'Emergencia'} en ${data.address || 'ubicación desconocida'}`
     );
 
+    console.log('🚨 EMERGENCIA ASIGNADA RECIBIDA EN AMBULANCIA');
     // Abrir modal de confirmación de emergencia
     onEmergencyModalOpen();
 
