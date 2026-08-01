@@ -75,27 +75,27 @@ const Inicio = () => {
             </div>
 
             {/* --- TOP BAR --- */}
-            <nav className="fixed top-0 left-0 w-full bg-gradient-to-r from-bluish-gray to-sky-blue p-3 flex items-center shadow-2xl z-50">
+            {/* <nav className="fixed top-0 left-0 w-full bg-gradient-to-r from-bluish-gray to-sky-blue p-3 flex items-center shadow-2xl z-50">
                 <img src={logo} alt="Emergencity Logo" className="ml-2 w-10 md:w-14" />
-                <h1 className="text-sm md:text-xl font-black text-white tracking-widest ml-3">
+                <h1 className="text-sm md:text-xl text-white tracking-widest ml-3">
                     EMERGENCITY
                 </h1>
-            </nav>
+            </nav> */}
 
             {/* --- CONTENIDO PRINCIPAL --- */}
             <section className="relative z-10 w-full px-4 py-20 flex justify-center items-center">
-                <div className="bg-white/90 backdrop-blur-lg p-6 md:p-10 rounded-3xl shadow-2xl flex flex-col items-center w-full max-w-[95%] md:max-w-2xl lg:max-w-3xl transition-all duration-500">
+                <div className="bg-black/35 backdrop-blur-lg p-6 md:p-5 rounded-3xl shadow-2xl flex flex-col items-center w-full max-w-[95%] md:max-w-2xl lg:max-w-3xl transition-all duration-500">
                     
                     {/* Logo y Título */}
                     <img src={logo} alt="Logo" className="mb-4 w-24 md:w-32 lg:w-40 animate-pulse-slow" />
                     
-                    <h1 className="text-3xl md:text-5xl lg:text-6xl font-black text-bluish-gray text-center tracking-tighter">
+                    <h1 className="text-3xl md:text-5xl lg:text-6xl text-neutral-300 font-bold text-center tracking-tighter">
                         EMERGENCITY
                     </h1>
 
                     {/* Typed JS Container */}
                     <div className="h-16 flex items-center justify-center">
-                        <span className="typed text-lg md:text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-coral-red to-sky-blue text-center"></span>
+                        <span className="typed text-lg md:text-3xl text-transparent bg-clip-text bg-gradient-to-r from-neutral-300 to-neutral-300 text-center"></span>
                     </div>
 
                     {/* Textos ocultos para Typed.js */}
@@ -104,48 +104,55 @@ const Inicio = () => {
                         <p>Tu compromiso hace la diferencia</p>
                     </div>
 
-                    <hr className="w-full border-gray-200 my-6" />
+                    <hr className="w-full border-neutral-300 my-6" />
 
                     {/* --- SECCIÓN DE BOTONES --- */}
                     <div className="w-full flex flex-col items-center">
-                        <h3 className="text-sm md:text-lg font-bold text-gray-500 mb-6 uppercase tracking-widest">
+                        <h3 className="text-sm md:text-lg font-bold text-neutral-300 mb-6 uppercase tracking-widest">
                             Selecciona tu rol
                         </h3>
 
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full">
+                        <div className="grid grid-cols-1 sm:grid-cols-1 gap-5 w-[60%]">
                             {/* Grupo Rojo: Emergencias */}
                             <button
-                                className="group relative overflow-hidden px-6 py-4 rounded-2xl border-2 border-coral-red text-coral-red font-bold text-lg hover:text-white transition-all duration-300 shadow-md hover:shadow-coral-red/40"
+                                className="group relative overflow-hidden px-6 py-4 rounded-2xl border-2 border-neutral-300 text-red-500 font-bold text-3xl hover:text-neutral-300 transition-all duration-1500 shadow-md hover:shadow-red-500"
                                 onClick={() => handleButtonClick("operador")}
                             >
                                 <span className="relative z-10">Operador</span>
-                                <div className="absolute inset-0 bg-coral-red translate-y-[101%] group-hover:translate-y-0 transition-transform duration-300"></div>
+                                <div className="absolute inset-0 bg-red-500/80 translate-y-[101%] group-hover:translate-y-0 transition-transform duration-300"></div>
                             </button>
 
                             <button
-                                className="group relative overflow-hidden px-6 py-4 rounded-2xl border-2 border-coral-red text-coral-red font-bold text-lg hover:text-white transition-all duration-300 shadow-md hover:shadow-coral-red/40"
+                                className="group relative overflow-hidden px-6 py-4 rounded-2xl border-2 border-neutral-300 text-red-500 font-bold text-3xl  hover:text-neutral-300 transition-all duration-1500 shadow-md hover:shadow-red-500"
                                 onClick={() => handleButtonClick("paramedicos")}
                             >
                                 <span className="relative z-10">Paramédico</span>
-                                <div className="absolute inset-0 bg-coral-red translate-y-[101%] group-hover:translate-y-0 transition-transform duration-300"></div>
+                                <div className="absolute inset-0 bg-red-500/80 translate-y-[101%] group-hover:translate-y-0 transition-transform duration-300"></div>
                             </button>
 
                             {/* Grupo Azul: Hospitalario */}
                             <button
-                                className="group relative overflow-hidden px-6 py-4 rounded-2xl border-2 border-sky-blue text-sky-blue font-bold text-lg hover:text-white transition-all duration-300 shadow-md hover:shadow-sky-blue/40"
+                                className="group relative overflow-hidden px-6 py-4 rounded-2xl border-2 border-neutral-300 text-sky-500 font-bold text-3xl g hover:text-neutral-300 transition-all duration-300 shadow-md hover:shadow-sky-400"
                                 onClick={() => handleButtonClick("hospitales")}
                             >
                                 <span className="relative z-10">Hospital</span>
-                                <div className="absolute inset-0 bg-sky-blue translate-y-[101%] group-hover:translate-y-0 transition-transform duration-300"></div>
+                                <div className="absolute inset-0 bg-sky-500/80 translate-y-[101%] group-hover:translate-y-0 transition-transform duration-300"></div>
                             </button>
 
                             <button
-                                className="group relative overflow-hidden px-6 py-4 rounded-2xl border-2 border-sky-blue text-sky-blue font-bold text-lg hover:text-white transition-all duration-300 shadow-md hover:shadow-sky-blue/40"
+                                className="group relative overflow-hidden px-6 py-4 rounded-2xl border-2 border-neutral-300 text-sky-500 font-bold text-3xl  hover:text-neutral-300 transition-all duration-300 shadow-md hover:shadow-sky-400"
                                 onClick={() => handleButtonClick("doctor")}
                             >
                                 <span className="relative z-10">Doctor</span>
-                                <div className="absolute inset-0 bg-sky-blue translate-y-[101%] group-hover:translate-y-0 transition-transform duration-300"></div>
+                                <div className="absolute inset-0 bg-sky-500/80 translate-y-[101%] group-hover:translate-y-0 transition-transform duration-300"></div>
                             </button>
+                            {<button
+                                className="group relative overflow-hidden px-6 py-4 rounded-2xl border-2 border-neutral-300 text-sky-500 font-bold text-3xl hover:text-neutral-300 transition-all duration-300 shadow-md hover:shadow-sky-400"
+                                onClick={() => handleButtonClick("receptor")}
+                            >
+                                <span className="relative z-10">Receptor</span>
+                                <div className="absolute inset-0 bg-sky-500/80 translate-y-[101%] group-hover:translate-y-0 transition-transform duration-300"></div>
+                            </button>}
                         </div>
                     </div>
                 </div>

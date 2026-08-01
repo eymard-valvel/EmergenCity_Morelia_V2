@@ -10,6 +10,12 @@ class OperadorService {
 
   async addUser(user, role, id) {
     try {
+      // ✅ Se agrega 'receptor' como rol válido
+      const validRoles = ['operador', 'paramedicos', 'doctor', 'receptor']
+      if (!validRoles.includes(role)) {
+        throw new Error('Role not supported for signup')
+      }
+
       const userExists = await prisma[role].findFirst({
         where: {
           [id]: user[id]
@@ -34,42 +40,50 @@ class OperadorService {
     }
   }
 
-async verifyUser(user, rol, id) {
+  async verifyUser(user, rol, id) {
     try {
-        const currentUser = await prisma[rol].findFirst({
-            where: { [id]: user[id] }
-        })
+      // ✅ Se agrega 'receptor' como rol válido
+      //CambiosRealizados
+      const validRoles = ['operador', 'paramedicos', 'doctor', 'receptor']
+      if (!validRoles.includes(rol)) {
+        throw new Error('Role not supported for login')
+      }
 
-        if (!currentUser) {
-            throw new Error('User not found')
-        }
+      const currentUser = await prisma[rol].findFirst({
+        where: { [id]: user[id] }
+      })
 
-        console.log("-------------------------------------------------");
-        console.log("DEPURACIÓN:");
-        console.log("Contraseña que llega del Frontend:", `"${user.password}"`);
-        console.log("Contraseña guardada en la BD:", `"${currentUser.password}"`);
+      if (!currentUser) {
+        throw new Error('User not found')
+      }
 
-        const isPasswordValid = await this.bcryptService.comparePassword(
-            user.password,
-            currentUser.password
-        )
-        if (!isPasswordValid) {
-            throw new Error('Invalid credentials')
-        }
+      console.log("-------------------------------------------------");
+      console.log("DEPURACIÓN:");
+      console.log("Contraseña que llega del Frontend:", `"${user.password}"`);
+      console.log("Contraseña guardada en la BD:", `"${currentUser.password}"`);
 
-        // SOLUCIÓN: Usar el campo correcto para cada rol
-        let tokenPayload;
-        if (rol === 'hospitales') {
-            tokenPayload = { sub: currentUser.nombre }; // Para hospitales usa 'nombre'
-        } else {
-            tokenPayload = { sub: currentUser.licencia_medica }; // Para otros usa 'licencia_medica'
-        }
+      const isPasswordValid = await this.bcryptService.comparePassword(
+        user.password,
+        currentUser.password
+      )
+      if (!isPasswordValid) {
+        throw new Error('Invalid credentials')
+      }
 
-        return this.jwtService.generateToken(tokenPayload)
+
+      let tokenPayload;
+      if (rol === 'hospitales') {
+        tokenPayload = { sub: currentUser.nombre }; // Para hospitales usa 'nombre'
+      } else {
+
+        tokenPayload = { sub: currentUser.licencia_medica };
+      }
+
+      return this.jwtService.generateToken(tokenPayload)
     } catch (error) {
-        throw new Error(error.message)
+      throw new Error(error.message)
     }
-}
+  }
 
   async verifyHospital(data) {
     try {
@@ -103,7 +117,6 @@ async verifyUser(user, rol, id) {
       throw new Error(error.message);
     }
   }
-
 }
 
 module.exports = OperadorService

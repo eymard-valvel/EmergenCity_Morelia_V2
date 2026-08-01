@@ -23,6 +23,13 @@ const databaseData = {
     certificado: 'Certificado A',
     licencia_conducir: 'LC12345',
     password: 'hashed_password_1'
+  },
+
+  receptor: {
+    nombre: 'Luis Martínez',
+    licencia_medica: 'REC001',
+    // turno: 'nocturno',
+    password: 'hashed_password_1'
   }
 }
 

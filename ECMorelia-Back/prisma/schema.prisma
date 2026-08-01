@@ -88,6 +88,14 @@ enum Shifts {
   nocturno
 }
 
+model receptor {
+  id              Int      @id @default(autoincrement())
+  nombre          String?  @db.VarChar(50)
+  licencia_medica String?  @unique @db.VarChar(50)
+  // turno           Shifts?
+  password        String?  @db.VarChar(72)
+}
+
 model paramedicos {
   id_paramedicos          Int                       @id @default(autoincrement())
   nombre                  String?                   @db.VarChar(255)

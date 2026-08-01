@@ -1,0 +1,202 @@
+/* voice-assistant-btn: botón flotante */
+.voice-assistant-btn {
+    position: fixed;
+    bottom: 90px;
+    right: 20px;
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    background: #1a73e8;
+    color: white;
+    border: none;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    cursor: pointer;
+    z-index: 1000;
+    transition: background 0.2s, transform 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.voice-assistant-btn:hover {
+    background: #1557b0;
+    transform: scale(1.05);
+}
+.voice-assistant-btn:active {
+    transform: scale(0.95);
+}
+
+/* Modal overlay */
+.voice-modal-overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.4);
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 2000;
+}
+.voice-modal {
+    background: #ffffff;
+    border-radius: 16px;
+    max-width: 520px;
+    width: 92%;
+    padding: 24px 28px 28px;
+    box-shadow: 0 20px 40px rgba(0,0,0,0.2);
+}
+[data-theme="dark"] .voice-modal {
+    background: #1f262a;
+    color: #e6eef6;
+}
+.voice-modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+}
+.voice-modal-header h3 {
+    margin: 0;
+    font-size: 1.2rem;
+    font-weight: 600;
+    color: #1a73e8;
+}
+[data-theme="dark"] .voice-modal-header h3 {
+    color: #4dabf7;
+}
+.voice-modal-close {
+    background: none;
+    border: none;
+    font-size: 28px;
+    cursor: pointer;
+    color: inherit;
+    opacity: 0.6;
+    transition: opacity 0.2s;
+    padding: 0 4px;
+}
+.voice-modal-close:hover {
+    opacity: 1;
+}
+
+.voice-instruction {
+    margin: 0 0 12px 0;
+    font-weight: 500;
+    font-size: 0.95rem;
+    padding: 8px 12px;
+    border-radius: 6px;
+    background: #f1f3f4;
+    color: #333;
+}
+.voice-instruction.recording {
+    background: #fce8e6;
+    color: #c62828;
+}
+[data-theme="dark"] .voice-instruction {
+    background: #2d3338;
+    color: #ccc;
+}
+[data-theme="dark"] .voice-instruction.recording {
+    background: #4a1a1a;
+    color: #ff8a80;
+}
+
+.voice-transcript-box {
+    background: #f8f9fa;
+    border-radius: 8px;
+    padding: 14px 16px;
+    min-height: 80px;
+    max-height: 180px;
+    overflow-y: auto;
+    margin-bottom: 16px;
+    border: 1px solid #e0e0e0;
+    font-size: 0.95rem;
+    line-height: 1.5;
+    color: #1f2d3d;
+}
+[data-theme="dark"] .voice-transcript-box {
+    background: #2a2f34;
+    border-color: #3a3f44;
+    color: #e6eef6;
+}
+.voice-transcript-box .interim {
+    color: #888;
+    font-style: italic;
+}
+[data-theme="dark"] .voice-transcript-box .interim {
+    color: #aaa;
+}
+
+.voice-error {
+    background: #fce8e6;
+    color: #c62828;
+    padding: 10px 14px;
+    border-radius: 6px;
+    margin-bottom: 14px;
+    font-size: 0.9rem;
+    border-left: 4px solid #c62828;
+}
+[data-theme="dark"] .voice-error {
+    background: #3a1a1a;
+    color: #ff8a80;
+    border-left-color: #ff8a80;
+}
+
+.voice-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+.voice-btn {
+    padding: 10px 18px;
+    border: none;
+    border-radius: 6px;
+    font-weight: 600;
+    font-size: 0.95rem;
+    cursor: pointer;
+    transition: all 0.2s;
+    flex: 1;
+    min-width: 120px;
+}
+.voice-btn.primary {
+    background: #1a73e8;
+    color: white;
+}
+.voice-btn.primary.recording {
+    background: #d32f2f;
+}
+.voice-btn.primary:hover:not(:disabled) {
+    background: #1557b0;
+}
+.voice-btn.primary.recording:hover:not(:disabled) {
+    background: #b71c1c;
+}
+.voice-btn.secondary {
+    background: #e0e0e0;
+    color: #333;
+}
+.voice-btn.secondary:hover:not(:disabled) {
+    background: #c8c8c8;
+}
+.voice-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.voice-processing {
+    text-align: center;
+    margin-top: 12px;
+    font-weight: 500;
+    color: #1a73e8;
+}
+.voice-processing .spinner {
+    display: inline-block;
+    animation: spin 1s linear infinite;
+    margin-right: 6px;
+}
+[data-theme="dark"] .voice-processing {
+    color: #4dabf7;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}

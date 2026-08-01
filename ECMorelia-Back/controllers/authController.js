@@ -14,7 +14,8 @@ class AuthController {
         operador: async () => await this.userService.addUser(user, role, 'licencia_medica'),
         paramedicos: async () => await this.userService.addUser(user, role, 'licencia_medica'),
         doctor: async () => await this.userService.addUser(user, role, 'licencia_medica'),
-        hospitales: async () => await this.userService.addUser(user, role, 'nombre')
+        hospitales: async () => await this.userService.addUser(user, role, 'nombre'),
+        receptor: async () => await this.userService.addUser(user, role, 'licencia_medica')
       }
 
       if (!signupByRole[role]) {
@@ -46,7 +47,8 @@ class AuthController {
         operador: async () => await this.userService.verifyUser(user, role, 'licencia_medica'),
         paramedicos: async () => await this.userService.verifyUser(user, role, 'licencia_medica'),
         doctor: async () => await this.userService.verifyUser(user, role, 'licencia_medica'),
-        hospitales: async () => await this.userService.verifyHospital(user)
+        hospitales: async () => await this.userService.verifyHospital(user),
+        receptor: async () => await this.userService.verifyUser(user, role, 'licencia_medica') // ✅ Nuevo
       }
 
       if (!loginByRole[role]) {

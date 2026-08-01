@@ -1,37 +1,35 @@
-import { background } from '@chakra-ui/react';
 import React, { useState, useEffect, useRef } from 'react';
-import { useNavigate, Outlet } from "react-router-dom";
-
-/**
- * ReportePaciente.jsx
- * - Responsive light/dark modes
- * - Sticky "Enviar reporte" bottom button
- * - Intervenciones: agregar / eliminar (lista)
- * - Círculo de triaje con color editable
- * - Mantiene la estructura y la lógica original (WebSocket, submit, form)
- */
+import { Outlet, useNavigate } from 'react-router-dom';
+import VoiceAssistant from '../pln/VoiceAssistant';
+import { useGlasgow } from '../hooks/useGlasgow';
 
 const ReportePaciente = () => {
-
-  const [theme, setTheme] = useState('light'); // 'light' | 'dark'
-
-  // ESTADO NUEVO: Lista de hospitales traída de la BD
+  const navigate = useNavigate();
+  const [theme, setTheme] = useState('light');
   const [listaHospitales, setListaHospitales] = useState([]);
-
-  // ESTADO NUEVO: El ID del hospital seleccionado para el envío
   const [hospitalSeleccionado, setHospitalSeleccionado] = useState('');
+  const [mensajeNotificacion, setMensajeNotificacion] = useState({ texto: '', tipo: '' });
+  const [socket, setSocket] = useState(null);
+  const [intervencionActual, setIntervencionActual] = useState({ tipo_intervencion: '', descripcion: '', hora_intervencion: '' });
+  const [ubicacion, setUbicacion] = useState({ lat: null, lng: null, direccion: '' });
+  const [obteniendoUbicacion, setObteniendoUbicacion] = useState(false);
 
-  const [seccionActiva, setSeccionActiva] = useState('');
+  // Ambulancia persistente (localStorage)
+  const [ambulanciaId, setAmbulanciaId] = useState(() => {
+    return localStorage.getItem('ambulanciaId') || '';
+  });
+
+  // Estado del reporte (sin triaje ni glasgow derivados)
   const [reporte, setReporte] = useState({
+    id_ambulancia: ambulanciaId,
+    hora_estimada_llegada: '',
+    ubicacion_actual: '',
     paciente: {
       nombre: '',
       edad: '',
       sexo: '',
       motivo_urgencia: '',
       descripcion_lesion: '',
-      tipo_accidente: '',
-      lugar: '',
-      observaciones: '',
     },
     signos_vitales: {
       frecuencia_cardiaca: '',
@@ -39,821 +37,568 @@ const ReportePaciente = () => {
       tension_arterial: '',
       saturacion_oxigeno: '',
       temperatura: '',
-      nivel_glucosa: '',
-      estado_neurologico: '',
     },
-    id_ambulancia: '',
-    hora_estimada_llegada: '',
-    ubicacion_actual: '',
-    condicion_actual: '',
-    codigo_prioridad: '',
-    descripcion_escena: '',
-    otros_hallazgos: '',
-    instrucciones_hospital: '',
     intervenciones: [],
+    hallazgos_escena: '',
+    instrucciones_hospital: '',
   });
 
-  // triage color (rojo por defecto)
-  const [triajeColor] = useState('#ff6b6b');
-  const [errors, setErrors] = useState({});
-  const seccionRefs = {
-    identificacion_servicio: useRef(null),
-    resumen_inicial: useRef(null),
-    signos_vitales: useRef(null),
-    intervenciones_realizadas: useRef(null),
-    hallazgos_relevantes: useRef(null),
-    instrucciones_requeridas: useRef(null),
-    codigo_prioridad: useRef(null),
-  };
+  // Hook de Glasgow
+  const { ocular, setOcular, verbal, setVerbal, motor, setMotor, total, getTriageLevel, GLASGOW } = useGlasgow(4, 5, 6);
+  const triaje = getTriageLevel(total);
 
-  const [variable, setVariable] = useState(0);
-  const aumentarVariable = () => {
-    const proximoValor = variable + 1;
+  const API_URL = import.meta.env.VITE_API || 'http://localhost:3000/api';
+  const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
 
-    // 3. La condición:
-    // Si el próximo valor alcanza o supera el límite...
-    if (proximoValor >= 5) {
-      setVariable(0); // ...lo reiniciamos a 0.
-    } else {
-      setVariable(proximoValor); // ...si no, simplemente sumamos 1.
-    }
-};
-
-
-  const [socket, setSocket] = useState(null);
-  const [mensajeError, setMensajeError] = useState('');
-  const [intervencionActual, setIntervencionActual] = useState({
-    tipo_intervencion: '',
-    descripcion: '',
-    hora_intervencion: '',
-  });
-
-// ✅ Usar la variable de entorno para que funcione en Prod y Local
-const API_URL = import.meta.env.VITE_API || 'http://localhost:3000/api';
-
+  // Cargar hospitales
   useEffect(() => {
     const cargarHospitales = async () => {
       try {
-        // Asumiendo que crearás este endpoint en tu backend (GET /api/hospital)
-        const response = await fetch(`${API_URL}/hospital`);
-        if (response.ok) {
-          const data = await response.json();
-          // Asumimos que data es un array: [{ id: 1, nombre: 'Hospital Civil' }, ...]
+        const res = await fetch(`${API_URL}/hospital`);
+        if (res.ok) {
+          const data = await res.json();
           setListaHospitales(data);
-        } else {
-          console.error("Error al cargar la lista de hospitales");
+          // Si tenemos ubicación, sugerir hospital más cercano
+          if (ubicacion.lat && ubicacion.lng) {
+            sugerirHospitalCercano(data, ubicacion.lat, ubicacion.lng);
+          }
         }
       } catch (error) {
-        console.error("Error de conexión:", error);
+        console.error('Error cargando hospitales:', error);
       }
     };
     cargarHospitales();
+  }, [API_URL, ubicacion]);
+
+  // Obtener ubicación automáticamente
+  useEffect(() => {
+    if (navigator.geolocation) {
+      setObteniendoUbicacion(true);
+      navigator.geolocation.getCurrentPosition(
+        async (position) => {
+          const { latitude, longitude } = position.coords;
+          setUbicacion(prev => ({ ...prev, lat: latitude, lng: longitude }));
+          // Obtener dirección con Mapbox
+          try {
+            const response = await fetch(
+              `https://api.mapbox.com/geocoding/v5/mapbox.places/${longitude},${latitude}.json?access_token=${MAPBOX_TOKEN}&language=es`
+            );
+            if (response.ok) {
+              const data = await response.json();
+              const direccion = data.features[0]?.place_name || 'Ubicación desconocida';
+              setUbicacion(prev => ({ ...prev, direccion }));
+              setReporte(prev => ({ ...prev, ubicacion_actual: direccion }));
+            }
+          } catch (error) {
+            console.error('Error al obtener dirección:', error);
+          }
+          setObteniendoUbicacion(false);
+        },
+        (error) => {
+          console.error('Error de geolocalización:', error);
+          setObteniendoUbicacion(false);
+        },
+        { enableHighAccuracy: true }
+      );
+    } else {
+      setObteniendoUbicacion(false);
+    }
   }, []);
 
+  // Sugerir hospital más cercano (distancia de Haversine)
+  const sugerirHospitalCercano = (hospitales, lat, lng) => {
+    if (!hospitales.length) return;
+    let closest = null;
+    let minDist = Infinity;
+    for (const h of hospitales) {
+      if (h.lat && h.lng) {
+        const dist = calcularDistancia(lat, lng, h.lat, h.lng);
+        if (dist < minDist) {
+          minDist = dist;
+          closest = h;
+        }
+      }
+    }
+    if (closest) {
+      setHospitalSeleccionado(closest.id);
+    }
+  };
 
+  const calcularDistancia = (lat1, lon1, lat2, lon2) => {
+    const R = 6371; // km
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+              Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
+  };
+
+  // Tema
   useEffect(() => {
-    // Apply body background according to theme
     document.documentElement.dataset.theme = theme;
   }, [theme]);
 
+  // WebSocket (sin cambios relevantes)
   useEffect(() => {
     const ws = new WebSocket(import.meta.env.VITE_WS_URL);
-
-    ws.onopen = () => {
-      console.log('✅ ReportePaciente conectado al servidor de WebSockets');
-    };
-
+    ws.onopen = () => console.log('✅ WS conectado');
     ws.onmessage = async (event) => {
-      let data;
-      if (event.data instanceof Blob) {
-        data = await event.data.text();
-      } else {
-        data = event.data;
-      }
-      console.log('Mensaje recibido del servidor:', data);
+      const data = event.data instanceof Blob ? await event.data.text() : event.data;
       try {
-        const parsedData = JSON.parse(data);
-        if (parsedData.tipo === 'navegacion') {
-          setSeccionActiva(parsedData.seccion);
-        } else if (parsedData.tipo === 'llenado') {
-          const keys = Object.keys(parsedData.datos);
-          keys.forEach((key) => {
-            const path = key.split('.');
-            setReporte((prevReporte) => {
-              const updatedReporte = { ...prevReporte };
-              let current = updatedReporte;
-              for (let i = 0; i < path.length - 1; i++) {
-                if (!current[path[i]]) current[path[i]] = {};
-                current[path[i]] = { ...current[path[i]] };
-                current = current[path[i]];
-              }
-              current[path[path.length - 1]] = parsedData.datos[key];
-              return updatedReporte;
-            });
-          });
+        const parsed = JSON.parse(data);
+        if (parsed.type === 'active_hospitals_update') {
+          setListaHospitales(parsed.hospitals);
         }
-        if (parsedData.type === 'active_hospitals_update') {
-        setListaHospitales(parsedData.hospitals);
-      }
-      } catch (error) {
-        console.error('Error al parsear el mensaje:', error);
-        setMensajeError('Error al procesar los datos recibidos.');
-      }
+      } catch (e) { console.error('WS error:', e); }
     };
-
-    ws.onclose = () => {
-      console.log('Desconectado del servidor de WebSockets');
-    };
-
-    ws.onerror = (error) => {
-      console.error('Error en WebSocket:', error);
-    };
-
+    ws.onclose = () => console.log('WS desconectado');
+    ws.onerror = (e) => console.error('WS error:', e);
     setSocket(ws);
-
-    return () => {
-      ws.close();
-    };
+    return () => ws.close();
   }, []);
 
-  useEffect(() => {
-    if (seccionActiva && seccionRefs[seccionActiva] && seccionRefs[seccionActiva].current) {
-      seccionRefs[seccionActiva].current.scrollIntoView({
-        behavior: 'smooth',
-        block: 'start',
-      });
-    }
-  }, [seccionActiva]);
-
-  const obtenerClaseSeccion = (seccion) =>
-    seccionActiva === seccion ? 'seccion-activa' : 'seccion-inactiva';
-
-
-  const validarFormulario = () => {
-  const nuevosErrores = {};
-
-  // --- 1. Identificación del Servicio ---
-  if (!reporte.id_ambulancia.trim()) nuevosErrores.id_ambulancia = "Campo requerido";
-  if (!reporte.hora_estimada_llegada.trim()) nuevosErrores.hora_estimada_llegada = "Campo requerido";
-  if (!reporte.ubicacion_actual.trim()) nuevosErrores.ubicacion_actual = "Campo requerido";
-
-  // --- 2. Resumen Inicial del Paciente ---
-  // Para objetos anidados, creamos el sub-objeto si no existe
-  if (!reporte.paciente.nombre.trim() || !reporte.paciente.edad || !reporte.paciente.sexo) {
-    if (!nuevosErrores.paciente) nuevosErrores.paciente = {};
-
-    if (!reporte.paciente.nombre.trim()) nuevosErrores.paciente.nombre = "Campo requerido";
-    if (!reporte.paciente.edad) nuevosErrores.paciente.edad = "Campo requerido";
-    if (!reporte.paciente.sexo) nuevosErrores.paciente.sexo = "Campo requerido";
-    // ... (añade el resto de campos de 'paciente' que sean requeridos)
-  }
-
-  // --- 3. Signos Vitales ---
-  if (!reporte.signos_vitales.frecuencia_cardiaca.trim()) {
-    if (!nuevosErrores.signos_vitales) nuevosErrores.signos_vitales = {};
-    nuevosErrores.signos_vitales.frecuencia_cardiaca = "Campo requerido";
-  }
-  // ... (añade el resto de 'signos_vitales')
-
-  // ... (AÑADE EL RESTO DE TUS CAMPOS REQUERIDOS AQUÍ) ...
-
-
-  // Actualizamos el estado de errores
-  setErrors(nuevosErrores);
-
-  // El formulario es válido si el objeto de errores está vacío
-  return Object.keys(nuevosErrores).length === 0;
-};
-
+  // Funciones de manejo de cambio
   const handleChange = (path, value) => {
-    setReporte((prevReporte) => {
-      const updatedReporte = { ...prevReporte };
-      let current = updatedReporte;
+    setReporte(prev => {
+      const updated = { ...prev };
+      let current = updated;
       for (let i = 0; i < path.length - 1; i++) {
         if (!current[path[i]]) current[path[i]] = {};
         current[path[i]] = { ...current[path[i]] };
         current = current[path[i]];
       }
       current[path[path.length - 1]] = value;
-      return updatedReporte;
+      return updated;
     });
   };
 
-  const handleIntervencionChange = (field, value) => {
-    setIntervencionActual((prev) => ({
-      ...prev,
-      [field]: value,
-    }));
-  };
-
+  // Intervenciones
   const agregarIntervencion = () => {
-    // allow partially empty interventions? original required all fields — we require tipo o descripcion
-    if (
-      intervencionActual.tipo_intervencion.trim() !== '' ||
-      intervencionActual.descripcion.trim() !== ''
-    ) {
-      setReporte((prevReporte) => ({
-        ...prevReporte,
-        intervenciones: [
-          ...prevReporte.intervenciones,
-          {
-            ...intervencionActual,
-            hora_intervencion: intervencionActual.hora_intervencion || '',
-          },
-        ],
+    if (intervencionActual.tipo_intervencion.trim() || intervencionActual.descripcion.trim()) {
+      setReporte(prev => ({
+        ...prev,
+        intervenciones: [...prev.intervenciones, { ...intervencionActual, hora_intervencion: intervencionActual.hora_intervencion || '' }],
       }));
-      setIntervencionActual({
-        tipo_intervencion: '',
-        descripcion: '',
-        hora_intervencion: '',
-      });
+      setIntervencionActual({ tipo_intervencion: '', descripcion: '', hora_intervencion: '' });
+      mostrarNotificacion('Intervención agregada', 'success');
     } else {
-      alert('Por favor, complete al menos el tipo o la descripción de la intervención.');
+      mostrarNotificacion('Complete al menos tipo o descripción', 'error');
     }
   };
-
   const eliminarIntervencion = (index) => {
-    setReporte((prevReporte) => ({
-      ...prevReporte,
-      intervenciones: prevReporte.intervenciones.filter((_, i) => i !== index),
+    setReporte(prev => ({
+      ...prev,
+      intervenciones: prev.intervenciones.filter((_, i) => i !== index),
     }));
+  };
+
+  // Notificaciones
+  const mostrarNotificacion = (texto, tipo = 'info') => {
+    setMensajeNotificacion({ texto, tipo });
+    setTimeout(() => setMensajeNotificacion({ texto: '', tipo: '' }), 4000);
+  };
+
+  // Función para recibir datos del NLP
+
+const handleNLPData = (data) => {
+    const ahora = new Date();
+    const horas = String(ahora.getHours()).padStart(2, '0');
+    const minutos = String(ahora.getMinutes()).padStart(2, '0');
+    const horaActual = `${horas}:${minutos}`;
+
+    // Asegurar que las intervenciones tengan hora
+    const intervencionesConHora = (data.intervenciones || []).map(iv => ({
+        ...iv,
+        hora_intervencion: iv.hora_intervencion || horaActual
+    }));
+
+    setReporte(prev => ({
+        ...prev,
+        paciente: {
+            ...prev.paciente,
+            nombre: data.paciente.nombre || prev.paciente.nombre,
+            edad: data.paciente.edad || prev.paciente.edad,
+            sexo: data.paciente.sexo || prev.paciente.sexo,
+            motivo_urgencia: data.motivo_urgencia || prev.paciente.motivo_urgencia,
+            descripcion_lesion: data.descripcion_lesion || prev.paciente.descripcion_lesion,
+        },
+        signos_vitales: {
+            ...prev.signos_vitales,
+            frecuencia_cardiaca: data.signos_vitales.frecuencia_cardiaca || prev.signos_vitales.frecuencia_cardiaca,
+            frecuencia_respiratoria: data.signos_vitales.frecuencia_respiratoria || prev.signos_vitales.frecuencia_respiratoria,
+            tension_arterial: data.signos_vitales.tension_arterial || prev.signos_vitales.tension_arterial,
+            saturacion_oxigeno: data.signos_vitales.saturacion_oxigeno || prev.signos_vitales.saturacion_oxigeno,
+            temperatura: data.signos_vitales.temperatura || prev.signos_vitales.temperatura,
+        },
+        hallazgos_escena: data.hallazgos_escena || prev.hallazgos_escena,
+        intervenciones: intervencionesConHora.length > 0 ? intervencionesConHora : prev.intervenciones,
+    }));
+
+    // Actualizar Glasgow
+    if (data.glasgow) {
+        if (data.glasgow.ocular) setOcular(data.glasgow.ocular);
+        if (data.glasgow.verbal) setVerbal(data.glasgow.verbal);
+        if (data.glasgow.motor) setMotor(data.glasgow.motor);
+    }
+
+    // Hora estimada de llegada
+    setReporte(prev => ({
+        ...prev,
+        hora_estimada_llegada: data.hora_estimada || horaActual
+    }));
+
+    mostrarNotificacion('✅ Datos extraídos correctamente', 'success');
+};
+  // Al finalizar la grabación, se procesa automáticamente (ya está en VoiceAssistant)
+
+  // Validación
+  const validarFormulario = () => {
+    const errores = [];
+    if (!reporte.id_ambulancia.trim()) errores.push('Número de ambulancia');
+    if (!reporte.hora_estimada_llegada.trim()) errores.push('Hora estimada de llegada');
+    if (!reporte.ubicacion_actual.trim()) errores.push('Ubicación actual');
+    if (!hospitalSeleccionado) errores.push('Hospital destino');
+    if (!reporte.paciente.nombre.trim()) errores.push('Nombre del paciente');
+    if (!reporte.paciente.edad) errores.push('Edad');
+    if (!reporte.paciente.sexo) errores.push('Sexo');
+    if (!reporte.paciente.motivo_urgencia.trim()) errores.push('Motivo de urgencia');
+    if (errores.length > 0) {
+      mostrarNotificacion(`Faltan campos: ${errores.join(', ')}`, 'error');
+      return false;
+    }
+    return true;
+  };
+
+  // Envío
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!validarFormulario()) return;
+
+    const callId = Date.now().toString();
+
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({
+        type: 'patient_transfer_notification',
+        callId,
+        ambulanceId: reporte.id_ambulancia,
+        patientInfo: {
+          age: reporte.paciente.edad,
+          sex: reporte.paciente.sexo,
+          condition: triaje.label,
+          glasgow: total,
+        },
+        eta: reporte.hora_estimada_llegada,
+        hospitalId: hospitalSeleccionado,
+        ubicacion: reporte.ubicacion_actual,
+      }));
+    }
+
+    window.open(`/videocall?room=${callId}`, '_blank');
+
+    const reporteParaEnviar = {
+      ...reporte,
+      hospitalId: hospitalSeleccionado,
+      glasgow: { ocular, verbal, motor, total },
+      triaje: triaje,
+      paciente: {
+        ...reporte.paciente,
+        observaciones: `[VideoID: ${callId}] ${reporte.paciente.observaciones || ''}`.trim(),
+      },
+      hora_estimada_llegada: combinarFechaYHora(reporte.hora_estimada_llegada),
+    };
+
+    try {
+      const response = await fetch(`${API_URL}/reporte-prehospitalario`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(reporteParaEnviar),
+      });
+      if (response.ok) {
+        mostrarNotificacion('✅ Reporte enviado exitosamente', 'success');
+      } else {
+        const errorText = await response.text();
+        mostrarNotificacion(`❌ Error al guardar: ${errorText}`, 'error');
+      }
+    } catch (error) {
+      mostrarNotificacion('❌ Error de red al enviar', 'error');
+    }
   };
 
   const combinarFechaYHora = (hora) => {
     if (!hora) return '';
-    const fechaActual = new Date();
     const [horas, minutos] = hora.split(':');
-    fechaActual.setHours(Number.parseInt(horas, 10), Number.parseInt(minutos, 10), 0, 0);
-    const tzOffset = fechaActual.getTimezoneOffset() * 60000;
-    const fechaLocal = new Date(fechaActual - tzOffset);
-    return fechaLocal.toISOString();
+    const fecha = new Date();
+    fecha.setHours(parseInt(horas, 10), parseInt(minutos, 10), 0, 0);
+    return fecha.toISOString();
   };
 
-	const handleSubmit = async (e) => {
-		if (e && e.preventDefault) e.preventDefault();
+  // Cerrar sesión
+  const handleLogout = () => {
+    localStorage.removeItem('ambulanciaId');
+    // Aquí también limpiar token de autenticación si existe
+    navigate('/login');
+  };
 
-		// ------------------------------------------------------------
-		// 1. VALIDACIÓN (Conservamos la seguridad de tu compañero)
-		// ------------------------------------------------------------
-		const esValido = validarFormulario();
-		if (!esValido) {
-			console.log("Formulario inválido. Errores:", errors);
-			return; // Si faltan datos, no enviamos nada
-		}
-		setErrors({});
-
-		// ------------------------------------------------------------
-		// 2. LÓGICA DE VIDEOLLAMADA (INYECCIÓN TUYA) 💉
-		// ------------------------------------------------------------
-
-		// A. Generar ID Numérico (Timestamp) para la sala
-		const callId = Date.now().toString();
-
-		// B. Enviar Alerta por WebSocket (Avisa a Hospital y Médico)
-		if (socket && socket.readyState === WebSocket.OPEN) {
-			const notificacionSocket = {
-				type: 'patient_transfer_notification',
-				callId: callId,
-				ambulanceId: reporte.id_ambulancia || 'AMB-TEMP',
-
-				// Datos resumen para la alerta visual del Médico
-				patientInfo: {
-					age: reporte.paciente.edad,
-					sex: reporte.paciente.sexo,
-					condition: triagePresets[variable] ? triagePresets[variable].label : 'No especificado'
-				},
-				eta: reporte.hora_estimada_llegada
-			};
-
-			socket.send(JSON.stringify(notificacionSocket));
-			console.log("🚨 Alerta enviada por Socket. Sala:", callId);
-		} else {
-			console.warn("⚠️ Socket desconectado. No se envió alerta en tiempo real.");
-		}
-
-		// C. Abrir la videollamada automáticamente (Nueva Pestaña)
-		// Esto garantiza que el paramédico entre a la sala al instante
-		window.open(`/videocall?room=${callId}`, '_blank');
-
-		// ------------------------------------------------------------
-		// 3. GUARDADO EN BASE DE DATOS (INTEGRACIÓN) 💾
-		// ------------------------------------------------------------
-
-		// 1. Hacemos una copia profunda para NO modificar el estado original
-		// (Esto evita que se acumulen los IDs [VideoID] [VideoID]...)
-		const reporteParaEnviar = JSON.parse(JSON.stringify(reporte));
-
-		// 2. Ahora sí, inyectamos el ID en la copia
-		const notaVideo = ` [VideoID: ${callId}]`;
-
-		// Aseguramos que observaciones sea un string
-		const obsActual = reporteParaEnviar.paciente.observaciones || '';
-		reporteParaEnviar.paciente.observaciones = obsActual + notaVideo;
-
-		if (reporteParaEnviar.paciente.observaciones) {
-			reporteParaEnviar.paciente.observaciones += notaVideo;
-		} else {
-			reporteParaEnviar.paciente.observaciones = notaVideo;
-		}
-
-		// Formato de hora (si tu compañero usa una función auxiliar)
-		if (reporte.hora_estimada_llegada && typeof combinarFechaYHora === 'function') {
-			reporteParaEnviar.hora_estimada_llegada = combinarFechaYHora(reporte.hora_estimada_llegada);
-		} else {
-			// Fallback por si acaso: asegurar formato ISO
-			// reporteParaEnviar.hora_estimada_llegada = new Date().toISOString();
-		}
-
-		// ❌ IMPORTANTE: No enviamos campos extra que Prisma no conozca
-		// delete reporteParaEnviar.callId; // (Si lo hubieras agregado al objeto antes)
-		// delete reporteParaEnviar.codigo_prioridad_color; // (Si lo tuvieras)
-
-		try {
-			console.log(
-	'Enviando a BD:',
-	JSON.stringify(reporteParaEnviar, null, 2)
-);
-
-			// Usamos la variable de entorno o localhost por defecto
-			const API_URL = import.meta.env.VITE_API || 'http://localhost:3000';
-
-			const response = await fetch(`${API_URL}/reporte-prehospitalario/`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(reporteParaEnviar),
-			});
-
-			if (response.ok) {
-				console.log('✅ Reporte guardado exitosamente');
-				// Opcional: alert('Reporte enviado correctamente');
-			} else {
-				const errorText = await response.text();
-				console.error('❌ Error al guardar en BD:', errorText);
-				// No mostramos alerta de error al usuario para no asustarlo,
-				// ya que la videollamada (lo urgente) SÍ se abrió.
-			}
-		} catch (error) {
-			console.error('Error de conexión HTTP:', error);
-		}
-	};
-
-  // Small helpers for triage presets
-  const triagePresets = [
-    { label: 'Crítico (Rojo)', value: '#ff4d4f' },
-    { label: 'Urgente (Naranja)', value: '#ff7a45' },
-    { label: 'Observación (Amarillo)', value: '#ffd666' },
-    { label: 'Estable (Verde)', value: '#52c41a' },
-    { label: 'Normal (Azul)', value: '#1890ff' },
-  ];
+  // Actualizar ambulancia en localStorage y estado
+  const handleAmbulanciaChange = (value) => {
+    setAmbulanciaId(value);
+    localStorage.setItem('ambulanciaId', value);
+    setReporte(prev => ({ ...prev, id_ambulancia: value }));
+  };
 
   return (
     <div className={`reporte-root ${theme === 'dark' ? 'theme-dark' : 'theme-light'}`}>
-      {/* Inline CSS to replicate look & feel quickly */}
       <style>{`
         :root {
           --bg-light: #f5f7f8;
           --panel-light: #ffffff;
           --text-light: #1f2d3d;
-          --muted-light: #6b7280;
-
           --bg-dark: #111418;
           --panel-dark: #1f262a;
           --text-dark: #e6eef6;
-          --muted-dark: #9aa7b2;
-
           --accent: #1d8cf8;
         }
-        [data-theme="light"] .reporte-root { background: var(--bg-light); color: var(--text-light); min-height: 100%;}
-        [data-theme="dark"] .reporte-root { background: var(--bg-dark); color: var(--text-dark); min-height: 100%;}
-
-        .container {
-          max-width: 1100px;
-          margin: 24px auto 120px;
-          padding: 20px;
-          background: var(--panel-light);
-          border-radius: 8px;
-          box-shadow: 0 6px 18px rgba(16,24,40,0.08);
-        }
-        [data-theme="dark"] .container {
-          background: var(--panel-dark);
-          box-shadow: none;
-        }
-
-        .header {
-          display:flex;
-          align-items:center;
-          justify-content:space-between;
-          margin-bottom:16px;
-        }
-        .brand {
-          display:flex;
-          gap:12px;
-          align-items:center;
-        }
-        .logo {
-          width:36px;height:36px;border-radius:6px;background:linear-gradient(135deg,var(--accent), #0aa);
-        }
-
-        .triage {
-          display:flex;
-          gap:12px;
-          align-items:center;
-        }
-
-        form.fieldset-list { display:block; gap:18px; }
-        fieldset { border: none; padding: 12px 0; }
-        legend { font-weight:700; margin-bottom:8px; font-size:1.05rem; }
-        label { display:block; font-size:0.9rem; margin-bottom:6px; color: inherit; opacity:0.9; }
-        input[type="text"], input[type="number"], input[type="time"], textarea {
-          width:100%;
-          padding:10px;border-radius:6px;border:1px solid rgba(0,0,0,0.08);
-          background: transparent;
-          color: inherit;
-        }
-        [data-theme="dark"] input, [data-theme="dark"] textarea {
-          border:1px solid rgba(255,255,255,0.04);
-          background: rgba(255,255,255,0.02);
-        }
-        .grid-2 { display:grid; grid-template-columns: 1fr 1fr; gap:14px; align-items: center;}
-        .signs-grid { display:grid; grid-template-columns: repeat(3,1fr); gap:8px; }
-        .intervencion-item { padding:12px; border-radius:8px; background: rgba(0,0,0,0.03); border:1px solid rgba(0,0,0,0.04); }
-        [data-theme="dark"] .intervencion-item { background: rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.03); }
-
-        .intervencion-controls { display:flex; gap:8px; align-items:center; margin-top:8px; }
-        .btn {
-          padding:8px 12px;border-radius:6px;border:none;cursor:pointer;
-        }
-        .btn-primary { background: #0b86ff; color:white; }
-        .btn-danger { background:#ff4d4f;color:white; }
-        .icon-btn { background:transparent; border:1px solid rgba(0,0,0,0.06); padding:8px; border-radius:6px; cursor:pointer; }
-        [data-theme="dark"] .icon-btn { border:1px solid rgba(255,255,255,0.04); }
-
-        /* Sticky bottom submit */
-        .sticky-submit {
-          position: fixed;
-          left: 0;
-          right: 0;
-          bottom: 0;
-          background: rgba(0,0,0,0.02);
-          backdrop-filter: blur(6px);
-          padding: 14px 20px;
-          display:flex;
-          justify-content:center;
-          z-index: 60;
-        }
+        [data-theme="light"] .reporte-root { background: var(--bg-light); color: var(--text-light); min-height: 100vh; }
+        [data-theme="dark"] .reporte-root { background: var(--bg-dark); color: var(--text-dark); min-height: 100vh; }
+        .container { max-width: 1100px; margin: 24px auto 120px; padding: 20px; background: var(--panel-light); border-radius: 12px; box-shadow: 0 6px 18px rgba(0,0,0,0.06); }
+        [data-theme="dark"] .container { background: var(--panel-dark); box-shadow: none; }
+        .header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
+        .brand { display: flex; align-items: center; gap: 12px; }
+        .logo { width: 36px; height: 36px; border-radius: 8px; background: linear-gradient(135deg, var(--accent), #0aa); }
+        .header-actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+        .triage-indicator { display: flex; align-items: center; gap: 8px; }
+        .triage-circle { width: 40px; height: 40px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.2); }
+        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+        .signs-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 8px; }
+        .intervencion-item { padding: 10px; border-radius: 8px; background: rgba(0,0,0,0.03); border: 1px solid rgba(0,0,0,0.04); margin-bottom: 8px; }
+        [data-theme="dark"] .intervencion-item { background: rgba(255,255,255,0.02); border-color: rgba(255,255,255,0.03); }
+        fieldset { border: none; padding: 12px 0; margin: 0; }
+        legend { font-weight: 700; font-size: 1.05rem; margin-bottom: 10px; }
+        label { display: block; font-size: 0.85rem; margin-bottom: 4px; font-weight: 500; }
+        input, select, textarea { width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid rgba(0,0,0,0.08); background: transparent; color: inherit; font-size: 0.95rem; }
+        [data-theme="dark"] input, [data-theme="dark"] select, [data-theme="dark"] textarea { border-color: rgba(255,255,255,0.04); background: rgba(255,255,255,0.02); }
+        .btn { padding: 6px 12px; border-radius: 6px; border: none; cursor: pointer; }
+        .btn-primary { background: var(--accent); color: white; }
+        .btn-danger { background: #ff4d4f; color: white; }
+        .icon-btn { background: transparent; border: 1px solid rgba(0,0,0,0.06); padding: 6px 10px; border-radius: 6px; cursor: pointer; }
+        .sticky-submit { position: fixed; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.02); backdrop-filter: blur(6px); padding: 14px 20px; display: flex; justify-content: center; z-index: 60; }
         [data-theme="dark"] .sticky-submit { background: rgba(0,0,0,0.6); }
-
-        button{
-          width: calc(100% - 20px);
-          max-width: 420px;
-          padding:12px 22px;
-          border-radius: 10px;
-          font-weight:700;
-          border:none;
-          cursor:pointer;
-          font-size:1rem;
-        }
-
-        .boton_triage.light{color:white;}
-        .boton_triage.dark{background:#e94b4b;color:white;}
-
-        .sticky-inner {
-          width: 100%;
-          max-width: 1100px;
-          display:flex;
-          justify-content:center;
-        }
-        select{
-          border:1px solid rgba(255,255,255,0.04);
-          background: rgba(255,255,255,0.02);
-        }
-        option{
-          border:1px solid rgba(255,255,255,0.04);
-          background: rgba(255,255,255,0.02);
-        }
-        .send-button {
-          width: calc(100% - 20px);
-          max-width: 420px;
-          padding:12px 22px;
-          border-radius: 10px;
-          font-weight:700;
-          border:none;
-          cursor:pointer;
-        }
-        .send-button.light { background: #0b86ff; color:white;}
-        .send-button.dark { background:#e94b4b; color:white; }
-
-        .triage-circle {
-          width:84px; height:84px; border-radius:50%;
-          border:4px solid rgba(255,255,255,0.08);
-          box-shadow: 0 6px 12px rgba(0,0,0,0.12);
-        }
-
-        /* small responsive tweaks */
-        @media (max-width:900px){
-          .grid-2 { grid-template-columns: 1fr; }
-          .signs-grid { grid-template-columns: repeat(2,1fr); }
-        }
+        .send-button { width: calc(100% - 20px); max-width: 420px; padding: 12px 22px; border-radius: 10px; font-weight: 700; border: none; cursor: pointer; background: var(--accent); color: white; }
+        .send-button.dark { background: #e94b4b; }
+        .toast { position: fixed; top: 20px; right: 20px; padding: 12px 20px; border-radius: 8px; color: white; font-weight: 500; z-index: 9999; box-shadow: 0 4px 12px rgba(0,0,0,0.15); max-width: 400px; }
+        .toast.success { background: #52c41a; }
+        .toast.error { background: #ff4d4f; }
+        .toast.info { background: #1d8cf8; }
+        .logout-btn { background: transparent; border: 1px solid rgba(0,0,0,0.1); padding: 6px 14px; border-radius: 6px; cursor: pointer; color: inherit; }
+        [data-theme="dark"] .logout-btn { border-color: rgba(255,255,255,0.1); }
+        @media (max-width: 700px) { .grid-2 { grid-template-columns: 1fr; } .signs-grid { grid-template-columns: 1fr 1fr; } }
       `}</style>
-      <div className="container" role="main">
+
+      {mensajeNotificacion.texto && (
+        <div className={`toast ${mensajeNotificacion.tipo}`}>{mensajeNotificacion.texto}</div>
+      )}
+
+      <div className="container">
         <div className="header">
           <div className="brand">
             <div className="logo" />
             <div>
-              <div style={{fontWeight:700}}>Emergencity</div>
-              <div style={{fontSize:12, color: 'gray'}}>Reporte prehospitalario</div>
+              <div style={{ fontWeight: 700 }}>Emergencity</div>
+              <div style={{ fontSize: 12, opacity: 0.7 }}>Reporte prehospitalario</div>
             </div>
           </div>
-
-          {/* Theme toggle and triage */}
-          <div style={{display:'flex', gap:16, alignItems:'center'}}>
-              <div className="triage">
-              <div style={{textAlign:'right', marginRight:8}}>
-                <div style={{fontSize:12}}>
-                  <button
-                  onClick={aumentarVariable}
-                  className={`boton_triage ${theme === 'dark' ? 'dark' : 'light'}`}
-                  style={{background: triagePresets[variable].value, marginRight:20, borderRadius:50, width: 100, height: 100}}
-                  >Triage
-                  </button>
-                </div>
-              </div>
-              {/* <div className="triage-circle" style={{background: triagePresets[variable].value}} title="Color de triaje" /> */}
-              <p>
-                {/* Cambia el color del círculo de triaje según la selección */}
-                {triagePresets[variable].label}
-              </p>
-
-              <div>
-                {/* <select
-                  className='seleccion_de_triage'
-                  value={triagePresets.find(p => p.value === triajeColor)?.value || (triagePresets[0].value)}
-                >
-                  {triagePresets.map(p => (
-                    <option key={p.value} value={p.value === 'custom' ? 'custom' : p.value}>
-                      {p.label}
-                    </option>
-                  ))}
-                </select> */}
-                {/* custom color picker */}
-                <div style={{marginTop:8, display:'flex', gap:8, alignItems:'center'}}>
-                  {/* <input
-                    placeholder="Código/nota prioridad"
-                    value={reporte.codigo_prioridad}
-                    onChange={(e) => handleChange(['codigo_prioridad'], e.target.value)}
-                    style={{padding:6, borderRadius:6}}
-                  /> */}
-                </div>
-              </div>
+          <div className="header-actions">
+            <div className="triage-indicator">
+              <div className="triage-circle" style={{ background: triaje.color }} />
+              <span style={{ fontSize: '14px', fontWeight: 'bold' }}>{triaje.label}</span>
+              <span style={{ fontSize: '13px', opacity: 0.6 }}>GCS: {total}</span>
             </div>
-
-            <div style={{display:'flex', gap:8, alignItems:'center'}}>
-              <label style={{fontSize:12}}>Tema</label>
-              <button
-                onClick={() => setTheme(t => t === 'light' ? 'dark' : 'light')}
-                className="btn icon-btn"
-                aria-label="Toggle theme"
-                title="Alternar tema claro/oscuro"
-              >
-                {theme === 'light' ? '🌙' : '🌤️'}
-              </button>
-            </div>
+            <button onClick={() => setTheme(t => t === 'light' ? 'dark' : 'light')} className="icon-btn">
+              {theme === 'light' ? '🌙' : '🌤️'}
+            </button>
+            <button onClick={handleLogout} className="logout-btn">
+              🚪 Cerrar sesión
+            </button>
           </div>
         </div>
 
-        {mensajeError && (
-          <div style={{background:'#ffe5e5', color:'#721c24', padding:12, borderRadius:8, marginBottom:12}}>
-            {mensajeError}
-          </div>
-        )}
-
-        <form onSubmit={handleSubmit} className="fieldset-list" aria-label="Formulario reporte">
-          {/* 1. Identificación del Servicio */}
-          <fieldset ref={seccionRefs.identificacion_servicio} className={obtenerClaseSeccion('identificacion_servicio')}>
+        <form onSubmit={handleSubmit}>
+          <fieldset>
             <legend>1. Identificación del Servicio</legend>
-            {/* --- NUEVO BLOQUE DE SELECCIÓN DE HOSPITAL --- */}
-  <div style={{ marginBottom: 16, padding: 10, background: 'rgba(0,0,0,0.03)', borderRadius: 8, border: '1px solid var(--accent)' }}>
-    <label style={{ fontWeight: 'bold', color: 'var(--accent)' }}>🏥 Hospital Destino (Requerido)</label>
-    <select
-      value={hospitalSeleccionado}
-      onChange={(e) => setHospitalSeleccionado(e.target.value)}
-      required
-      style={{
-        width: '100%',
-        padding: '12px',
-        borderRadius: '6px',
-        marginTop: '8px',
-        border: '1px solid rgba(0,0,0,0.1)',
-        fontSize: '1rem',
-        fontWeight: 'bold',
-        color: 'black',
-      }}
-    >
-      <option value="">-- Selecciona el hospital --</option>
-      {listaHospitales.map((hospital) => (
-        <option key={hospital.id} value={hospital.id}>
-          {hospital.nombre} {hospital.camasDisponibles ? `(Camas: ${hospital.camasDisponibles})` : ''}
-        </option>
-      ))}
-    </select>
-  </div>
-  {/* --------------------------------------------- */}
             <div className="grid-2">
               <div>
-                <label>Número de ambulancia:</label>
-                <input type="text" value={reporte.id_ambulancia} onChange={(e) => handleChange(['id_ambulancia'], e.target.value)} required />
+                <label>Número de ambulancia *</label>
+                <input
+                  type="text"
+                  value={ambulanciaId}
+                  onChange={(e) => handleAmbulanciaChange(e.target.value)}
+                  placeholder="Ej. AMB-001"
+                  required
+                />
+                <small style={{ opacity: 0.6 }}>Este dato se guarda automáticamente</small>
               </div>
               <div>
-                <label>Hora estimada de llegada:</label>
-                <input type="time" value={reporte.hora_estimada_llegada} onChange={(e) => handleChange(['hora_estimada_llegada'], e.target.value)} required />
+                <label>Hora estimada de llegada *</label>
+                <input
+                  type="time"
+                  value={reporte.hora_estimada_llegada}
+                  onChange={e => handleChange(['hora_estimada_llegada'], e.target.value)}
+                  required
+                />
+                <small style={{ opacity: 0.6 }}>Se actualiza al grabar</small>
               </div>
             </div>
-            <div style={{marginTop:8}}>
-              <label htmlFor='address'>Ubicación actual:</label>
-              <input type="text" value={reporte.ubicacion_actual} onChange={(e) => handleChange(['ubicacion_actual'], e.target.value)} required />
-            </div>
-          </fieldset>
-
-          {/* 2. Resumen Inicial del Paciente */}
-          <fieldset ref={seccionRefs.resumen_inicial} className={obtenerClaseSeccion('resumen_inicial')}>
-            <legend>2. Resumen Inicial del Paciente</legend>
-
-            <div className="grid-2">
-              <div>
-                <label htmlFor='name'>Nombre del paciente:</label>
-                <input type="text" value={reporte.paciente.nombre} onChange={(e) => handleChange(['paciente','nombre'], e.target.value)} required />
-              </div>
-              <div>
-                <label htmlFor='age'>Edad:</label>
-                <input style={{width: 100}} type="number" value={reporte.paciente.edad} onChange={(e) => handleChange(['paciente','edad'], e.target.value ? Number.parseInt(e.target.value,10) : '')} required />
-              </div>
-            </div>
-
-            <div style={{display:'flex', gap:12, marginTop:8}}>
-              <div>
-                <label htmlFor='SEX'>Sexo:</label>
-                <div style={{display:'flex', gap:12, marginTop:6}}>
-                  <label><input type="radio" name="sexo" value="M" checked={reporte.paciente.sexo === 'M'} onChange={(e) => handleChange(['paciente','sexo'], e.target.value)} /> Masculino</label>
-                  <label><input type="radio" name="sexo" value="F" checked={reporte.paciente.sexo === 'F'} onChange={(e) => handleChange(['paciente','sexo'], e.target.value)} /> Femenino</label>
-                </div>
-              </div>
-
-              <div style={{flex:1}}>
-                <label htmlFor='reasonfor'>Motivo de urgencia:</label>
-                <textarea value={reporte.paciente.motivo_urgencia} onChange={(e) => handleChange(['paciente','motivo_urgencia'], e.target.value)} />
-              </div>
-            </div>
-
-            <div style={{marginTop:8}}>
-              <label>Descripción de la lesión:</label>
-              <textarea value={reporte.paciente.descripcion_lesion} onChange={(e) => handleChange(['paciente','descripcion_lesion'], e.target.value)} />
-            </div>
-
-            <div className="grid-2" style={{marginTop:8}}>
-              <div>
-                <label>Lugar donde se encontró al paciente:</label>
-                <input type="text" value={reporte.paciente.lugar} onChange={(e) => handleChange(['paciente','lugar'], e.target.value)} />
-              </div>
-              <div>
-                <label>Tipo de accidente:</label>
-                <input type="text" value={reporte.paciente.tipo_accidente} onChange={(e) => handleChange(['paciente','tipo_accidente'], e.target.value)} />
-              </div>
-            </div>
-
-            <div style={{marginTop:8}}>
-              <label>Observaciones adicionales:</label>
-              <textarea value={reporte.paciente.observaciones} onChange={(e) => handleChange(['paciente','observaciones'], e.target.value)} />
-            </div>
-          </fieldset>
-
-          {/* 3. Signos Vitales */}
-          <fieldset ref={seccionRefs.signos_vitales} className={obtenerClaseSeccion('signos_vitales')}>
-            <legend>3. Signos Vitales Iniciales y Monitoreo</legend>
-            <div className="signs-grid" style={{marginBottom:8}}>
-              <div>
-                <label>Frecuencia cardíaca (FC)</label>
-                <input value={reporte.signos_vitales.frecuencia_cardiaca} onChange={(e) => handleChange(['signos_vitales','frecuencia_cardiaca'], e.target.value)} />
-              </div>
-              <div>
-                <label>Frecuencia respiratoria (FR)</label>
-                <input value={reporte.signos_vitales.frecuencia_respiratoria} onChange={(e) => handleChange(['signos_vitales','frecuencia_respiratoria'], e.target.value)} />
-              </div>
-              <div>
-                <label>Presión arterial (TA)</label>
-                <input value={reporte.signos_vitales.tension_arterial} onChange={(e) => handleChange(['signos_vitales','tension_arterial'], e.target.value)} />
-              </div>
-
-              <div>
-                <label>SpO₂</label>
-                <input value={reporte.signos_vitales.saturacion_oxigeno} onChange={(e) => handleChange(['signos_vitales','saturacion_oxigeno'], e.target.value)} />
-              </div>
-              <div>
-                <label>Temperatura</label>
-                <input value={reporte.signos_vitales.temperatura} onChange={(e) => handleChange(['signos_vitales','temperatura'], e.target.value)} />
-              </div>
-              <div>
-                <label>Nivel de glucosa</label>
-                <input value={reporte.signos_vitales.nivel_glucosa} onChange={(e) => handleChange(['signos_vitales','nivel_glucosa'], e.target.value)} />
-              </div>
-            </div>
-
             <div>
-              <label>Estado neurológico</label>
-              <textarea value={reporte.signos_vitales.estado_neurologico} onChange={(e) => handleChange(['signos_vitales','estado_neurologico'], e.target.value)} />
+              <label>Ubicación actual *</label>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <input
+                  type="text"
+                  value={reporte.ubicacion_actual}
+                  onChange={e => handleChange(['ubicacion_actual'], e.target.value)}
+                  required
+                  style={{ flex: 1 }}
+                />
+                {obteniendoUbicacion && <span>🔄 Obteniendo...</span>}
+                {ubicacion.lat && <span style={{ fontSize: '12px', opacity: 0.6 }}>📍 {ubicacion.lat.toFixed(4)}, {ubicacion.lng.toFixed(4)}</span>}
+              </div>
+            </div>
+            <div>
+              <label>Hospital destino *</label>
+              <select value={hospitalSeleccionado} onChange={e => setHospitalSeleccionado(e.target.value)} required>
+  <option value="">-- Seleccionar --</option>
+  {listaHospitales.map(h => (
+    <option key={h.id} value={h.id}>
+      {h.nombre} {h.camasDisponibles ? `(Camas: ${h.camasDisponibles})` : ''}
+      {ubicacion.lat && h.lat && h.lng && ` (${calcularDistancia(ubicacion.lat, ubicacion.lng, h.lat, h.lng).toFixed(1)} km)`}
+    </option>
+  ))}
+</select>
+              {ubicacion.lat && <small style={{ opacity: 0.6 }}>Sugerencia: hospital más cercano seleccionado</small>}
             </div>
           </fieldset>
 
-          {/* 4. Intervenciones Realizadas */}
-          <fieldset ref={seccionRefs.intervenciones_realizadas} className={obtenerClaseSeccion('intervenciones_realizadas')}>
-            <legend>4. Intervenciones Realizadas</legend>
+          <fieldset>
+            <legend>2. Datos del Paciente</legend>
+            <div className="grid-2">
+              <div>
+                <label>Nombre completo *</label>
+                <input type="text" value={reporte.paciente.nombre} onChange={e => handleChange(['paciente', 'nombre'], e.target.value)} required />
+              </div>
+              <div>
+                <label>Edad (años) *</label>
+                <input type="number" value={reporte.paciente.edad} onChange={e => handleChange(['paciente', 'edad'], e.target.value)} required />
+              </div>
+            </div>
+            <div style={{ margin: '8px 0' }}>
+              <label>Sexo *</label>
+              <div style={{ display: 'flex', gap: '16px' }}>
+                <label><input type="radio" name="sexo" value="M" checked={reporte.paciente.sexo === 'M'} onChange={e => handleChange(['paciente', 'sexo'], e.target.value)} /> Masculino</label>
+                <label><input type="radio" name="sexo" value="F" checked={reporte.paciente.sexo === 'F'} onChange={e => handleChange(['paciente', 'sexo'], e.target.value)} /> Femenino</label>
+              </div>
+            </div>
+            <div>
+              <label>Motivo de urgencia *</label>
+              <textarea value={reporte.paciente.motivo_urgencia} onChange={e => handleChange(['paciente', 'motivo_urgencia'], e.target.value)} required />
+            </div>
+            <div>
+              <label>Descripción de la lesión</label>
+              <textarea value={reporte.paciente.descripcion_lesion} onChange={e => handleChange(['paciente', 'descripcion_lesion'], e.target.value)} />
+            </div>
+          </fieldset>
 
-            {/* Listado de intervenciones agregadas */}
-            {reporte.intervenciones.length === 0 && <div style={{color:'gray'}}>No hay intervenciones registradas.</div>}
+          <fieldset>
+            <legend>3. Signos Vitales (opcional)</legend>
+            <div className="signs-grid">
+              <div><label>FC</label><input value={reporte.signos_vitales.frecuencia_cardiaca} onChange={e => handleChange(['signos_vitales', 'frecuencia_cardiaca'], e.target.value)} /></div>
+              <div><label>FR</label><input value={reporte.signos_vitales.frecuencia_respiratoria} onChange={e => handleChange(['signos_vitales', 'frecuencia_respiratoria'], e.target.value)} /></div>
+              <div><label>TA</label><input value={reporte.signos_vitales.tension_arterial} onChange={e => handleChange(['signos_vitales', 'tension_arterial'], e.target.value)} placeholder="120/80" /></div>
+              <div><label>SpO₂</label><input value={reporte.signos_vitales.saturacion_oxigeno} onChange={e => handleChange(['signos_vitales', 'saturacion_oxigeno'], e.target.value)} /></div>
+              <div><label>Temperatura</label><input value={reporte.signos_vitales.temperatura} onChange={e => handleChange(['signos_vitales', 'temperatura'], e.target.value)} /></div>
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <legend>4. Escala de Glasgow</legend>
+            <div className="grid-2">
+              <div>
+                <label>Ocular</label>
+                <select value={ocular} onChange={e => setOcular(Number(e.target.value))}>
+                  {Object.entries(GLASGOW.ocular).map(([key, desc]) => (
+                    <option key={key} value={key}>{key} - {desc}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label>Verbal</label>
+                <select value={verbal} onChange={e => setVerbal(Number(e.target.value))}>
+                  {Object.entries(GLASGOW.verbal).map(([key, desc]) => (
+                    <option key={key} value={key}>{key} - {desc}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label>Motor</label>
+                <select value={motor} onChange={e => setMotor(Number(e.target.value))}>
+                  {Object.entries(GLASGOW.motor).map(([key, desc]) => (
+                    <option key={key} value={key}>{key} - {desc}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label>Total: <strong>{total}</strong></label>
+                <div style={{ fontSize: '14px', marginTop: '4px' }}>Triaje: {triaje.label}</div>
+              </div>
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <legend>5. Intervenciones</legend>
+            {reporte.intervenciones.length === 0 && <div style={{ color: 'gray', fontSize: '14px' }}>No hay intervenciones registradas.</div>}
             {reporte.intervenciones.map((iv, idx) => (
-              <div key={idx} className="intervencion-item" style={{marginBottom:10}}>
-                <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
-                  <div>
-                    <div style={{fontWeight:700}}>Intervención {idx + 1}</div>
-                    <div style={{fontSize:13, color:'gray'}}>
-                      {iv.tipo_intervencion || '—'} {iv.hora_intervencion ? ` · ${iv.hora_intervencion}` : ''}
-                    </div>
-                  </div>
-                  <div style={{display:'flex', gap:8}}>
-                    <button type="button" className="icon-btn" onClick={() => eliminarIntervencion(idx)} title="Eliminar" style={{width:39}}>
-                      🗑️
-                    </button>
-                  </div>
+              <div key={idx} className="intervencion-item">
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <div><strong>{iv.tipo_intervencion || 'Interv.'}</strong> {iv.hora_intervencion && `· ${iv.hora_intervencion}`}</div>
+                  <button type="button" className="icon-btn" onClick={() => eliminarIntervencion(idx)}>🗑️</button>
                 </div>
-                <div style={{marginTop:8}}>{iv.descripcion || <i style={{color:'gray'}}>Sin descripción</i>}</div>
+                <div style={{ fontSize: '14px' }}>{iv.descripcion || <i>Sin descripción</i>}</div>
               </div>
             ))}
-
-            {/* Panel para agregar nueva intervención */}
-            <div style={{marginTop:12, padding:12, borderRadius:8, border:'1px dashed rgba(0,0,0,0.06)'}}>
-              <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8}}>
-                <div style={{fontWeight:700}}>Agregar Intervención</div>
-                <div style={{display:'flex', gap:8}}>
-                  <button type="button" className="icon-btn" onClick={agregarIntervencion} title="Agregar" style={{width:39}}>
-                    ➕
-                  </button>
-                </div>
+            <div style={{ marginTop: '12px', padding: '12px', border: '1px dashed rgba(0,0,0,0.1)', borderRadius: '6px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontWeight: 'bold' }}>Agregar</span>
+                <button type="button" className="btn btn-primary" onClick={agregarIntervencion}>➕ Agregar</button>
               </div>
-
-              <div style={{display:'grid', gap:8}}>
-                <label htmlFor='intervention'>Tipo de intervención</label>
-                <input value={intervencionActual.tipo_intervencion} onChange={(e) => handleIntervencionChange('tipo_intervencion', e.target.value)} placeholder="Ej. Oxigenoterapia" />
-
-                <label htmlFor='desc'>Descripción</label>
-                <textarea value={intervencionActual.descripcion} onChange={(e) => handleIntervencionChange('descripcion', e.target.value)} placeholder="Detalles..." />
-
-                <label htmlFor='hour'>Hora de intervención</label>
-                <input type="time" value={intervencionActual.hora_intervencion} onChange={(e) => handleIntervencionChange('hora_intervencion', e.target.value)} />
+              <div className="grid-2" style={{ marginTop: '8px' }}>
+                <div><label>Tipo</label><input value={intervencionActual.tipo_intervencion} onChange={e => setIntervencionActual({...intervencionActual, tipo_intervencion: e.target.value})} placeholder="Ej. Oxigenoterapia" /></div>
+                <div><label>Hora</label><input type="time" value={intervencionActual.hora_intervencion} onChange={e => setIntervencionActual({...intervencionActual, hora_intervencion: e.target.value})} /></div>
               </div>
+              <div><label>Descripción</label><textarea value={intervencionActual.descripcion} onChange={e => setIntervencionActual({...intervencionActual, descripcion: e.target.value})} /></div>
             </div>
           </fieldset>
 
-          {/* 5. Hallazgos Relevantes */}
-          <fieldset ref={seccionRefs.hallazgos_relevantes} className={obtenerClaseSeccion('hallazgos_relevantes')}>
-            <legend>5. Hallazgos Relevantes</legend>
-            <label>Descripción de la escena</label>
-            <textarea value={reporte.descripcion_escena} onChange={(e) => handleChange(['descripcion_escena'], e.target.value)} />
-
-            <label style={{marginTop:8}}>Otros hallazgos</label>
-            <textarea value={reporte.otros_hallazgos} onChange={(e) => handleChange(['otros_hallazgos'], e.target.value)} />
+          <fieldset>
+            <legend>6. Observaciones / Hallazgos</legend>
+            <label>Hallazgos en la escena</label>
+            <textarea value={reporte.hallazgos_escena} onChange={e => handleChange(['hallazgos_escena'], e.target.value)} />
+            <label style={{ marginTop: '8px' }}>Instrucciones para el hospital</label>
+            <textarea value={reporte.instrucciones_hospital} onChange={e => handleChange(['instrucciones_hospital'], e.target.value)} />
           </fieldset>
-
-          {/* 6. Instrucciones Requeridas */}
-          <fieldset ref={seccionRefs.instrucciones_requeridas} className={obtenerClaseSeccion('instrucciones_requeridas')}>
-            <legend>6. Instrucciones Requeridas</legend>
-            <label>Sugerencias para el hospital</label>
-            <textarea value={reporte.instrucciones_hospital} onChange={(e) => handleChange(['instrucciones_hospital'], e.target.value)} />
-          </fieldset>
-
-          {/* 7. Código de Prioridad */}
-          {/* <fieldset ref={seccionRefs.codigo_prioridad} className={obtenerClaseSeccion('codigo_prioridad')}>
-            <legend>7. Código de Prioridad</legend>
-            <label>Código de prioridad</label>
-            <input value={reporte.codigo_prioridad} onChange={(e) => handleChange(['codigo_prioridad'], e.target.value)} />
-            <label style={{marginTop:8}}>Condición actual</label>
-            <textarea value={reporte.condicion_actual} onChange={(e) => handleChange(['condicion_actual'], e.target.value)} />
-          </fieldset> */}
         </form>
-
-        {/* Outlet si usas rutas secundarias */}
         <Outlet />
       </div>
 
-      {/* Sticky submit area */}
-      <div className="sticky-submit" role="contentinfo">
-        <div className="sticky-inner">
-          <button
-            onClick={handleSubmit}
-            className={`send-button ${theme === 'dark' ? 'dark' : 'light'}`}
-            aria-label="Enviar reporte"
-          >
-            Enviar reporte
-          </button>
-        </div>
+      <VoiceAssistant
+        onDataExtracted={handleNLPData}
+        onError={(msg) => mostrarNotificacion(msg, 'error')}
+        onRecordingComplete={() => mostrarNotificacion('Grabación procesada', 'success')}
+      />
+
+      <div className="sticky-submit">
+        <button onClick={handleSubmit} className={`send-button ${theme === 'dark' ? 'dark' : ''}`}>
+          Enviar reporte
+        </button>
       </div>
     </div>
   );
