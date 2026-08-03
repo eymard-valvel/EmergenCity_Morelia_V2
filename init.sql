@@ -72,4 +72,3 @@ CREATE TABLE ambulancias_paramedicos (
     FOREIGN KEY (numero_placa_sm) REFERENCES ambulancias(numero_placa_sm) ON DELETE NO ACTION ON UPDATE NO ACTION
 );
 
-INSERT INTO doctor (nombre, apellidos, licencia_medica, password) VALUES ('Juan', 'Sanchez Hdez', 'JASH123', '12345678');
