@@ -16,7 +16,7 @@ export const AuthProvider = ({ children }) => {
 		}
 		setLoading(false);
 	}, []);
-
+	
 	const setAuth = (state) => {
 		setIsAuthenticated(state);
 	};

@@ -71,3 +71,4 @@ CREATE TABLE ambulancias_paramedicos (
     FOREIGN KEY (id_paramedicos) REFERENCES paramedicos(id_paramedicos) ON DELETE NO ACTION ON UPDATE NO ACTION,
     FOREIGN KEY (numero_placa_sm) REFERENCES ambulancias(numero_placa_sm) ON DELETE NO ACTION ON UPDATE NO ACTION
 );
+
