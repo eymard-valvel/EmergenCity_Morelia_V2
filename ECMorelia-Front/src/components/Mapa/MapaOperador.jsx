@@ -86,6 +86,7 @@ import {
   PopoverArrow,
   ThemeProvider
 } from '@chakra-ui/react';
+<<<<<<< Updated upstream
 
 import { 
   SearchIcon, 
@@ -134,8 +135,18 @@ import {
   FaCompressArrowsAlt,
   FaChartLine,
   FaGripHorizontal
+=======
+import {
+  FaAmbulance, FaHospital, FaMapMarkerAlt, FaRoute,
+  FaExclamationTriangle, FaCheckCircle, FaTimesCircle,
+  FaBed, FaTimes, FaSignOutAlt, FaSearch,
+  FaCompass, FaTachometerAlt, FaLocationArrow, FaSync,
+  FaClock, FaRoad, FaCar, FaTrafficLight, FaArrowLeft, FaMap,
+  FaArrowRight, FaPlus, FaMinus, FaExpandArrowsAlt, FaCompressArrowsAlt
+>>>>>>> Stashed changes
 } from 'react-icons/fa';
 
+<<<<<<< Updated upstream
 // ========== CONFIGURACIÓN DEL TEMA ==========
 const breakpoints = {
   sm: '320px',
@@ -149,6 +160,17 @@ const config = {
   initialColorMode: 'light',
   useSystemColorMode: false,
 };
+=======
+// ========================================================================
+// CONFIGURACIÓN
+// ========================================================================
+mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN
+const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:3002/ws';
+const DEFAULT_CENTER = { lat: 19.7024, lng: -101.1969 };
+const RECONNECT_DELAY = 3000;
+const MAX_RECONNECT = 5;
+const ROUTE_UPDATE_INTERVAL = 30000;
+>>>>>>> Stashed changes
 
 const theme = extendTheme({ 
   breakpoints,
@@ -875,6 +897,76 @@ export default function MapaOperadorGPS() {
       return;
     }
 
+<<<<<<< Updated upstream
+=======
+        updateAmbulanceMarker(loc, hdg, spd);
+        if (isFollowing && map.current) {
+          map.current.easeTo({
+            center: [loc.lng, loc.lat],
+            bearing: hdg,
+            pitch: mapPitch,
+            zoom: mapZoom,
+            duration: 1000,
+            essential: true
+          });
+        }
+
+        sendWS({
+          type: 'location_update',
+          ambulanceId: ambulancia.id,
+          location: loc,
+          speed: spd,
+          heading: hdg,
+          status: ambulanceStatus,
+        });
+      },
+      (err) => console.warn('GPS error:', err.message),
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 }
+    );
+
+    return () => {
+      window.removeEventListener('deviceorientation', handleOrientation, true);
+      if (watchId.current != null) navigator.geolocation.clearWatch(watchId.current);
+    };
+  }, [ambulancia, ambulanceStatus, sendWS, isFollowing, mapZoom, mapPitch]);
+
+  // ========================================================================
+  // MAPA
+  // ========================================================================
+  useEffect(() => {
+    if (!ambulancia || !mapContainer.current) return;
+
+    const mapInstance = new mapboxgl.Map({
+      container: mapContainer.current,
+      style: 'mapbox://styles/mapbox/dark-v11',
+      center: [DEFAULT_CENTER.lng, DEFAULT_CENTER.lat],
+      zoom: mapZoom,
+      pitch: mapPitch,
+      bearing: 0,
+      attributionControl: false,
+    });
+
+    mapInstance.addControl(new mapboxgl.NavigationControl({ showCompass: false, showZoom: false }), 'bottom-right');
+    mapInstance.scrollZoom.enable();
+
+    mapInstance.on('load', () => {
+      map.current = mapInstance;
+      addTrafficLayer(mapInstance);
+    });
+
+    mapInstance.on('zoom', () => setMapZoom(mapInstance.getZoom()));
+    mapInstance.on('pitch', () => setMapPitch(mapInstance.getPitch()));
+
+    return () => {
+      Object.values(animFrameIds.current).forEach(id => cancelAnimationFrame(id));
+      if (routeUpdateInterval.current) clearInterval(routeUpdateInterval.current);
+      mapInstance.remove();
+    };
+  }, [ambulancia]);
+
+  const addTrafficLayer = (mapInstance) => {
+    if (!mapInstance) return;
+>>>>>>> Stashed changes
     try {
       if (ws.current && (ws.current.readyState === WebSocket.OPEN || ws.current.readyState === WebSocket.CONNECTING)) {
         return;
@@ -1328,6 +1420,11 @@ export default function MapaOperadorGPS() {
       console.warn('No se pudo agregar capa de tráfico:', error);
     }
   };
+
+  const UberCamera = () => {
+    
+  }
+
 
   const toggleTraffic = () => {
     if (!map.current) return;
@@ -2165,6 +2262,7 @@ export default function MapaOperadorGPS() {
     }
   };
 
+<<<<<<< Updated upstream
   // ========== RECALCULAR RUTA MANUALMENTE ==========
   const recomputeRoute = () => {
     if (!destination) {
@@ -2175,6 +2273,10 @@ export default function MapaOperadorGPS() {
       showToast('warning', 'Ubicación No Disponible', 'Esperando señal GPS');
       return;
     }
+=======
+  return (
+    <Box h="92.5vh" w="99.8vw" bg="#000" overflow="hidden" position="relative">
+>>>>>>> Stashed changes
 
     const destLat = destination.lat || destination.latitude;
     const destLng = destination.lng || destination.longitude;
@@ -2183,6 +2285,7 @@ export default function MapaOperadorGPS() {
       return;
     }
 
+<<<<<<< Updated upstream
     calculateRoute(pos, { lat: destLat, lng: destLng })
       .then(routeData => {
         if (!routeData) return;
@@ -2214,6 +2317,27 @@ export default function MapaOperadorGPS() {
         showToast('error', 'Error', 'No se pudo recalcular la ruta');
       });
   };
+=======
+      {/* ===== HEADER SUPERIOR (INFORMACIÓN GPS) ===== */}
+      <Flex
+        position="absolute" top={0} left={0} right={0}
+        zIndex={100}
+        bg="rgba(0,0,0,0.7)" backdropFilter="blur(10px)"
+        px={4} py={2} alignItems="center" justifyContent="space-between"
+        borderBottom="1px solid rgba(255,255,255,0.1)"
+      >
+        <HStack spacing={3}>
+          <Icon as={FaAmbulance} color="#60a5fa" boxSize={5} />
+          <VStack align="start" spacing={0}>
+            <Text color="white" fontWeight="bold" fontSize="18px" lineHeight="1.2">
+              {ambulancia.nombre}
+            </Text>
+            <Text color="#94a3b8" fontSize="20px" fontFamily="mono">
+              {ambulancia.id} · {ambulancia.placa}
+            </Text>
+          </VStack>
+        </HStack>
+>>>>>>> Stashed changes
 
   // ========== CANCELAR NAVEGACIÓN (LIMPIA TODO) ==========
   const cancelNavigation = () => {
@@ -2230,6 +2354,7 @@ export default function MapaOperadorGPS() {
     // Limpiar rutas y estado de navegación
     clearAllRoutes();
 
+<<<<<<< Updated upstream
     // Enviar cancelación al servidor
     if (destination) {
       safeSend({
@@ -2246,6 +2371,45 @@ export default function MapaOperadorGPS() {
         ambulanceId: AMBULANCE_ID
       });
     }
+=======
+          <Select
+            value={ambulanceStatus}
+            onChange={(e) => changeStatus(e.target.value)}
+            bg="rgba(30,41,59,0.8)"
+            border="1px solid"
+            borderColor={currentStatusOpt.color}
+            color={currentStatusOpt.color}
+            borderRadius="3xl"
+            h="30px"
+            fontSize="20px"
+            fontWeight="bold"
+            w="200px"
+            _focus={{ boxShadow: 'none' }}
+          >
+            {STATUS_OPTIONS.map(s => (
+              <option key={s.value} value={s.value} style={{ background: '#1e293b', color: s.color }}>
+                {s.label}
+              </option>
+            ))}
+          </Select>
+
+          <IconButton
+            zIndex="50"
+            aria-label="Cerrar sesión"
+            icon={<FaSignOutAlt />}
+            size="sm"
+            variant="ghost"
+            color="#94a3b8"
+            _hover={{ bg: 'rgba(255,255,255,0.1)', color: 'white' }}
+            onClick={() => confirmAction(() => {
+              if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.close(1000, 'Logout');
+              clearAmbulance();
+              setAmbulancia(null);
+            }, 'Cerrar sesión', '¿Está seguro de cerrar la sesión?')}
+          />
+        </HStack>
+      </Flex>
+>>>>>>> Stashed changes
 
     setIsNavigating(false);
     setDestination(null);
@@ -2253,6 +2417,7 @@ export default function MapaOperadorGPS() {
     setHospitalNotification(null);
     setPendingEmergencyRoute(null);
 
+<<<<<<< Updated upstream
     showToast('info', 'Navegación Cancelada', 'Rutas y marcadores eliminados');
   };
 
@@ -2402,11 +2567,74 @@ const mapStyle = colorMode === 'light'
           <Text fontSize="sm" color="gray.400" ml="auto">
             {Math.round(routeProgress.durationRemaining / 60)} min
           </Text>
+=======
+      {/* ===== BOTONES DE ACCIÓN FLOTANTES (lado derecho) ===== */}
+      <VStack
+        position="absolute" top="350px" right={4} zIndex={50}
+        spacing={3}
+      >
+        <Tooltip label="Atender Emergencia" textColor="#ffffff">
+          <Button
+            w="75px" h="75px" rounded="2xl" bottom="150px"
+            bg={assignedEmergency ? '#dc2626' : '#0284c7'}
+            color="white"
+            shadow="lg"
+            _hover={{ bg: assignedEmergency ? '#b91c1c' : '#0369a1' }}
+            onClick={() => {
+              setDrawerMode('atender');
+              setSearchQuery('');
+              setSearchResults([]);
+              setSelectedLocation(null);
+              setSelectedHospitalId(null);
+              setPatientData({ nombre: '', edad: '', diagnostico: '', notas: '', sexo: '' });
+              onEmergencyDrawerOpen();
+            }}
+            fontSize="40px"
+          >
+            <FaAmbulance />
+          </Button>
+        </Tooltip>
+
+        <Tooltip label="Trasladar Paciente" textColor="#ffffff">
+          <Button
+            w="75px" h="75px" borderRadius="full" bottom="120px"
+            bg="#7c3aed"
+            color="white"
+            shadow="lg"
+            _hover={{ bg: '#6d28d9' }}
+            onClick={() => {
+              setDrawerMode('trasladar');
+              setSelectedHospitalId(null);
+              setPatientData({ nombre: '', edad: '', diagnostico: '', notas: '', sexo: '' });
+              onEmergencyDrawerOpen();
+            }}
+            fontSize="40px"
+          >
+            <FaHospital />
+          </Button>
+        </Tooltip>
+
+        {assignedEmergency && (
+          <Tooltip label="Completar Emergencia">
+            <Button
+              w="75px" h="75px" borderRadius="full"
+              bg="#10b981"
+              color="white"
+              shadow="lg"
+              _hover={{ bg: '#059669' }}
+              onClick={() => confirmAction(handleCompleteEmergency, 'Completar Emergencia', `¿Confirma que la emergencia ${assignedEmergency.callId} ha sido atendida?`)}
+              fontSize="22px"
+            >
+              ✅
+            </Button>
+          </Tooltip>
+>>>>>>> Stashed changes
         )}
       </Box>
     );
   };
 
+<<<<<<< Updated upstream
   // ========== UTILIDADES ==========
   const safeSend = (message) => {
     try {
@@ -2634,6 +2862,307 @@ const mapStyle = colorMode === 'light'
                   <Box className={wsConnected ? "status-dot-green" : isConnecting ? "status-dot-yellow" : "status-dot-red"} />
                   <Text fontSize={isMobile ? "xs" : "sm"} fontWeight="medium" color={wsConnected ? "green.800" : isConnecting ? "yellow.800" : "red.800"}>
                     {wsConnected ? 'Conectado al Sistema' : isConnecting ? 'Conectando...' : 'Desconectado'}
+=======
+        <Tooltip label={trafficEnabled ? 'Ocultar Tráfico' : 'Mostrar Tráfico'} textColor="#ffffff">
+          <Button
+            w="75px" h="75px" borderRadius="full" bottom="90px"
+            bg={trafficEnabled ? 'rgba(255,152,0,0.8)' : 'rgba(100,116,139,0.6)'}
+            color="white"
+            shadow="lg"
+            _hover={{ bg: trafficEnabled ? 'rgba(255,152,0,1)' : 'rgba(100,116,139,0.8)' }}
+            onClick={toggleTraffic}
+            fontSize="40px"
+          >
+            <FaTrafficLight />
+          </Button>
+        </Tooltip>
+
+        <Tooltip label="Centrar en mi ubicación" textColor="#ffffff">
+          <Button
+            w="75px" h="75px" borderRadius="full" bottom="60px"
+            bg={isFollowing ? 'rgba(59,130,246,0.8)' : 'rgba(100,116,139,0.6)'}
+            color="white"
+            shadow="lg"
+            _hover={{ bg: 'rgba(59,130,246,1)' }}
+            onClick={() => {
+              setIsFollowing(!isFollowing);
+              if (!isFollowing && myLocation && map.current) {
+                map.current.flyTo({
+                  center: [myLocation.lng, myLocation.lat],
+                  bearing: myHeading,
+                  pitch: mapPitch,
+                  zoom: mapZoom,
+                  duration: 1000,
+                  essential: true
+                });
+              }
+            }}
+            fontSize="40px"
+          >
+            <MdCenterFocusStrong />
+          </Button>
+        </Tooltip>
+
+        {/* BOTON PARA COLOCAR LA CAMARA COMO UBER/GOOGLE MAPS laoma weon hace sueño */}
+        <Tooltip label="Ajustar vista GPS" textColor="#ffffff">
+          <Button
+            w="75px" h="75px" borderRadius="full" bottom="30px"
+            bg="green"
+            color="white"
+            shadow="lg"
+            _hover="green"
+            onClick={UberCamera}
+            fontSize="40px"
+          >
+            <FaMap />
+          </Button>
+        </Tooltip>
+
+        <Tooltip label="Zoom +" textColor="#ffffff">
+          <Button
+            w="48px" h="48px" borderRadius="full"
+            bg="rgba(30,41,59,0.8)"
+            color="white"
+            shadow="lg"
+            _hover={{ bg: 'rgba(30,41,59,1)' }}
+            onClick={() => {
+              if (map.current) {
+                const newZoom = Math.min(map.current.getZoom() + 1, 20);
+                map.current.easeTo({ zoom: newZoom, duration: 300 });
+              }
+            }}
+            fontSize="22px"
+          >
+            <FaPlus />
+          </Button>
+        </Tooltip>
+
+        <Tooltip label="Zoom -" textColor="#ffffff">
+          <Button
+            w="48px" h="48px" borderRadius="full" bottom="-30px"
+            bg="rgba(30,41,59,0.8)"
+            color="white"
+            shadow="lg"
+            _hover={{ bg: 'rgba(30,41,59,1)' }}
+            onClick={() => {
+              if (map.current) {
+                const newZoom = Math.max(map.current.getZoom() - 1, 3);
+                map.current.easeTo({ zoom: newZoom, duration: 300 });
+              }
+            }}
+            fontSize="22px"
+          >
+            <FaMinus />
+          </Button>
+        </Tooltip>
+      </VStack>
+
+      {/* ===== BADGE DE EMERGENCIA ACTIVA ===== */}
+      {assignedEmergency && (
+        <Box
+          position="absolute" top="70px" left="50%" transform="translateX(-50%)" zIndex={80}
+          bg="rgba(220,38,38,0.95)" color="white"
+          px={4} py={2} borderRadius="xl"
+          border="2px solid #fca5a5"
+          cursor="pointer"
+          maxW="90%"
+          onClick={onEmergencyModalOpen}
+          shadow="lg"
+          
+        >
+          <Text fontWeight="bold" fontSize="12px" letterSpacing="1px">🚨 EMERGENCIA ACTIVA</Text>
+          <Text fontSize="14px" fontFamily="mono" fontWeight="bold">{assignedEmergency.callId}</Text>
+          <Text fontSize="11px" color="#fecaca">{assignedEmergency.emergencyType}</Text>
+        </Box>
+      )}
+
+      {/* ===== DRAWER DE EMERGENCIA (flotante, no oculta todo) ===== */}
+      <Drawer
+        isOpen={isEmergencyDrawerOpen}
+        placement="bottom"
+        onClose={onEmergencyDrawerClose}
+        size="lg"
+      >
+        <DrawerOverlay bg="rgba(0,0,0,0.5)" backdropFilter="blur(4px)"/>
+        <DrawerContent
+          
+          bg="#0f172a"
+          h="500px"
+          w="95%"
+          border="1px solid #1e293b"
+        >
+          <DrawerHeader borderBottom="3px solid #1e293b" pb="3px">
+            
+            <HStack bg="#000000" flex={1} flexDirection="row">
+              <VStack align="start" spacing={10} w="100%">
+                {/* <DrawerCloseButton color="#ffffff" fontSize="25px" alignSelf="flex-end"p="5px"/> */}
+                <Text color="white" fontWeight="bold" fontSize="40px">
+                  {drawerMode === 'atender' ? 'ATENDER EMERGENCIA' : 'TRASLADAR PACIENTE'}
+                </Text>
+                
+                <Text color="#94a3b8" fontSize="20px">
+                  {drawerMode === 'atender' ? 'Busque la ubicación del incidente' : 'Seleccione hospital y datos del paciente'}
+                </Text>
+              </VStack>
+            </HStack>
+          </DrawerHeader>
+
+          <DrawerBody py={3} overflowY="auto" sx={{background: '#334155', borderRadius: '4px' }}>
+            <Flex gap={3} direction={{ base: 'column', md: 'row' }}>
+
+              {drawerMode === 'atender' ? (
+                <VStack spacing={3} flex={1}>
+                  <InputGroup size="md">
+                    <Input
+                      value={searchQuery}
+                      onChange={(e) => {
+                        setSearchQuery(e.target.value);
+                        searchAddresses(e.target.value);
+                      }}
+                      placeholder="Buscar dirección..."
+                      bg="#1e293b" border="1px solid #334155" color="white"
+                      borderRadius="md" w="99.5%" fontSize="25px"
+                      _focus={{ borderColor: '#0284c7', boxShadow: 'none' }}
+                    />
+                    <InputRightElement w="100%">
+                      {/* {isSearching ? <Spinner size="ms" color="#38bdf8" /> :
+                        // searchQuery ? <IconButton aria-label="Limpiar" icon={<CloseIcon />} size="ms" variant="ghost" fontSize="22px" color="#ffffff" onClick={clearSearch} /> :
+                        // <SearchIcon color="#64748b" />
+                        } */}
+                    </InputRightElement>
+                  </InputGroup>
+
+                  {searchResults.length > 0 && (
+                    <Box w="100%" h="100%" overflowY="auto">
+                      {searchResults.map((result) => (
+                        <Box
+                          key={result.id}
+                          p={2} borderBottom="1px solid #334155" cursor="pointer"
+                          _hover={{ bg: '#1e293b' }}
+                          onClick={() => selectSearchResult(result)}
+                        >
+                          <HStack>
+                            <Icon as={FaMapMarkerAlt} color="#ef4444" boxSize={3} />
+                            <Text color="#e2e8f0" fontSize="20px">{result.place_name}</Text>
+                          </HStack>
+                        </Box>
+                      ))}
+                    </Box>
+                  )}
+
+                  {selectedLocation && (
+                    <Box bg="#14532d" p={2} borderRadius="md" border="1px solid #166534" h="100px" w="60%" justifyContent="center" flex={1}>
+                      <Text color="#4ade80" fontWeight="bold" fontSize="20px">Ubicación seleccionada</Text>
+                      <Text color="#86efac" fontSize="20px">{searchQuery}</Text>
+                      <HStack mt={1} spacing={2} justifySelf="flex-end">
+                        <Button size="ms" color="#4ade80" borderRadius="10" bg="#666666" fontSize="25px" right="20px" bottom="5px" p="10" 
+                        _hover={{bg: "#999999", fontcolor: "#45A846"}}
+                        onClick={() => {
+                          if (map.current && selectedLocation) {
+                            map.current.flyTo({ center: [selectedLocation.lng, selectedLocation.lat], zoom: 17, duration: 800 });
+                          }
+                        }}>Ver en mapa</Button>
+                        <Button size="xs" color="#4ade80" fontSize="25px" borderRadius="10" bg="#666666" p="10" bottom="5px" right="10px" 
+                        _hover={{bg: "#999999", fontcolor: "#45A846"}}
+                        onClick={() => {
+                          setSelectedLocation(null);
+                          setSearchQuery('');
+                          removeEmergencyMarker();
+                        }}>Cambiar</Button>
+                      </HStack>
+                    </Box>
+                  )}
+
+                  {selectedLocation && (
+                    <Button
+                      w="100%" h="48px" bg="#0284c7" color="white"
+                      fontWeight="bold" fontSize="30px"
+                      _hover={{ bg: '#0369a1' }}
+                      isDisabled={!myLocation}
+                      onClick={async () => {
+                        if (!myLocation || !selectedLocation) return;
+                        const route = await computeRoute(myLocation, selectedLocation);
+                        if (route) {
+                          const routeKey = `manual-${Date.now()}`;
+                          drawRoute(routeKey, route.geometry, '#ef4444', true);
+                          setActiveRoutes(prev => ({
+                            ...prev,
+                            [routeKey]: { callId: null, distance: route.distance, duration: route.duration, geometry: route.geometry, isEmergency: true }
+                          }));
+                          if (route.steps && route.steps.length > 0) {
+                            setCurrentManeuver(route.steps[0]);
+                            setRouteProgress({ distanceRemaining: route.distance, durationRemaining: route.duration });
+                          }
+                          setAmbulanceStatus('en_ruta');
+                          toast({ title: '✅ Ruta calculada', description: 'Navegando hacia la emergencia', status: 'success', duration: 5000, position: 'top-right' });
+                          onEmergencyDrawerClose();
+                        }
+                      }}
+                    >
+                      CALCULAR RUTA
+                    </Button>
+                  )}
+                </VStack>
+              ) : (
+                <VStack spacing={3} flex={1} align="stretch">
+                  <FormControl>
+                    <FormLabel color="#94a3b8" fontSize="12px" mb={1}>Nombre (opcional)</FormLabel>
+                    <Input
+                      value={patientData.nombre}
+                      onChange={(e) => setPatientData(p => ({ ...p, nombre: e.target.value }))}
+                      bg="#1e293b" border="1px solid #334155" color="white"
+                      borderRadius="md" h="40px" _focus={{ borderColor: '#0284c7', boxShadow: 'none' }}
+                    />
+                  </FormControl>
+                  <HStack spacing={3}>
+                    <FormControl flex={1}>
+                      <FormLabel color="#94a3b8" fontSize="12px" mb={1}>Edad</FormLabel>
+                      <NumberInput min={0} max={120} value={patientData.edad} onChange={(v) => setPatientData(p => ({ ...p, edad: v }))}>
+                        <NumberInputField bg="#1e293b" border="1px solid #334155" color="white" h="40px" _focus={{ borderColor: '#0284c7', boxShadow: 'none' }} />
+                      </NumberInput>
+                    </FormControl>
+                    <FormControl flex={1}>
+                      <FormLabel color="#94a3b8" fontSize="12px" mb={1}>Sexo</FormLabel>
+                      <Select
+                        value={patientData.sexo || ''}
+                        onChange={(e) => setPatientData(p => ({ ...p, sexo: e.target.value }))}
+                        bg="#1e293b" border="1px solid #334155" color="white" h="40px" _focus={{ borderColor: '#0284c7', boxShadow: 'none' }}
+                      >
+                        <option value="">Seleccionar</option>
+                        <option value="M">Masculino</option>
+                        <option value="F">Femenino</option>
+                      </Select>
+                    </FormControl>
+                  </HStack>
+                  <FormControl>
+                    <FormLabel color="#94a3b8" fontSize="12px" mb={1}>Diagnóstico *</FormLabel>
+                    <Input
+                      value={patientData.diagnostico}
+                      onChange={(e) => setPatientData(p => ({ ...p, diagnostico: e.target.value }))}
+                      placeholder="Ej. TCE moderado"
+                      bg="#1e293b" border="1px solid #334155" color="white"
+                      borderRadius="md" h="40px" _focus={{ borderColor: '#0284c7', boxShadow: 'none' }}
+                    />
+                  </FormControl>
+                  <FormControl>
+                    <FormLabel color="#94a3b8" fontSize="12px" mb={1}>Notas</FormLabel>
+                    <Textarea
+                      value={patientData.notas}
+                      onChange={(e) => setPatientData(p => ({ ...p, notas: e.target.value }))}
+                      placeholder="Signos vitales, alergias..."
+                      bg="#1e293b" border="1px solid #334155" color="white"
+                      borderRadius="md" rows={2} resize="none"
+                      _focus={{ borderColor: '#0284c7', boxShadow: 'none' }}
+                    />
+                  </FormControl>
+                </VStack>
+              )}
+
+              {drawerMode === 'trasladar' && (
+                <VStack spacing={2} flex={1} align="stretch">
+                  <Text color="#94a3b8" fontWeight="bold" fontSize="12px">
+                    HOSPITALES DISPONIBLES ({hospitals.filter(h => h.connected).length})
+>>>>>>> Stashed changes
                   </Text>
                 </HStack>
                 {!wsConnected && (
@@ -2849,6 +3378,7 @@ const mapStyle = colorMode === 'light'
             </CardBody>
           </Card>
 
+<<<<<<< Updated upstream
           <VStack spacing={2}>
             <Button 
               width="100%" 
@@ -2895,6 +3425,25 @@ const mapStyle = colorMode === 'light'
                 isDisabled={!pos || !destination}
               >
                 🔄 RECALCULAR RUTA (TRÁFICO)
+=======
+          <DrawerFooter borderTop="1px solid #1e293b" gap={3}>
+            <Button variant="ghost" onClick={onEmergencyDrawerClose} color="#ffffff" fontSize="25px" bg="#D42100" p="5px" borderRadius="8" right="20px" top="15px">
+              CANCELAR
+            </Button>
+            {drawerMode === 'trasladar' && (
+              <Button
+                color="#ffffff"
+                leftIcon={<FaHospital />}
+                isDisabled={!selectedHospitalId || !patientData.diagnostico.trim() || isSending}
+                isLoading={isSending}
+                loadingText="Enviando..."
+                onClick={handleSendTransfer}
+                bg="#3272BA"
+                fontSize="25px"
+                p="5px" borderRadius="8" right="10px" top="15px" 
+              >
+              ENVIAR NOTIFICACIÓN
+>>>>>>> Stashed changes
               </Button>
             )}
             
