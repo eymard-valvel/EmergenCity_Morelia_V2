@@ -443,7 +443,7 @@ const MapaOperador = () => {
         border:3px solid #60a5fa;
         box-shadow:0 0 20px rgba(96,165,250,0.6),0 4px 15px rgba(0,0,0,0.5);
         display:flex;align-items:center;justify-content:center;">
-        <span style="color:white;font-size:20px;line-height:1;">😁</span>
+        <span style="color:white;font-size:20px;line-height:1;">🚑</span>
       </div>
       <div style="position:absolute;top:14px;left:8px;width:7px;height:7px;border-radius:50%;
         animation:blink-red 0.5s infinite;box-shadow:0 0 8px #ef4444;"></div>
