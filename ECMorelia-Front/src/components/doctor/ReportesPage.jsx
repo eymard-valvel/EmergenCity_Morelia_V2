@@ -78,7 +78,7 @@ const ReportesPage = () => {
 	// 2. CONEXIÓN WEBSOCKET (TIEMPO REAL - CORREGIDA)
 	useEffect(() => {
 		// ✅ CORRECCIÓN: Puerto 8081 (El nuestro)
-		const ws = new WebSocket(import.meta.env.VITE_WS_URL);
+		const ws = new WebSocket(import.meta.env.VITE_WS_URL || 'ws://localhost:3002/ws');
 
 		ws.onopen = () => {
 			console.log(`✅ [DOCTOR] Conectado al sistema de urgencias.`);

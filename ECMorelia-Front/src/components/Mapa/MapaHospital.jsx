@@ -252,7 +252,7 @@ export default function MapaHospitalOptimizado() {
 
       setIsConnecting(true);
       connectionAttempts.current += 1;
-      ws.current = new WebSocket(import.meta.env.VITE_WS_URL);
+      ws.current = new WebSocket(import.meta.env.VITE_WS_URL || 'ws://localhost:3002/ws');
 
       ws.current.onopen = () => {
         if (!isMounted.current) return;

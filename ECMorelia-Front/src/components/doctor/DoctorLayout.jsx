@@ -21,7 +21,7 @@ function DoctorLayoutContent() {
 	// ---------------------------------------------------------
 	useEffect(() => {
 		// Conectar al puerto 8081 (donde está el servidor de alertas)
-		ws.current = new WebSocket(import.meta.env.VITE_WS_URL);
+		ws.current = new WebSocket(import.meta.env.VITE_WS_URL || 'ws://localhost:3002/ws');
 
 		ws.current.onopen = () => {
 			console.log("👨‍⚕️ Médico conectado al sistema de urgencias");

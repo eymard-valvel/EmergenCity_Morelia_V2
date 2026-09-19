@@ -84,6 +84,7 @@ const MapaOperador = () => {
   const isMounted = useRef(true);
   const reconnectAttempts = useRef(0);
   const reconnectTimer = useRef(null);
+  const handleServerMessageRef = useRef(null);
   const [wsStatus, setWsStatus] = useState('disconnected');
 
   // ---- GPS ----
@@ -178,7 +179,7 @@ const MapaOperador = () => {
 
       ws.onmessage = (e) => {
         if (!isMounted.current) return;
-        try { handleServerMessage(JSON.parse(e.data)); } catch {}
+        try { handleServerMessageRef.current?.(JSON.parse(e.data)); } catch {}
       };
 
       ws.onclose = () => {
@@ -267,6 +268,8 @@ const MapaOperador = () => {
         break;
     }
   }, [ambulancia, toast]);
+
+  handleServerMessageRef.current = handleServerMessage;
 
   // ========================================================================
   // GPS Y GEOLOCALIZACIÓN
@@ -427,7 +430,7 @@ const MapaOperador = () => {
     // Cambiar a vista GPS tipo Uber: Acercamiento e inclinación 3D
     map.current.flyTo({
       center: currentCenter,
-      zoom: 12,       // Nivel de acercamiento
+      zoom: 17,       // Nivel de acercamiento
       pitch: 60,      // Inclinación de la cámara
       bearing: map.current.getBearing(), // Mantener orientación actual
       duration: 2000, 
@@ -1051,6 +1054,7 @@ const MapaOperador = () => {
               setDrawerMode('trasladar');
               setSelectedHospitalId(null);
               setPatientData({ nombre: '', edad: '', diagnostico: '', notas: '', sexo: '' });
+              sendWS({ type: 'request_hospitals_list' });
               onEmergencyDrawerOpen();
             }}
             fontSize="40px"

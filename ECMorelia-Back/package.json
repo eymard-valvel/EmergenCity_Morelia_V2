@@ -5,6 +5,8 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "nodemon main.js",
+    "ws": "node websocket-server.js",
+    "dev:all": "node dev-all.js",
     "seed": "node prisma/seed.js",
     "start": "npm run dev"
   },
