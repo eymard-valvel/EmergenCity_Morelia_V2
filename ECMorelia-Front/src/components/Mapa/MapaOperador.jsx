@@ -22,7 +22,7 @@ import {
   FaExclamationTriangle, FaCheckCircle, FaTimesCircle,
   FaBed, FaTimes, FaSignOutAlt, FaSearch,
   FaCompass, FaTachometerAlt, FaLocationArrow, FaSync,
-  FaClock, FaRoad, FaCar, FaTrafficLight, FaArrowLeft,
+  FaClock, FaRoad, FaCar, FaTrafficLight, FaArrowLeft, FaMap,
   FaArrowRight, FaPlus, FaMinus, FaExpandArrowsAlt, FaCompressArrowsAlt
 } from 'react-icons/fa';
 import { FiNavigation, FiWifiOff, FiActivity } from 'react-icons/fi';
@@ -354,7 +354,7 @@ const MapaOperador = () => {
     });
 
     mapInstance.addControl(new mapboxgl.NavigationControl({ showCompass: false, showZoom: false }), 'bottom-right');
-    mapInstance.scrollZoom.disable();
+    mapInstance.scrollZoom.enable();
 
     mapInstance.on('load', () => {
       map.current = mapInstance;
@@ -405,6 +405,11 @@ const MapaOperador = () => {
       console.warn('No se pudo añadir capa de tráfico:', error);
     }
   };
+
+  const UberCamera = () => {
+    
+  }
+
 
   const toggleTraffic = () => {
     setTrafficEnabled(!trafficEnabled);
@@ -859,7 +864,7 @@ const MapaOperador = () => {
   const currentStatusOpt = STATUS_OPTIONS.find(s => s.value === ambulanceStatus) || STATUS_OPTIONS[0];
 
   return (
-    <Box h="100vh" w="100vw" bg="#000" overflow="hidden" position="relative">
+    <Box h="92.5vh" w="99.8vw" bg="#000" overflow="hidden" position="relative">
 
       {/* ===== MAPA ===== */}
       <Box ref={mapContainer} position="absolute" inset={0} zIndex={0} />
@@ -875,10 +880,10 @@ const MapaOperador = () => {
         <HStack spacing={3}>
           <Icon as={FaAmbulance} color="#60a5fa" boxSize={5} />
           <VStack align="start" spacing={0}>
-            <Text color="white" fontWeight="bold" fontSize="13px" lineHeight="1.2">
+            <Text color="white" fontWeight="bold" fontSize="18px" lineHeight="1.2">
               {ambulancia.nombre}
             </Text>
-            <Text color="#94a3b8" fontSize="10px" fontFamily="mono">
+            <Text color="#94a3b8" fontSize="20px" fontFamily="mono">
               {ambulancia.id} · {ambulancia.placa}
             </Text>
           </VStack>
@@ -913,11 +918,11 @@ const MapaOperador = () => {
             border="1px solid"
             borderColor={currentStatusOpt.color}
             color={currentStatusOpt.color}
-            borderRadius="md"
-            h="32px"
-            fontSize="10px"
+            borderRadius="3xl"
+            h="30px"
+            fontSize="20px"
             fontWeight="bold"
-            w="120px"
+            w="200px"
             _focus={{ boxShadow: 'none' }}
           >
             {STATUS_OPTIONS.map(s => (
@@ -928,6 +933,7 @@ const MapaOperador = () => {
           </Select>
 
           <IconButton
+            zIndex="50"
             aria-label="Cerrar sesión"
             icon={<FaSignOutAlt />}
             size="sm"
@@ -980,12 +986,12 @@ const MapaOperador = () => {
 
       {/* ===== BOTONES DE ACCIÓN FLOTANTES (lado derecho) ===== */}
       <VStack
-        position="absolute" bottom="80px" right={4} zIndex={50}
+        position="absolute" top="350px" right={4} zIndex={50}
         spacing={3}
       >
-        <Tooltip label="Atender Emergencia">
+        <Tooltip label="Atender Emergencia" textColor="#ffffff">
           <Button
-            w="56px" h="56px" borderRadius="full"
+            w="75px" h="75px" rounded="2xl" bottom="150px"
             bg={assignedEmergency ? '#dc2626' : '#0284c7'}
             color="white"
             shadow="lg"
@@ -999,15 +1005,15 @@ const MapaOperador = () => {
               setPatientData({ nombre: '', edad: '', diagnostico: '', notas: '', sexo: '' });
               onEmergencyDrawerOpen();
             }}
-            fontSize="22px"
+            fontSize="40px"
           >
-            {assignedEmergency ? '🚨' : '🚑'}
+            <FaAmbulance />
           </Button>
         </Tooltip>
 
-        <Tooltip label="Trasladar Paciente">
+        <Tooltip label="Trasladar Paciente" textColor="#ffffff">
           <Button
-            w="56px" h="56px" borderRadius="full"
+            w="75px" h="75px" borderRadius="full" bottom="120px"
             bg="#7c3aed"
             color="white"
             shadow="lg"
@@ -1018,16 +1024,16 @@ const MapaOperador = () => {
               setPatientData({ nombre: '', edad: '', diagnostico: '', notas: '', sexo: '' });
               onEmergencyDrawerOpen();
             }}
-            fontSize="22px"
+            fontSize="40px"
           >
-            🏥
+            <FaHospital />
           </Button>
         </Tooltip>
 
         {assignedEmergency && (
           <Tooltip label="Completar Emergencia">
             <Button
-              w="56px" h="56px" borderRadius="full"
+              w="75px" h="75px" borderRadius="full"
               bg="#10b981"
               color="white"
               shadow="lg"
@@ -1040,23 +1046,23 @@ const MapaOperador = () => {
           </Tooltip>
         )}
 
-        <Tooltip label={trafficEnabled ? 'Ocultar Tráfico' : 'Mostrar Tráfico'}>
+        <Tooltip label={trafficEnabled ? 'Ocultar Tráfico' : 'Mostrar Tráfico'} textColor="#ffffff">
           <Button
-            w="56px" h="56px" borderRadius="full"
+            w="75px" h="75px" borderRadius="full" bottom="90px"
             bg={trafficEnabled ? 'rgba(255,152,0,0.8)' : 'rgba(100,116,139,0.6)'}
             color="white"
             shadow="lg"
             _hover={{ bg: trafficEnabled ? 'rgba(255,152,0,1)' : 'rgba(100,116,139,0.8)' }}
             onClick={toggleTraffic}
-            fontSize="22px"
+            fontSize="40px"
           >
             <FaTrafficLight />
           </Button>
         </Tooltip>
 
-        <Tooltip label="Centrar en mi ubicación">
+        <Tooltip label="Centrar en mi ubicación" textColor="#ffffff">
           <Button
-            w="56px" h="56px" borderRadius="full"
+            w="75px" h="75px" borderRadius="full" bottom="60px"
             bg={isFollowing ? 'rgba(59,130,246,0.8)' : 'rgba(100,116,139,0.6)'}
             color="white"
             shadow="lg"
@@ -1074,13 +1080,28 @@ const MapaOperador = () => {
                 });
               }
             }}
-            fontSize="22px"
+            fontSize="40px"
           >
             <MdCenterFocusStrong />
           </Button>
         </Tooltip>
 
-        <Tooltip label="Zoom +">
+        {/* BOTON PARA COLOCAR LA CAMARA COMO UBER/GOOGLE MAPS laoma weon hace sueño */}
+        <Tooltip label="Ajustar vista GPS" textColor="#ffffff">
+          <Button
+            w="75px" h="75px" borderRadius="full" bottom="30px"
+            bg="green"
+            color="white"
+            shadow="lg"
+            _hover="green"
+            onClick={UberCamera}
+            fontSize="40px"
+          >
+            <FaMap />
+          </Button>
+        </Tooltip>
+
+        <Tooltip label="Zoom +" textColor="#ffffff">
           <Button
             w="48px" h="48px" borderRadius="full"
             bg="rgba(30,41,59,0.8)"
@@ -1093,15 +1114,15 @@ const MapaOperador = () => {
                 map.current.easeTo({ zoom: newZoom, duration: 300 });
               }
             }}
-            fontSize="18px"
+            fontSize="22px"
           >
             <FaPlus />
           </Button>
         </Tooltip>
 
-        <Tooltip label="Zoom -">
+        <Tooltip label="Zoom -" textColor="#ffffff">
           <Button
-            w="48px" h="48px" borderRadius="full"
+            w="48px" h="48px" borderRadius="full" bottom="-30px"
             bg="rgba(30,41,59,0.8)"
             color="white"
             shadow="lg"
@@ -1112,7 +1133,7 @@ const MapaOperador = () => {
                 map.current.easeTo({ zoom: newZoom, duration: 300 });
               }
             }}
-            fontSize="18px"
+            fontSize="22px"
           >
             <FaMinus />
           </Button>
@@ -1130,7 +1151,7 @@ const MapaOperador = () => {
           maxW="90%"
           onClick={onEmergencyModalOpen}
           shadow="lg"
-          textAlign="center"
+          
         >
           <Text fontWeight="bold" fontSize="12px" letterSpacing="1px">🚨 EMERGENCIA ACTIVA</Text>
           <Text fontSize="14px" fontFamily="mono" fontWeight="bold">{assignedEmergency.callId}</Text>
@@ -1143,37 +1164,37 @@ const MapaOperador = () => {
         isOpen={isEmergencyDrawerOpen}
         placement="bottom"
         onClose={onEmergencyDrawerClose}
-        size="md"
+        size="lg"
       >
-        <DrawerOverlay bg="rgba(0,0,0,0.5)" backdropFilter="blur(4px)" />
+        <DrawerOverlay bg="rgba(0,0,0,0.5)" backdropFilter="blur(4px)"/>
         <DrawerContent
+          
           bg="#0f172a"
-          borderTopRadius="2xl"
-          maxH="75vh"
+          h="500px"
+          w="95%"
           border="1px solid #1e293b"
-          mx={2}
-          mb={2}
         >
-          <DrawerCloseButton color="#94a3b8" />
-          <DrawerHeader borderBottom="1px solid #1e293b" pb={3}>
-            <HStack spacing={2}>
-              <Icon as={drawerMode === 'atender' ? FaExclamationTriangle : FaHospital} color="#38bdf8" boxSize={5} />
-              <VStack align="start" spacing={0}>
-                <Text color="white" fontWeight="bold" fontSize="16px">
+          <DrawerHeader borderBottom="3px solid #1e293b" pb="3px">
+            
+            <HStack bg="#000000" flex={1} flexDirection="row">
+              <VStack align="start" spacing={10} w="100%">
+                {/* <DrawerCloseButton color="#ffffff" fontSize="25px" alignSelf="flex-end"p="5px"/> */}
+                <Text color="white" fontWeight="bold" fontSize="40px">
                   {drawerMode === 'atender' ? 'ATENDER EMERGENCIA' : 'TRASLADAR PACIENTE'}
                 </Text>
-                <Text color="#94a3b8" fontSize="12px">
+                
+                <Text color="#94a3b8" fontSize="20px">
                   {drawerMode === 'atender' ? 'Busque la ubicación del incidente' : 'Seleccione hospital y datos del paciente'}
                 </Text>
               </VStack>
             </HStack>
           </DrawerHeader>
 
-          <DrawerBody py={3} overflowY="auto" sx={{ '&::-webkit-scrollbar': { width: '4px' }, '&::-webkit-scrollbar-thumb': { background: '#334155', borderRadius: '4px' } }}>
+          <DrawerBody py={3} overflowY="auto" sx={{background: '#334155', borderRadius: '4px' }}>
             <Flex gap={3} direction={{ base: 'column', md: 'row' }}>
 
               {drawerMode === 'atender' ? (
-                <VStack spacing={3} flex={1} align="stretch">
+                <VStack spacing={3} flex={1}>
                   <InputGroup size="md">
                     <Input
                       value={searchQuery}
@@ -1183,18 +1204,19 @@ const MapaOperador = () => {
                       }}
                       placeholder="Buscar dirección..."
                       bg="#1e293b" border="1px solid #334155" color="white"
-                      borderRadius="md" h="44px" fontSize="14px"
+                      borderRadius="md" w="99.5%" fontSize="25px"
                       _focus={{ borderColor: '#0284c7', boxShadow: 'none' }}
                     />
-                    <InputRightElement h="44px">
-                      {isSearching ? <Spinner size="sm" color="#38bdf8" /> :
-                        searchQuery ? <IconButton aria-label="Limpiar" icon={<CloseIcon />} size="sm" variant="ghost" onClick={clearSearch} /> :
-                        <SearchIcon color="#64748b" />}
+                    <InputRightElement w="100%">
+                      {/* {isSearching ? <Spinner size="ms" color="#38bdf8" /> :
+                        // searchQuery ? <IconButton aria-label="Limpiar" icon={<CloseIcon />} size="ms" variant="ghost" fontSize="22px" color="#ffffff" onClick={clearSearch} /> :
+                        // <SearchIcon color="#64748b" />
+                        } */}
                     </InputRightElement>
                   </InputGroup>
 
                   {searchResults.length > 0 && (
-                    <Box maxH="150px" overflowY="auto">
+                    <Box w="100%" h="100%" overflowY="auto">
                       {searchResults.map((result) => (
                         <Box
                           key={result.id}
@@ -1204,7 +1226,7 @@ const MapaOperador = () => {
                         >
                           <HStack>
                             <Icon as={FaMapMarkerAlt} color="#ef4444" boxSize={3} />
-                            <Text color="#e2e8f0" fontSize="13px">{result.place_name}</Text>
+                            <Text color="#e2e8f0" fontSize="20px">{result.place_name}</Text>
                           </HStack>
                         </Box>
                       ))}
@@ -1212,20 +1234,24 @@ const MapaOperador = () => {
                   )}
 
                   {selectedLocation && (
-                    <Box bg="#14532d" p={2} borderRadius="md" border="1px solid #166534">
-                      <Text color="#4ade80" fontWeight="bold" fontSize="12px">✅ Ubicación seleccionada</Text>
-                      <Text color="#86efac" fontSize="11px">{searchQuery}</Text>
-                      <HStack mt={1} spacing={2}>
-                        <Button size="xs" colorScheme="green" onClick={() => {
+                    <Box bg="#14532d" p={2} borderRadius="md" border="1px solid #166534" h="100px" w="60%" justifyContent="center" flex={1}>
+                      <Text color="#4ade80" fontWeight="bold" fontSize="20px">Ubicación seleccionada</Text>
+                      <Text color="#86efac" fontSize="20px">{searchQuery}</Text>
+                      <HStack mt={1} spacing={2} justifySelf="flex-end">
+                        <Button size="ms" color="#4ade80" borderRadius="10" bg="#666666" fontSize="25px" right="20px" bottom="5px" p="10" 
+                        _hover={{bg: "#999999", fontcolor: "#45A846"}}
+                        onClick={() => {
                           if (map.current && selectedLocation) {
                             map.current.flyTo({ center: [selectedLocation.lng, selectedLocation.lat], zoom: 17, duration: 800 });
                           }
-                        }}>🗺️ Ver en mapa</Button>
-                        <Button size="xs" colorScheme="red" onClick={() => {
+                        }}>Ver en mapa</Button>
+                        <Button size="xs" color="#4ade80" fontSize="25px" borderRadius="10" bg="#666666" p="10" bottom="5px" right="10px" 
+                        _hover={{bg: "#999999", fontcolor: "#45A846"}}
+                        onClick={() => {
                           setSelectedLocation(null);
                           setSearchQuery('');
                           removeEmergencyMarker();
-                        }}>🔄 Cambiar</Button>
+                        }}>Cambiar</Button>
                       </HStack>
                     </Box>
                   )}
@@ -1233,7 +1259,7 @@ const MapaOperador = () => {
                   {selectedLocation && (
                     <Button
                       w="100%" h="48px" bg="#0284c7" color="white"
-                      fontWeight="bold" fontSize="14px"
+                      fontWeight="bold" fontSize="30px"
                       _hover={{ bg: '#0369a1' }}
                       isDisabled={!myLocation}
                       onClick={async () => {
@@ -1256,7 +1282,7 @@ const MapaOperador = () => {
                         }
                       }}
                     >
-                      🗺️ CALCULAR RUTA
+                      CALCULAR RUTA
                     </Button>
                   )}
                 </VStack>
@@ -1390,17 +1416,22 @@ const MapaOperador = () => {
           </DrawerBody>
 
           <DrawerFooter borderTop="1px solid #1e293b" gap={3}>
-            <Button variant="ghost" onClick={onEmergencyDrawerClose}>Cancelar</Button>
+            <Button variant="ghost" onClick={onEmergencyDrawerClose} color="#ffffff" fontSize="25px" bg="#D42100" p="5px" borderRadius="8" right="20px" top="15px">
+              CANCELAR
+            </Button>
             {drawerMode === 'trasladar' && (
               <Button
-                colorScheme="blue"
+                color="#ffffff"
                 leftIcon={<FaHospital />}
                 isDisabled={!selectedHospitalId || !patientData.diagnostico.trim() || isSending}
                 isLoading={isSending}
                 loadingText="Enviando..."
                 onClick={handleSendTransfer}
+                bg="#3272BA"
+                fontSize="25px"
+                p="5px" borderRadius="8" right="10px" top="15px" 
               >
-                ENVIAR NOTIFICACIÓN
+              ENVIAR NOTIFICACIÓN
               </Button>
             )}
           </DrawerFooter>
