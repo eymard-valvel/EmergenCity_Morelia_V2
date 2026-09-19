@@ -117,7 +117,7 @@ console.log("Ruta a navegar:", routes[values.role]);
     }, []);
 
     return (
-        <div className="min-h-screen bg-neutral-300/50 flex flex-col font-sans">
+        <div className="min-h-screen bg-gradient-to-b from-gray-300 via-gray-400 to-gray-500 flex flex-col font-sans">
             {/* --- NAVIGATION BAR --- */}
             <nav className="fixed top-0 w-full bg-gradient-to-r from-bluish-gray to-sky-400 p-3 flex items-center justify-center shadow-md z-50 px-6">
                 <div className="flex items-center gap-3 cursor-pointer" onClick={() => navigate("/")}>
@@ -231,17 +231,17 @@ console.log("Ruta a navegar:", routes[values.role]);
                             <footer className="flex flex-col gap-3 pt-8 border-t border-neutral-200 mt-4">
                                 <button 
                                     type="button" 
-                                    className="text-lg font-bold text-sky-500 hover:text-sky-700 transition-colors"
+                                    className="font-medium text-blue-600 dark:text-blue-500 hover:underline ml-2 mt-2"
                                     onClick={() => navigate(`/signup/${formik.values.role || 'operador'}`)}
                                 >
-                                    <span className="underline italic">Crear cuenta de acceso</span>
+                                    <span className="underline">Crear cuenta de acceso</span>
                                 </button>
                                 <button 
                                     type="button" 
-                                    className="text-lg font-semibold text-sky-500 hover:text-sky-700 transition-colors p-1"
+                                    className="font-medium text-blue-600 dark:text-blue-500 hover:underline ml-2 mt-2"
                                     onClick={() => navigate("/recover-password")}
                                 >
-                                    <span className="underline italic">Recuperar acceso</span>
+                                    <span className="underline">Recuperar acceso</span>
                                 </button>
                             </footer>
                         </form>

@@ -1,6 +1,6 @@
 # ECMorelia
 
-## Backend:
+## Ejecución del Backend:
 
 1. Instalar Docker Desktop
 

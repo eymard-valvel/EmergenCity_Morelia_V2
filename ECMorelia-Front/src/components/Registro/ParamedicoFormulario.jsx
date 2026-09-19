@@ -1,5 +1,5 @@
 import { useNavigate } from "react-router-dom";
-import usuario from '../img/formularioRegistroIcono.jpg';
+import usuario from '../img/imagen_registro.jpg';
 import logo from '../img/Logo.png'; // Asegúrate de que el logo esté en la carpeta correcta
 import { useFormik } from "formik";
 import * as Yup from "yup";
@@ -53,38 +53,44 @@ export const ParamedicoFormulario = () => {
 	});
 
 	return (
-		<div className="min-h-screen bg-gradient-to-b from-gray-300 via-gray-400 to-gray-500 flex flex-col">
+		<div className="min-h-screen bg-gradient-to-b from-gray-300 via-gray-400 to-gray-500 flex flex-col font-sans">
 
 		{/* Topbar */}
-		<nav className="fixed top-0 left-0 w-full bg-gradient-to-r from-[#002D62] to-[#74C2E1] p-2 flex items-center shadow-lg z-50">
-			<img src={logo} alt="Emergencity Logo"  className="ml-3 cursor-pointer" width="70" onClick={() => navigate("/")} />
-			<h1 className="text-lg font-bold text-white tracking-wide mx-2 cursor-pointer" onClick={() => navigate("/")}>EMERGENCITY</h1>
-		</nav>
+		<nav className="fixed top-0 w-full bg-gradient-to-r from-bluish-gray to-sky-400 p-3 flex items-center justify-center shadow-md z-50 px-6">
+                <div className="flex items-center gap-3 cursor-pointer" onClick={() => navigate("/")}>
+                    <img src={logo} alt="Logo" className="w-10 md:w-12" />
+                    <h1 className="text-neutral-300 font-black tracking-tighter text-4xl">EMERGENCITY</h1>
+                </div>
+        </nav>
 
 		{/* Contenido Principal */}
 		<div className="flex items-center justify-center flex-1 p-8 mt-16" onSubmit={formik.handleSubmit}>
-                <div className="flex bg-white rounded-lg shadow-2xl overflow-hidden w-full max-w-6xl transform transition duration-500">
+                <div className="flex bg-white rounded-3xl shadow-2xl overflow-hidden w-full max-w-6xl transform transition duration-500">
 
                     {/* Sección Izquierda - Datos */}
-                    <div className="w-1/3 bg-gray-100 p-8 flex flex-col items-center">
-                        <img className="w-100  mt-32 mb-4" src={usuario} alt="Usuario" />
-                    </div>
+                    <div className="hidden md:flex md:w-1/2 bg-slate-100 items-center justify-center relative">
+				<div className="absolute top-0 left-0 w-full h-full opacity-10 bg-[radial-gradient(#0ea5e9_1px,transparent_1px)] [background-size:20px_20px]"></div>
+					<img 
+						src={usuario} 
+						alt="Auth Illustration" 
+						className="h-full l-full object-cover"
+					/>
+				</div>
 
 					{/* Sección Derecha - Formulario de Registro */}
-					<div className="w-2/3 p-8">
-					<h1 className="font-black text-3xl text-center text-transparent bg-clip-text bg-gradient-to-r from-[#002D62] to-[#74C2E1]">
-						REGISTRO DE CUENTA
-					</h1>
-
+					<div className="w-full md:w-1/2 p-8 md:p-12 flex flex-col justify-center">
+					<h1 className="font-black text-3xl text-center text-transparent bg-clip-text bg-gradient-to-r from-neutral-500 to-neutral-500">
+							REGISTRO DE PARAMÉDICO
+						</h1>
 					{/* Sección de Formularios en 2 columnas */}
 					<form onSubmit={formik.handleSubmit}>
-					<div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-5">
+					<div className="mt-6 gap-5">
 						<fieldset className="flex flex-col gap-3">
 		             {/* Campo: Nombre */}
 						<div>
 							<label
 							htmlFor="nombre"
-							className="block text-blue-950 dark:text-gray-200 uppercase font-bold text-2xl text-left"
+							className="text-xs font-bold text-neutral-700 uppercase tracking-widest ml-1"
 							>
 							NOMBRE
 							</label>
@@ -93,7 +99,7 @@ export const ParamedicoFormulario = () => {
 							type="text"
 							name="nombre"
 							placeholder="Nombre"
-							className="ml-29 mt-2 border border-gray-300 rounded-md w-full sm:w-80 p-2 placeholder-stone-400"
+							className="w-full p-3.5 bg-slate-50 border-2 border-slate-100 rounded-xl focus:border-sky-blue focus:bg-white outline-none transition-all"
 							value={formik.values.nombre}
 							onChange={formik.handleChange}
 							/>
@@ -104,7 +110,7 @@ export const ParamedicoFormulario = () => {
 						<div>
 								<label
 								htmlFor="apellidos"
-								className="block text-blue-950 dark:text-gray-200 uppercase font-bold text-2xl text-left"
+								className="text-xs font-bold text-neutral-700 uppercase tracking-widest ml-1"
 								>
 								APELLIDOS
 								</label>
@@ -113,7 +119,7 @@ export const ParamedicoFormulario = () => {
 								type="text"
 								name="apellidos"
 								placeholder="Apellidos"
-								className="ml-29 mt-2 border border-gray-300 rounded-md w-full sm:w-80 p-2 placeholder-stone-400"
+								className="w-full p-3.5 bg-slate-50 border-2 border-slate-100 rounded-xl focus:border-sky-blue focus:bg-white outline-none transition-all"
 								value={formik.values.apellidos}
 								onChange={formik.handleChange}
 								/>
@@ -124,7 +130,7 @@ export const ParamedicoFormulario = () => {
 						<div>
 								<label
 								htmlFor="licencia_medica"
-								className="block text-blue-950 dark:text-gray-200 uppercase font-bold text-2xl text-left"
+								className="text-xs font-bold text-neutral-700 uppercase tracking-widest ml-1"
 								>
 								LICENCIA MEDICA
 								</label>
@@ -133,7 +139,7 @@ export const ParamedicoFormulario = () => {
 								type="text"
 								name="licencia_medica"
 								placeholder="Licencia Médica"
-								className="ml-29 mt-2 border border-gray-300 rounded-md w-full sm:w-80 p-2 placeholder-stone-400"
+								className="w-full p-3.5 bg-slate-50 border-2 border-slate-100 rounded-xl focus:border-sky-blue focus:bg-white outline-none transition-all"
 								value={formik.values.licencia_medica}
 								onChange={formik.handleChange}
 								/>
@@ -150,7 +156,7 @@ export const ParamedicoFormulario = () => {
 						<div>
 							<label
 							htmlFor="certificado"
-							className="block text-blue-950 dark:text-gray-200 uppercase font-bold text-2xl text-left"
+							className="text-xs font-bold text-neutral-700 uppercase tracking-widest ml-1"
 							>
 							CERTIFICADO
 							</label>
@@ -159,7 +165,7 @@ export const ParamedicoFormulario = () => {
 							type="text"
 							name="certificado"
 							placeholder="Certificado"
-							className="ml-29 mt-2 border border-gray-300 rounded-md w-full sm:w-80 p-2 placeholder-stone-400"
+							className="w-full p-3.5 bg-slate-50 border-2 border-slate-100 rounded-xl focus:border-sky-blue focus:bg-white outline-none transition-all"
 							value={formik.values.certificado}
 							onChange={formik.handleChange}
 							/>
@@ -170,7 +176,7 @@ export const ParamedicoFormulario = () => {
 						<div>
 							<label
 							htmlFor="licencia_conducir"
-							className="block text-blue-950 dark:text-gray-200 uppercase font-bold text-2xl text-left"
+							className="text-xs font-bold text-neutral-700 uppercase tracking-widest ml-1"
 							>
 							LICENCIA DE CONDUCIR
 							</label>
@@ -179,7 +185,7 @@ export const ParamedicoFormulario = () => {
 							type="text"
 							name="licencia_conducir"
 							placeholder="Licencia para conducir"
-							className="ml-29 mt-2 border border-gray-300 rounded-md w-full sm:w-80 p-2 placeholder-stone-400"
+							className="w-full p-3.5 bg-slate-50 border-2 border-slate-100 rounded-xl focus:border-sky-blue focus:bg-white outline-none transition-all"
 							value={formik.values.licencia_conducir}
 							onChange={formik.handleChange}
 							/>
@@ -192,7 +198,7 @@ export const ParamedicoFormulario = () => {
 						<div>
 							<label
 							htmlFor="password"
-							className="block text-blue-950 dark:text-gray-200 uppercase font-bold text-2xl text-left"
+							className="text-xs font-bold text-neutral-700 uppercase tracking-widest ml-1"
 							>
 							CONTRASEÑA
 							</label>
@@ -201,7 +207,7 @@ export const ParamedicoFormulario = () => {
 							type="password"
 							name="password"
 							placeholder="Contraseña con más de 5 caracteres"
-							className="ml-29 mt-2 border border-gray-300 rounded-md w-full sm:w-80 p-2 placeholder-stone-400"
+							className="w-full p-3.5 bg-slate-50 border-2 border-slate-100 rounded-xl focus:border-sky-blue focus:bg-white outline-none transition-all"
 							value={formik.values.password}
 							onChange={formik.handleChange}
 							/>
@@ -214,7 +220,7 @@ export const ParamedicoFormulario = () => {
 					<div className="flex justify-center">
 						<input
 						type="submit"
-						className="rounded-md bg-cyan-500 p-3 text-white uppercase font-bold hover:bg-cyan-300 transition-colors w-80 mt-8"
+						className="rounded-md bg-sky-400 p-3 text-white uppercase font-bold hover:bg-cyan-300 transition-colors w-80 mt-8"
 						value="Registrar"
 						/>
 					</div>
