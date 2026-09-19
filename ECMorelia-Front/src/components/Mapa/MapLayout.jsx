@@ -5,7 +5,6 @@ import Header from "./Header";
 export default function MapLayout() {
 	return (
 		<div>
-			<Header />
 			<Outlet />
 		</div>
 	);

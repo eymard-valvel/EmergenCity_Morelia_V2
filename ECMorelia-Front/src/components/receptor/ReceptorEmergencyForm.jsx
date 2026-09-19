@@ -1,117 +1,97 @@
-// src/components/receptor/ReceptorEmergencyForm.jsx — VERSIÓN MEJORADA Y COMPLETA
-// Mejoras:
-//   - Recibe wsRef (ref) en lugar de ws (state) para evitar stale closures
-//   - callId ya NO se genera en el cliente; el servidor lo asigna y lo devuelve en el ACK
-//   - Se usa requestId temporal para correlacionar envío con respuesta del servidor
-//   - Manejo de respuesta 'emergency_assigned_ack' y 'emergency_assignment_failed' interno
-//   - Compatibilidad total con el nuevo websocket-server.js
-
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import {
   Box, Flex, VStack, HStack, Heading, Input, Textarea, Button, Spinner,
-  InputGroup, InputRightElement, List, ListItem, Text, Icon, Grid, GridItem,
-  Divider, ButtonGroup, Accordion, AccordionItem, AccordionButton,
-  AccordionPanel, AccordionIcon, NumberInput, NumberInputField, Portal, useToast
+  InputGroup, InputRightElement, List, ListItem, Text, Icon, Grid,
+  Portal, useToast, ButtonGroup, Accordion, AccordionItem, AccordionButton,
+  AccordionPanel, AccordionIcon, SimpleGrid, IconButton, Select
 } from '@chakra-ui/react';
-import { SearchIcon, CloseIcon, CheckCircleIcon } from '@chakra-ui/icons';
-import {
-  FaMapMarkerAlt, FaHeartbeat, FaCarCrash, FaFire, FaBriefcaseMedical,
-  FaLungs, FaSkullCrossbones, FaBaby, FaFistRaised, FaExclamationCircle, FaEllipsisH
-} from 'react-icons/fa';
+import { SearchIcon, CloseIcon, CheckCircleIcon, AddIcon, MinusIcon } from '@chakra-ui/icons';
+import { FaMapMarkerAlt, FaExclamationTriangle, FaUserInjured, FaShieldAlt } from 'react-icons/fa';
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN ||
   'pk.eyJ1IjoiZXltYXJkMjkiLCJhIjoiY21tcDY4YzNpMGw3bjJzb203YmZyNTVnMyJ9.OvZlnCMfUkUYe6Ib83DUVw';
 
-const DEFAULT_CENTER       = { lat: 19.7024, lng: -101.1969 }; // Morelia
-const SEARCH_DEBOUNCE_MS   = 250;
-const SUCCESS_BANNER_MS    = 3500;
+const DEFAULT_CENTER = { lat: 19.7024, lng: -101.1969 };
+const SEARCH_DEBOUNCE_MS = 250;
+const SUCCESS_BANNER_MS = 3500;
 
-const EMERGENCY_TYPES = [
-  { label: 'Accidente Tránsito',   icon: FaCarCrash        },
-  { label: 'Incendio Estructural', icon: FaFire            },
-  { label: 'Paro Cardíaco',        icon: FaHeartbeat       },
-  { label: 'Trauma Grave',         icon: FaBriefcaseMedical},
-  { label: 'Dif. Respiratoria',    icon: FaLungs           },
-  { label: 'Intoxicación',         icon: FaSkullCrossbones },
-  { label: 'Parto en Curso',       icon: FaBaby            },
-  { label: 'Violencia/Agresión',   icon: FaFistRaised      },
-  { label: 'Intento Suicidio',     icon: FaExclamationCircle},
-  { label: 'Indeterminado',        icon: FaEllipsisH       },
+const TIPOS_INCIDENTE = [
+  'Accidente vehicular', 'Motociclista lesionado', 'Atropellamiento', 'Caída',
+  'Agresión', 'Persona inconsciente', 'Dolor torácico', 'Dificultad respiratoria',
+  'Convulsiones', 'Quemaduras', 'Intoxicación', 'Otro'
 ];
 
-const QUICK_NOTES = [
-  'Vía Pública', 'Interior Domicilio', 'Escena Insegura',
-  'Múltiples Víctimas', 'Prensado', 'Arma de Fuego',
+const RIESGOS_ESCENA = [
+  'Incendio', 'Fuga de gas', 'Cables eléctricos', 'Arma de fuego activa',
+  'Derrame de combustible', 'Vehículo en barranco', 'Inundación', 'Material peligroso'
 ];
 
-// ---------- PROP wsRef: { current: WebSocket | null } ----------
 const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent }) => {
   const toast = useToast();
 
-  // Refs para lógica interna
-  const mapContainer              = useRef(null);
-  const map                       = useRef(null);
-  const searchRequestId           = useRef(0);
-  const reverseGeocodeRequestId   = useRef(0);
-  const searchDebounceTimer       = useRef(null);
-  const skipNextReverseGeocode    = useRef(false);
-  const pendingDispatch            = useRef(null); // requestId en vuelo
+  const mapContainer = useRef(null);
+  const map = useRef(null);
+  const searchRequestId = useRef(0);
+  const reverseGeocodeRequestId = useRef(0);
+  const searchDebounceTimer = useRef(null);
+  const skipNextReverseGeocode = useRef(false);
 
-  // Estado del mapa y búsqueda
-  const [addressQuery, setAddressQuery]     = useState('');
-  const [searchResults, setSearchResults]   = useState([]);
-  const [isSearching, setIsSearching]       = useState(false);
+  // Estados de Interfaz
+  const [activeAccordion, setActiveAccordion] = useState(0);
+  const [addressQuery, setAddressQuery] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [isSearching, setIsSearching] = useState(false);
   const [selectedLocation, setSelectedLocation] = useState(DEFAULT_CENTER);
+  
+  // Datos del Formulario
+  const [referencias, setReferencias] = useState('');
+  const [tipoIncidente, setTipoIncidente] = useState('');
+  const [otroIncidente, setOtroIncidente] = useState('');
+  const [paciente, setPaciente] = useState({
+    sexo: '', edad: '', consciente: '', respira: '', sangrado: '', atrapado: '', lesionados: 1, menores: ''
+  });
+  const [riesgos, setRiesgos] = useState([]);
 
-  // Estado del formulario
-  const [emergencyType, setEmergencyType]       = useState('');
-  const [patientAge, setPatientAge]             = useState('');
-  const [patientSex, setPatientSex]             = useState('');
-  const [patientCondition, setPatientCondition] = useState('');
-  const [notes, setNotes]                       = useState('');
-  const [isSubmitting, setIsSubmitting]         = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [showSuccessBanner, setShowSuccessBanner] = useState(false);
   const [lastAssignedCallId, setLastAssignedCallId] = useState(null);
 
-  // Acordeón
-  const [expandedIndices, setExpandedIndices] = useState([0]);
-
   // Validación
-  const isFormValid = emergencyType !== '' &&
-    patientCondition.trim().length >= 3 &&
-    addressQuery.trim() !== '';
+  const isFormValid = addressQuery.trim() !== '' && tipoIncidente !== '' && paciente.lesionados > 0;
 
-  // ==================== MAPA ====================
+  // Lógica para encender el ícono 3 en verde solo si ya se empezó a llenar
+  const isPacienteIniciado = paciente.sexo !== '' || paciente.consciente !== '' || paciente.edad !== '';
+
+  // ==================== GEOLOCALIZACIÓN INVERSA ====================
   const reverseGeocode = useCallback(async (lng, lat) => {
     const reqId = ++reverseGeocodeRequestId.current;
     try {
       const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${lng},${lat}.json?access_token=${mapboxgl.accessToken}&language=es&types=address,poi,place`;
-      const res  = await fetch(url);
+      const res = await fetch(url);
       const data = await res.json();
       if (reqId !== reverseGeocodeRequestId.current) return;
-      if (data.features?.length > 0) setAddressQuery(data.features[0].place_name);
+      if (data.features?.length > 0) {
+        setAddressQuery(data.features[0].place_name);
+      }
     } catch (e) {
       console.error('RevGeocode Error:', e);
     }
   }, []);
 
+  // ==================== INICIALIZACIÓN DEL MAPA ====================
   useEffect(() => {
     if (!mapContainer.current) return;
-
     const mapInstance = new mapboxgl.Map({
       container: mapContainer.current,
       style: 'mapbox://styles/mapbox/dark-v11',
       center: [DEFAULT_CENTER.lng, DEFAULT_CENTER.lat],
-      zoom: 16,
+      zoom: 15,
       attributionControl: false,
     });
 
-    mapInstance.addControl(
-      new mapboxgl.NavigationControl({ showCompass: false }),
-      'bottom-right'
-    );
+    mapInstance.addControl(new mapboxgl.NavigationControl({ showCompass: false }), 'bottom-right');
 
     mapInstance.on('move', () => {
       const center = mapInstance.getCenter();
@@ -131,30 +111,35 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent }) => {
     return () => mapInstance.remove();
   }, [reverseGeocode]);
 
-  // ==================== BÚSQUEDA DE DIRECCIONES ====================
-  const searchAddresses = useCallback((query) => {
-    if (searchDebounceTimer.current) clearTimeout(searchDebounceTimer.current);
-    if (!query || query.trim().length < 3) {
-      setSearchResults([]); setIsSearching(false); return;
+  // ==================== BÚSQUEDA PANORÁMICA ====================
+const searchAddresses = useCallback((query) => {
+  if (searchDebounceTimer.current) clearTimeout(searchDebounceTimer.current);
+  if (!query || query.trim().length < 3) {
+    setSearchResults([]); setIsSearching(false); return;
+  }
+  setIsSearching(true);
+  searchDebounceTimer.current = setTimeout(async () => {
+    const reqId = ++searchRequestId.current;
+    try {
+      // Bounding box aproximado de Morelia, Michoacán [minLng, minLat, maxLng, maxLat] y proximidad al centro
+      const bbox = "-101.35,19.60,-101.05,19.80";
+      const proximity = "-101.1969,19.7024";
+      const q = encodeURIComponent(query.trim());
+      
+      const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${q}.json?access_token=${mapboxgl.accessToken}&country=mx&bbox=${bbox}&proximity=${proximity}&limit=5&language=es`;
+      const res = await fetch(url);
+      const data = await res.json();
+      if (reqId !== searchRequestId.current) return;
+      setSearchResults((data.features || []).map(f => ({
+        id: f.id, place_name: f.place_name, lat: f.center[1], lng: f.center[0],
+      })));
+    } catch (e) {
+      if (reqId === searchRequestId.current) setSearchResults([]);
+    } finally {
+      if (reqId === searchRequestId.current) setIsSearching(false);
     }
-    setIsSearching(true);
-    searchDebounceTimer.current = setTimeout(async () => {
-      const reqId = ++searchRequestId.current;
-      try {
-        const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query.trim())}.json?access_token=${mapboxgl.accessToken}&country=mx&limit=5&language=es`;
-        const res  = await fetch(url);
-        const data = await res.json();
-        if (reqId !== searchRequestId.current) return;
-        setSearchResults((data.features || []).map(f => ({
-          id: f.id, place_name: f.place_name, lat: f.center[1], lng: f.center[0],
-        })));
-      } catch (e) {
-        if (reqId === searchRequestId.current) setSearchResults([]);
-      } finally {
-        if (reqId === searchRequestId.current) setIsSearching(false);
-      }
-    }, SEARCH_DEBOUNCE_MS);
-  }, []);
+  }, SEARCH_DEBOUNCE_MS);
+}, []);
 
   const selectSearchResult = useCallback((result) => {
     skipNextReverseGeocode.current = true;
@@ -164,81 +149,60 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent }) => {
     map.current?.flyTo({ center: [result.lng, result.lat], zoom: 17 });
   }, []);
 
-  const clearAddress = useCallback(() => {
-    setAddressQuery('');
-    setSearchResults([]);
-  }, []);
+  const clearAddress = () => { setAddressQuery(''); setSearchResults([]); };
 
-  // ==================== ACORDEÓN ====================
-  const handleSelectType = useCallback((type) => {
-    setEmergencyType(type);
-    setExpandedIndices([1]);
-  }, []);
+  // ==================== HANDLERS DE FORMULARIO ====================
+  const handleIncidenteSelect = (tipo) => {
+    setTipoIncidente(tipo);
+    if (tipo !== 'Otro') setActiveAccordion(2); 
+  };
 
-  const handleConfirmSection2 = useCallback(() => {
-    if (patientCondition.trim().length >= 3) setExpandedIndices([2]);
-  }, [patientCondition]);
+  const handlePacienteChange = (campo, valor) => setPaciente(prev => ({ ...prev, [campo]: valor }));
+  
+  const adjustLesionados = (delta) => {
+    setPaciente(prev => ({ ...prev, lesionados: Math.max(1, prev.lesionados + delta) }));
+  };
 
-  const handleQuickNote = useCallback((note) => {
-    setNotes(prev => prev ? `${prev} | ${note}` : note);
-  }, []);
+  const handleRiesgoToggle = (riesgo) => {
+    setRiesgos(prev => prev.includes(riesgo) ? prev.filter(r => r !== riesgo) : [...prev, riesgo]);
+  };
 
-  // ==================== ENVÍO ====================
-  const resetForm = useCallback(() => {
-    setEmergencyType('');
-    setPatientAge('');
-    setPatientSex('');
-    setPatientCondition('');
-    setNotes('');
-    setExpandedIndices([0]);
-  }, []);
+  const resetForm = () => {
+    setAddressQuery(''); setReferencias(''); setTipoIncidente(''); setOtroIncidente('');
+    setPaciente({ sexo: '', edad: '', consciente: '', respira: '', sangrado: '', atrapado: '', lesionados: 1, menores: '' });
+    setRiesgos([]); setActiveAccordion(0);
+  };
 
-  const executeDispatch = useCallback(async () => {
+  const executeDispatch = async () => {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) {
-      toast({
-        title: 'Sin conexión',
-        description: 'No se puede enviar: el WebSocket no está abierto.',
-        status: 'error', duration: 5000, isClosable: true, position: 'top-right',
-      });
+      toast({ title: 'SISTEMA OFFLINE', description: 'Reconectando al servidor central.', status: 'error', duration: 4000 });
       return;
     }
 
     setIsSubmitting(true);
-
-    // requestId para correlacionar respuesta (el callId real lo genera el servidor)
-    const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
-    pendingDispatch.current = requestId;
-
+    const requestId = `req_${Date.now()}`;
     const payload = {
       type: 'emergency_call',
-      requestId,                           // correlación cliente-servidor
+      requestId,
       location: selectedLocation,
-      address: addressQuery || 'Sin dirección registrada',
-      emergencyType,
-      patientInfo: { age: patientAge, sex: patientSex, condition: patientCondition },
-      notes,
+      address: addressQuery, 
+      referencias, 
+      emergencyType: tipoIncidente === 'Otro' ? otroIncidente : tipoIncidente,
+      patientInfo: paciente,
+      riesgos,
       timestamp: new Date().toISOString(),
     };
-
-    console.log('📤 Enviando emergencia:', payload);
 
     try {
       ws.send(JSON.stringify(payload));
 
-      // Escuchar la respuesta del servidor (ACK con callId real)
       const responseHandler = (event) => {
         try {
           const data = JSON.parse(event.data);
-          // Solo procesar si es la respuesta a ESTE envío
-          if (
-            data.type === 'emergency_assigned_ack' ||
-            data.type === 'emergency_assignment_failed'
-          ) {
+          if (data.type === 'emergency_assigned_ack' || data.type === 'emergency_assignment_failed') {
             ws.removeEventListener('message', responseHandler);
-            clearTimeout(responseTimeout);
             setIsSubmitting(false);
-            pendingDispatch.current = null;
 
             if (data.type === 'emergency_assigned_ack') {
               setLastAssignedCallId(data.callId);
@@ -247,421 +211,266 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent }) => {
               resetForm();
               if (onEmergencySent) onEmergencySent();
             } else {
-              // Fallo — el folio queda en espera, pero igual limpiar el form
-              toast({
-                title: '⚠️ Sin unidad disponible',
-                description: `${data.message || 'Folio creado en lista de espera.'}`,
-                status: 'warning', duration: 7000, isClosable: true, position: 'top-right',
-              });
-              setShowSuccessBanner(true); // banner verde con callId aunque esté en espera
-              setTimeout(() => setShowSuccessBanner(false), SUCCESS_BANNER_MS);
+              toast({ title: 'ALERTA EN ESPERA', description: 'Folio generado. No hay unidades disponibles actualmente.', status: 'warning', duration: 7000 });
               resetForm();
               if (onEmergencySent) onEmergencySent();
             }
           }
-        } catch { /* ignorar mensajes no JSON */ }
+        } catch { }
       };
-
-      // Timeout de seguridad: si el servidor no responde en 8s, limpiar estado
-      const responseTimeout = setTimeout(() => {
-        ws.removeEventListener('message', responseHandler);
-        setIsSubmitting(false);
-        pendingDispatch.current = null;
-        toast({
-          title: 'Tiempo de espera agotado',
-          description: 'No se recibió confirmación del servidor. Verifique la conexión.',
-          status: 'warning', duration: 6000, isClosable: true, position: 'top-right',
-        });
-      }, 8000);
-
       ws.addEventListener('message', responseHandler);
-
+      
+      setTimeout(() => { setIsSubmitting(false); ws.removeEventListener('message', responseHandler); }, 8000);
     } catch (error) {
-      console.error('❌ Error al enviar:', error);
       setIsSubmitting(false);
-      pendingDispatch.current = null;
-      toast({
-        title: 'Error de envío',
-        description: error.message || 'No se pudo enviar la emergencia.',
-        status: 'error', duration: 5000, isClosable: true, position: 'top-right',
-      });
+      toast({ title: 'ERROR CRÍTICO', description: 'Fallo al transmitir. Reintente.', status: 'error', duration: 4000 });
     }
-  }, [
-    wsRef, selectedLocation, addressQuery, emergencyType,
-    patientAge, patientSex, patientCondition, notes,
-    toast, resetForm, onEmergencySent,
-  ]);
+  };
 
-  // ==================== RENDER ====================
   return (
-    <Flex h="100%" w="100%" bg="#000000" direction={{ base: 'column', lg: 'row' }}>
-
-      {/* ===== PANEL IZQUIERDO: FORMULARIO ===== */}
-      <Flex
-        w={{ base: '100%', lg: '450px', xl: '540px' }}
-        flexShrink={0} direction="column" bg="#0a0a0a"
-        borderRight={{ lg: '1px solid #262626' }}
-        borderBottom={{ base: '1px solid #262626', lg: 'none' }}
-        h={{ base: '60vh', lg: '100%' }}
-      >
-        {/* Header */}
-        <Box p={5} borderBottom="1px solid #262626" bg="#171717">
-          <Heading fontSize="15px" color="#e5e5e5" fontWeight="900" letterSpacing="1px" textTransform="uppercase">
-            Matriz de Captura
-          </Heading>
-          <Text
-            fontSize="11px" fontFamily="mono" mt={1} fontWeight="bold"
-            color={isFormValid ? '#10b981' : '#ef4444'}
-          >
-            {isFormValid ? '✓ REQUISITOS CUMPLIDOS' : '⚠ SE REQUIEREN DATOS OBLIGATORIOS'}
-          </Text>
+    <Flex h="100%" w="100%" bg="#09090b" direction={{ base: 'column-reverse', xl: 'row' }}>
+      
+      {/* ===== PANEL IZQUIERDO: FORMULARIO ACORDEÓN ===== */}
+      <Flex w={{ base: '100%', xl: '680px' }} flexShrink={0} direction="column" bg="#09090b" borderRight="1px solid #27272a" h="100%" zIndex={2}>
+        <Box p={5} borderBottom="1px solid #27272a" bg="#09090b">
+          <Heading fontSize="18px" color="#f8fafc" fontWeight="900" letterSpacing="1px">MATRIZ DE CAPTURA</Heading>
+          <Text fontSize="13px" color="#a1a1aa" mt={1}>Utilice la tecla TAB para navegar. Seleccione una opción para auto-avanzar.</Text>
         </Box>
 
-        {/* Acordeón scrollable */}
-        <Box
-          flex={1} overflowY="auto"
-          sx={{
-            '&::-webkit-scrollbar': { width: '5px' },
-            '&::-webkit-scrollbar-thumb': { bg: '#404040', borderRadius: '4px' },
-          }}
-        >
-          <Accordion
-            index={expandedIndices}
-            onChange={(idx) => setExpandedIndices(idx)}
-            allowMultiple
-          >
-
-            {/* ── SECCIÓN 1: CLASIFICACIÓN TÁCTICA ── */}
-            <AccordionItem border="none" borderBottom="1px solid #262626">
-              <h2>
-                <AccordionButton
-                  py={4}
-                  bg={emergencyType ? '#1e293b' : '#171717'}
-                  _hover={{ bg: '#262626' }}
+        <Box flex={1} overflowY="auto" sx={{ '&::-webkit-scrollbar': { width: '8px' }, '&::-webkit-scrollbar-thumb': { bg: '#3f3f46', borderRadius: '4px' } }}>
+          <Accordion index={[activeAccordion]} onChange={(idx) => setActiveAccordion(idx)} allowToggle>
+            
+            {/* 1. REFERENCIAS */}
+            <AccordionItem border="none" borderBottom="1px solid #27272a">
+              <AccordionButton py={5} bg={activeAccordion === 0 ? '#18181b' : 'transparent'} _hover={{ bg: '#18181b' }}>
+                <Box flex="1" textAlign="left"><HStack><Icon as={FaMapMarkerAlt} color={referencias ? '#10b981' : '#a1a1aa'} /><Text fontSize="15px" fontWeight="900" color="#f8fafc">1. REFERENCIAS VISUALES</Text></HStack></Box>
+                <AccordionIcon color="#a1a1aa" />
+              </AccordionButton>
+              <AccordionPanel pb={6} bg="#09090b">
+                <Text fontSize="12px" color="#a1a1aa" mb={2} fontWeight="700" textTransform="uppercase">Referencias de acceso (Opcional)</Text>
+                <Textarea 
+                  w="100%" size="lg" bg="#18181b" border="1px solid #3f3f46" color="white" rows={3} 
+                  value={referencias} onChange={e=>setReferencias(e.target.value)} 
+                  placeholder="Ej. Frente al parque central, portón negro..." _focus={{ borderColor: '#38bdf8', boxShadow: 'none' }}
+                />
+                <Button 
+                  mt={4} w="100%" h="50px" bg="#3f3f46" color="white" fontWeight="900" letterSpacing="1px"
+                  _hover={{ bg: '#dc2626', transform: 'scale(1.01)' }} 
+                  _focus={{ bg: '#dc2626', outline: 'none', boxShadow: '0 0 0 3px rgba(220,38,38,0.4)' }}
+                  onClick={() => setActiveAccordion(1)} transition="all 0.15s"
                 >
-                  <Box as="span" flex="1" textAlign="left" fontSize="12px" fontWeight="bold"
-                    color={emergencyType ? '#38bdf8' : '#e5e5e5'} letterSpacing="1px"
-                  >
-                    1. CLASIFICACIÓN TÁCTICA
-                    {emergencyType && (
-                      <Text as="span" color="#10b981" ml={2} fontWeight="900">[{emergencyType}]</Text>
-                    )}
-                  </Box>
-                  <AccordionIcon color="#a3a3a3" />
-                </AccordionButton>
-              </h2>
-              <AccordionPanel pb={5} bg="#0a0a0a">
-                <Grid templateColumns={{ base: 'repeat(1,1fr)', sm: 'repeat(2,1fr)' }} gap={3}>
-                  {EMERGENCY_TYPES.map((t) => (
-                    <GridItem key={t.label}>
-                      <Button
-                        w="100%" h="44px" justifyContent="flex-start" borderRadius="md"
-                        bg={emergencyType === t.label ? '#0284c7' : '#171717'}
-                        color={emergencyType === t.label ? '#ffffff' : '#a3a3a3'}
-                        border="1px solid"
-                        borderColor={emergencyType === t.label ? '#38bdf8' : '#262626'}
-                        _hover={{ bg: emergencyType === t.label ? '#0284c7' : '#262626' }}
-                        onClick={() => handleSelectType(t.label)}
-                        px={4}
-                      >
-                        <Icon as={t.icon} mr={3} boxSize={4} />
-                        <Text fontSize="12px" fontWeight="bold" noOfLines={1}>{t.label}</Text>
-                      </Button>
-                    </GridItem>
-                  ))}
-                </Grid>
-              </AccordionPanel>
-            </AccordionItem>
-
-            {/* ── SECCIÓN 2: DATOS DEL OBJETIVO ── */}
-            <AccordionItem border="none" borderBottom="1px solid #262626">
-              <h2>
-                <AccordionButton
-                  py={4}
-                  bg={patientCondition.length >= 3 ? '#1e293b' : '#171717'}
-                  _hover={{ bg: '#262626' }}
-                >
-                  <Box as="span" flex="1" textAlign="left" fontSize="12px" fontWeight="bold"
-                    color={patientCondition.length >= 3 ? '#38bdf8' : '#e5e5e5'} letterSpacing="1px"
-                  >
-                    2. DATOS DEL OBJETIVO
-                    {patientCondition.length >= 3 && (
-                      <Text as="span" color="#10b981" ml={2}>[✓]</Text>
-                    )}
-                  </Box>
-                  <AccordionIcon color="#a3a3a3" />
-                </AccordionButton>
-              </h2>
-              <AccordionPanel pb={5} bg="#0a0a0a">
-                <HStack spacing={4} mb={4}>
-                  <Box flex={1}>
-                    <Text fontSize="11px" color="#737373" mb={2} textTransform="uppercase" fontWeight="bold">
-                      Edad (0-120)
-                    </Text>
-                    <NumberInput
-                      value={patientAge}
-                      onChange={(v) => setPatientAge(v)}
-                      min={0} max={120}
-                      clampValueOnBlur keepWithinRange
-                    >
-                      <NumberInputField
-                        bg="#171717" border="1px solid #262626" color="#e5e5e5"
-                        borderRadius="md" h="44px" fontSize="14px" fontFamily="mono"
-                        placeholder="Años"
-                        _focus={{ borderColor: '#38bdf8', boxShadow: 'none' }}
-                      />
-                    </NumberInput>
-                  </Box>
-                  <Box flex={2}>
-                    <Text fontSize="11px" color="#737373" mb={2} textTransform="uppercase" fontWeight="bold">
-                      Sexo
-                    </Text>
-                    <ButtonGroup isAttached w="100%" variant="outline">
-                      {['M', 'F', 'N/D'].map(sex => (
-                        <Button
-                          key={sex} flex={1} h="44px" borderRadius="md"
-                          fontSize="13px" fontWeight="bold"
-                          bg={patientSex === sex ? '#3f3f46' : '#171717'}
-                          color={patientSex === sex ? '#ffffff' : '#a3a3a3'}
-                          borderColor="#262626"
-                          onClick={() => setPatientSex(sex)}
-                          _hover={{ bg: '#262626' }}
-                        >
-                          {sex}
-                        </Button>
-                      ))}
-                    </ButtonGroup>
-                  </Box>
-                </HStack>
-
-                <Box mb={4}>
-                  <Text fontSize="11px" color="#ef4444" mb={2} textTransform="uppercase" fontWeight="bold">
-                    * Condición Principal (Obligatorio)
-                  </Text>
-                  <Input
-                    value={patientCondition}
-                    onChange={(e) => setPatientCondition(e.target.value)}
-                    bg="#171717"
-                    border="1px solid"
-                    borderColor={patientCondition.length >= 3 ? '#10b981' : '#262626'}
-                    color="#e5e5e5" borderRadius="md" h="48px" fontSize="14px"
-                    placeholder="Ej. Inconsciente, sangrado arterial..."
-                    _focus={{ borderColor: '#38bdf8', boxShadow: 'none' }}
-                    w="100%"
-                  />
-                </Box>
-
-                <Button
-                  w="100%" size="sm" colorScheme="blue" variant="outline"
-                  isDisabled={patientCondition.trim().length < 3}
-                  onClick={handleConfirmSection2}
-                >
-                  Confirmar Datos y Continuar
+                  CONFIRMAR Y CONTINUAR
                 </Button>
               </AccordionPanel>
             </AccordionItem>
 
-            {/* ── SECCIÓN 3: REPORTE DE ENTORNO ── */}
-            <AccordionItem border="none">
-              <h2>
-                <AccordionButton
-                  py={4}
-                  bg={notes ? '#1e293b' : '#171717'}
-                  _hover={{ bg: '#262626' }}
-                >
-                  <Box as="span" flex="1" textAlign="left" fontSize="12px" fontWeight="bold"
-                    color={notes ? '#38bdf8' : '#e5e5e5'} letterSpacing="1px"
-                  >
-                    3. REPORTE DE ENTORNO
-                    {notes && <Text as="span" color="#10b981" ml={2}>[✓]</Text>}
-                  </Box>
-                  <AccordionIcon color="#a3a3a3" />
-                </AccordionButton>
-              </h2>
-              <AccordionPanel pb={5} bg="#0a0a0a">
-                <Textarea
-                  value={notes}
-                  onChange={(e) => setNotes(e.target.value)}
-                  bg="#171717" border="1px solid #262626" color="#e5e5e5"
-                  borderRadius="md" h="100px" fontSize="14px" resize="vertical" mb={3}
-                  placeholder="Describa riesgos en escena, accesos..."
-                  _focus={{ borderColor: '#38bdf8', boxShadow: 'none' }}
-                  w="100%"
-                />
-                <Grid templateColumns={{ base: 'repeat(2,1fr)', sm: 'repeat(3,1fr)' }} gap={2}>
-                  {QUICK_NOTES.map(note => (
-                    <Button
-                      key={note} size="sm" h="32px" fontSize="10px" borderRadius="md"
-                      bg="#1e293b" color="#94a3b8" border="1px solid #334155"
-                      _hover={{ bg: '#334155', color: 'white' }}
-                      onClick={() => handleQuickNote(note)}
+            {/* 2. TIPO DE INCIDENTE */}
+            <AccordionItem border="none" borderBottom="1px solid #27272a">
+              <AccordionButton py={5} bg={activeAccordion === 1 ? '#18181b' : 'transparent'} _hover={{ bg: '#18181b' }}>
+                <Box flex="1" textAlign="left"><HStack><Icon as={FaExclamationTriangle} color={tipoIncidente ? '#10b981' : '#a1a1aa'} /><Text fontSize="15px" fontWeight="900" color="#f8fafc">2. TIPO DE INCIDENTE *</Text></HStack></Box>
+                <AccordionIcon color="#a1a1aa" />
+              </AccordionButton>
+              <AccordionPanel pb={6} bg="#09090b">
+                <Grid templateColumns="repeat(3, 1fr)" gap={3}>
+                  {TIPOS_INCIDENTE.map(tipo => (
+                    <Button key={tipo} size="md" whiteSpace="normal" height="100%" minH="60px"
+                      bg={tipoIncidente === tipo ? '#0284c7' : '#18181b'} color={tipoIncidente === tipo ? 'white' : '#d4d4d8'}
+                      border="1px solid" borderColor={tipoIncidente === tipo ? '#38bdf8' : '#3f3f46'}
+                      onClick={() => handleIncidenteSelect(tipo)} _hover={{bg: tipoIncidente === tipo ? '#0369a1' : '#27272a'}}
+                      _focus={{ boxShadow: '0 0 0 3px rgba(2,132,199,0.5)' }}
+                      fontSize="13px" fontWeight="800"
                     >
-                      {note}
+                      {tipo}
                     </Button>
                   ))}
                 </Grid>
+                {tipoIncidente === 'Otro' && (
+                  <VStack mt={4} w="100%">
+                    <Input size="lg" bg="#18181b" border="1px solid #3f3f46" color="white" placeholder="Especifique el incidente..." value={otroIncidente} onChange={e=>setOtroIncidente(e.target.value)} _focus={{ borderColor: '#38bdf8', boxShadow: 'none' }}/>
+                    <Button 
+                      w="100%" h="50px" bg="#3f3f46" color="white" fontWeight="900" letterSpacing="1px"
+                      _hover={{ bg: '#dc2626', transform: 'scale(1.01)' }} 
+                      _focus={{ bg: '#dc2626', outline: 'none', boxShadow: '0 0 0 3px rgba(220,38,38,0.4)' }}
+                      onClick={() => setActiveAccordion(2)} transition="all 0.15s"
+                    >
+                      CONTINUAR
+                    </Button>
+                  </VStack>
+                )}
               </AccordionPanel>
             </AccordionItem>
 
+            {/* 3. ESTADO DEL PACIENTE */}
+            <AccordionItem border="none" borderBottom="1px solid #27272a">
+              <AccordionButton py={5} bg={activeAccordion === 2 ? '#18181b' : 'transparent'} _hover={{ bg: '#18181b' }}>
+                <Box flex="1" textAlign="left"><HStack><Icon as={FaUserInjured} color={isPacienteIniciado ? '#10b981' : '#a1a1aa'} /><Text fontSize="15px" fontWeight="900" color="#f8fafc">3. EVALUACIÓN INICIAL *</Text></HStack></Box>
+                <AccordionIcon color="#a1a1aa" />
+              </AccordionButton>
+              <AccordionPanel pb={6} bg="#09090b">
+                <SimpleGrid columns={2} spacingX={6} spacingY={6}>
+                  <Box>
+                    <Text fontSize="12px" color="#a1a1aa" mb={2} fontWeight="800">SEXO</Text>
+                    <Select size="lg" bg="#18181b" borderColor="#3f3f46" color="white" _focus={{ borderColor: '#38bdf8' }} value={paciente.sexo} onChange={e=>handlePacienteChange('sexo', e.target.value)}>
+                      <option style={{ background: '#18181b' }} value="">Seleccionar...</option>
+                      <option style={{ background: '#18181b' }} value="Hombre">Hombre</option>
+                      <option style={{ background: '#18181b' }} value="Mujer">Mujer</option>
+                      <option style={{ background: '#18181b' }} value="N/S">No se sabe</option>
+                    </Select>
+                  </Box>
+                  <Box>
+                    <Text fontSize="12px" color="#a1a1aa" mb={2} fontWeight="800">EDAD APARENTE</Text>
+                    <Input size="lg" bg="#18181b" border="1px solid #3f3f46" color="white" type="number" placeholder="Ej. 35" value={paciente.edad} onChange={e=>handlePacienteChange('edad', e.target.value)} _focus={{ borderColor: '#38bdf8', boxShadow: 'none' }}/>
+                  </Box>
+                  <Box>
+                    <Text fontSize="12px" color="#a1a1aa" mb={2} fontWeight="800">¿CONSCIENTE?</Text>
+                    <Select size="lg" bg="#18181b" borderColor="#3f3f46" color="white" _focus={{ borderColor: '#38bdf8' }} value={paciente.consciente} onChange={e=>handlePacienteChange('consciente', e.target.value)}>
+                      <option style={{ background: '#18181b' }} value="">Seleccionar...</option>
+                      <option style={{ background: '#18181b' }} value="Sí">Sí</option>
+                      <option style={{ background: '#18181b' }} value="No">No</option>
+                      <option style={{ background: '#18181b' }} value="N/S">No se sabe</option>
+                    </Select>
+                  </Box>
+                  <Box>
+                    <Text fontSize="12px" color="#a1a1aa" mb={2} fontWeight="800">¿RESPIRA?</Text>
+                    <Select size="lg" bg="#18181b" borderColor="#3f3f46" color="white" _focus={{ borderColor: '#38bdf8' }} value={paciente.respira} onChange={e=>handlePacienteChange('respira', e.target.value)}>
+                      <option style={{ background: '#18181b' }} value="">Seleccionar...</option>
+                      <option style={{ background: '#18181b' }} value="Sí">Sí</option>
+                      <option style={{ background: '#18181b' }} value="No">No</option>
+                      <option style={{ background: '#18181b' }} value="N/S">No se sabe</option>
+                    </Select>
+                  </Box>
+                  <Box>
+                    <Text fontSize="12px" color="#a1a1aa" mb={2} fontWeight="800">¿SANGRADO?</Text>
+                    <Select size="lg" bg="#18181b" borderColor="#3f3f46" color="white" _focus={{ borderColor: '#38bdf8' }} value={paciente.sangrado} onChange={e=>handlePacienteChange('sangrado', e.target.value)}>
+                      <option style={{ background: '#18181b' }} value="">Seleccionar...</option>
+                      <option style={{ background: '#18181b' }} value="Sí">Sí</option>
+                      <option style={{ background: '#18181b' }} value="No">No</option>
+                      <option style={{ background: '#18181b' }} value="N/S">No se sabe</option>
+                    </Select>
+                  </Box>
+                  <Box>
+                    <Text fontSize="12px" color="#a1a1aa" mb={2} fontWeight="800">¿ATRAPADO / PRENSADO?</Text>
+                    <Select size="lg" bg="#18181b" borderColor="#3f3f46" color="white" _focus={{ borderColor: '#38bdf8' }} value={paciente.atrapado} onChange={e=>handlePacienteChange('atrapado', e.target.value)}>
+                      <option style={{ background: '#18181b' }} value="">Seleccionar...</option>
+                      <option style={{ background: '#18181b' }} value="Sí">Sí</option>
+                      <option style={{ background: '#18181b' }} value="No">No</option>
+                    </Select>
+                  </Box>
+                  <Box gridColumn="span 2">
+                    <Text fontSize="12px" color="#a1a1aa" mb={2} fontWeight="800">NÚMERO DE LESIONADOS *</Text>
+                    <HStack w="100%">
+                      <IconButton size="lg" icon={<MinusIcon />} onClick={() => adjustLesionados(-1)} bg="#27272a" color="white" _hover={{ bg: '#3f3f46' }} />
+                      <Flex flex={1} bg="#18181b" border="1px solid #3f3f46" h="48px" borderRadius="md" alignItems="center" justifyContent="center">
+                        <Text fontSize="20px" fontWeight="900" color="white">{paciente.lesionados}</Text>
+                      </Flex>
+                      <IconButton size="lg" icon={<AddIcon />} onClick={() => adjustLesionados(1)} bg="#27272a" color="white" _hover={{ bg: '#3f3f46' }} />
+                    </HStack>
+                  </Box>
+                </SimpleGrid>
+                <Button 
+                  mt={6} w="100%" h="50px" bg="#3f3f46" color="white" fontWeight="900" letterSpacing="1px"
+                  _hover={{ bg: '#dc2626', transform: 'scale(1.01)' }} 
+                  _focus={{ bg: '#dc2626', outline: 'none', boxShadow: '0 0 0 3px rgba(220,38,38,0.4)' }}
+                  onClick={() => setActiveAccordion(3)} transition="all 0.15s"
+                >
+                  CONFIRMAR Y CONTINUAR
+                </Button>
+              </AccordionPanel>
+            </AccordionItem>
+
+            {/* 4. RIESGOS EN LA ESCENA */}
+            <AccordionItem border="none">
+              <AccordionButton py={5} bg={activeAccordion === 3 ? '#18181b' : 'transparent'} _hover={{ bg: '#18181b' }}>
+                <Box flex="1" textAlign="left"><HStack><Icon as={FaShieldAlt} color={riesgos.length > 0 ? '#f59e0b' : '#a1a1aa'} /><Text fontSize="15px" fontWeight="900" color="#f8fafc">4. RIESGOS EN LA ESCENA</Text></HStack></Box>
+                <AccordionIcon color="#a1a1aa" />
+              </AccordionButton>
+              <AccordionPanel pb={6} bg="#09090b">
+                <SimpleGrid columns={2} spacing={3}>
+                  {RIESGOS_ESCENA.map(riesgo => {
+                    const isSelected = riesgos.includes(riesgo);
+                    return (
+                      <Button key={riesgo} onClick={() => handleRiesgoToggle(riesgo)}
+                        size="lg" justifyContent="flex-start" px={4} whiteSpace="normal" height="auto" minH="60px"
+                        bg={isSelected ? '#f59e0b' : '#18181b'} color={isSelected ? '#000000' : '#a1a1aa'}
+                        border={isSelected ? '2px solid #f59e0b' : '1px solid #3f3f46'}
+                        _hover={{ bg: isSelected ? '#d97706' : '#27272a' }} 
+                        _focus={{ boxShadow: '0 0 0 3px rgba(245,158,11,0.5)' }} transition="all 0.1s"
+                      >
+                        <Text fontSize="14px" fontWeight={isSelected ? "900" : "600"}>{riesgo}</Text>
+                      </Button>
+                    );
+                  })}
+                </SimpleGrid>
+              </AccordionPanel>
+            </AccordionItem>
           </Accordion>
         </Box>
 
-        {/* ── BOTÓN DE DESPACHO ── */}
-        <Box p={5} bg="#0a0a0a" borderTop="1px solid #262626">
+        {/* ── BOTÓN DE DESPACHO GIGANTE (Rojo estricto para acción destructiva) ── */}
+        <Box p={6} bg="#09090b" borderTop="1px solid #27272a" boxShadow="0 -10px 30px rgba(0,0,0,0.5)">
           <Button
-            w="100%" h="60px"
-            bg={isFormValid ? '#dc2626' : '#262626'}
-            color={isFormValid ? 'white' : '#737373'}
-            borderRadius="md" fontSize="14px" fontWeight="900" letterSpacing="1px"
-            _hover={{ bg: isFormValid ? '#b91c1c' : '#262626' }}
+            w="100%" h="80px" bg={isFormValid ? '#dc2626' : '#18181b'} color={isFormValid ? 'white' : '#52525b'}
+            borderRadius="xl" fontSize="18px" fontWeight="900" letterSpacing="2px"
+            _hover={{ bg: isFormValid ? '#b91c1c' : '#18181b', transform: isFormValid ? 'translateY(-2px)' : 'none' }}
+            _focus={{ boxShadow: '0 0 0 4px rgba(220,38,38,0.5)' }} transition="all 0.2s"
             isDisabled={!wsConnected || !isFormValid || isSubmitting}
-            isLoading={isSubmitting}
-            loadingText="ENVIANDO..."
-            onClick={executeDispatch}
+            isLoading={isSubmitting} loadingText="DETONANDO DESPACHO..." onClick={executeDispatch}
           >
-            {!wsConnected
-              ? '⚡ SIN CONEXIÓN AL SERVIDOR'
-              : isFormValid
-                ? 'AUTORIZAR DESPACHO INMEDIATO'
-                : 'FALTAN DATOS OBLIGATORIOS'
-            }
+            {isFormValid ? 'AUTORIZAR DESPACHO' : 'COMPLETE LOS CAMPOS REQUERIDOS'}
           </Button>
         </Box>
       </Flex>
 
-      {/* ===== BANNER DE ÉXITO (Portal) ===== */}
+      {/* ===== PANEL DERECHO: MAPA CON BUSCADOR PANORÁMICO ===== */}
+      <Box flex={1} position="relative" h={{ base: '50vh', xl: '100%' }}>
+        
+        {/* BUSCADOR PANORÁMICO (Ocupa 100% del ancho del mapa) */}
+        <Box position="absolute" top={0} left={0} right={0} zIndex={10} bg="rgba(9,9,11,0.9)" borderBottom="1px solid #27272a" p={4} backdropFilter="blur(10px)">
+          <InputGroup size="lg" w="100%" h="60px">
+            <Input
+              h="60px" w="100%"
+              value={addressQuery}
+              onChange={(e) => { setAddressQuery(e.target.value); searchAddresses(e.target.value); }}
+              bg="#18181b" border="2px solid" borderColor={addressQuery ? '#3f3f46' : '#ef4444'}
+              color="white" borderRadius="md" fontSize="18px" fontWeight="800"
+              placeholder="Busque vialidad, cruzamientos o punto de referencia..."
+              _focus={{ borderColor: '#38bdf8', boxShadow: 'none' }}
+            />
+          </InputGroup>
+
+          {searchResults.length > 0 && (
+            <List w="100%" mt={2} bg="#18181b" border="1px solid #3f3f46" borderRadius="md" shadow="2xl">
+              {searchResults.map((res) => (
+                <ListItem key={res.id} p={4} fontSize="16px" fontWeight="700" color="#e4e4e7" borderBottom="1px solid #27272a" cursor="pointer" _hover={{ bg: '#27272a' }} onClick={() => selectSearchResult(res)}>
+                  <HStack><Icon as={FaMapMarkerAlt} color="#ef4444" boxSize={5} /><Text noOfLines={1}>{res.place_name}</Text></HStack>
+                </ListItem>
+              ))}
+            </List>
+          )}
+        </Box>
+
+        <div ref={mapContainer} style={{ width: '100%', height: '100%' }} />
+        
+        {/* Mira central estilo GPS */}
+        <Box position="absolute" top="50%" left="50%" transform="translate(-50%, -50%)" pointerEvents="none" zIndex={5}>
+          <Box w="50px" h="50px" border="2px solid #ef4444" borderRadius="50%" display="flex" alignItems="center" justifyContent="center" bg="rgba(239,68,68,0.15)">
+            <Box w="10px" h="10px" bg="#ef4444" borderRadius="50%" />
+          </Box>
+        </Box>
+      </Box>
+
+      {/* BANNER DE ÉXITO */}
       <Portal>
         {showSuccessBanner && (
-          <Box
-            position="fixed" top="85px" left="50%"
-            transform="translateX(-50%)"
-            bg="#10b981" color="white"
-            px={6} py={4} borderRadius="xl"
-            boxShadow="0px 15px 40px rgba(16,185,129,0.5)"
-            zIndex={20000}
-            display="flex" alignItems="center" gap={4}
-            border="2px solid #34d399" minW="340px"
-          >
-            <Icon as={CheckCircleIcon} boxSize={6} color="white" />
-            <VStack align="start" spacing={0}>
-              <Text fontWeight="900" fontSize="14px" letterSpacing="1.5px">REPORTE ACTIVO</Text>
-              <Text fontSize="12px" fontWeight="bold" color="#ecfdf5">
-                {lastAssignedCallId
-                  ? `Folio ${lastAssignedCallId} — transmitido al sistema`
-                  : 'Transmitido con éxito al sistema'
-                }
-              </Text>
+          <Box position="fixed" top="100px" left="50%" transform="translateX(-50%)" bg="#10b981" color="white" px={8} py={5} borderRadius="xl" zIndex={20000} display="flex" alignItems="center" gap={5} boxShadow="0 20px 40px rgba(16,185,129,0.4)">
+            <Icon as={CheckCircleIcon} boxSize={8} />
+            <VStack align="start" spacing={1}>
+              <Text fontWeight="900" fontSize="16px" letterSpacing="1px">FOLIO ASIGNADO</Text>
+              <Text fontSize="13px" fontWeight="700" color="#ecfdf5">{lastAssignedCallId ? `ID: ${lastAssignedCallId}` : 'Transmitido'}</Text>
             </VStack>
           </Box>
         )}
       </Portal>
-
-      {/* ===== PANEL DERECHO: MAPA ===== */}
-      <Box flex={1} position="relative" h={{ base: '40vh', lg: '100%' }}>
-
-        {/* Barra superior del mapa */}
-        <Box
-          position="absolute" top={0} left={0} w="100%" zIndex={10}
-          bg="rgba(15,23,42,0.9)" borderBottom="1px solid #1e293b"
-          backdropFilter="blur(8px)"
-        >
-          <Flex align="center" px={4} py={3} gap={4}>
-
-            {/* Coordenadas */}
-            <Box flexShrink={0} display={{ base: 'none', md: 'block' }}>
-              <Text fontSize="10px" color="#38bdf8" fontWeight="bold" letterSpacing="1px" mb={0.5}>
-                COORDENADAS OBJETIVO
-              </Text>
-              <HStack spacing={3} fontFamily="mono" fontSize="11px" color="#f8fafc">
-                <Text>LAT: <Text as="span" color="#10b981">{selectedLocation.lat.toFixed(6)}</Text></Text>
-                <Text>LNG: <Text as="span" color="#10b981">{selectedLocation.lng.toFixed(6)}</Text></Text>
-              </HStack>
-            </Box>
-
-            <Divider orientation="vertical" h="30px" borderColor="#334155" display={{ base: 'none', md: 'block' }} />
-
-            {/* Búsqueda de dirección */}
-            <Box flex={1} position="relative">
-              <InputGroup size="md" w="100%">
-                <Input
-                  value={addressQuery}
-                  onChange={(e) => {
-                    setAddressQuery(e.target.value);
-                    searchAddresses(e.target.value);
-                  }}
-                  bg="#1e293b"
-                  border={!addressQuery ? '1px solid #ef4444' : '1px solid #334155'}
-                  color="white" borderRadius="md" h="44px"
-                  fontSize="13px" fontWeight="bold" w="100%"
-                  placeholder="* Obligatorio: Ingrese vialidad o cruzamientos..."
-                  _focus={{ borderColor: '#38bdf8', boxShadow: 'none' }}
-                />
-                <InputRightElement h="100%" w="44px">
-                  {isSearching
-                    ? <Spinner size="sm" color="#38bdf8" />
-                    : addressQuery
-                      ? <Button size="xs" variant="ghost" color="#94a3b8" onClick={clearAddress}><CloseIcon boxSize={2.5} /></Button>
-                      : <SearchIcon color="#ef4444" />
-                  }
-                </InputRightElement>
-              </InputGroup>
-
-              {/* Resultados de búsqueda */}
-              {searchResults.length > 0 && (
-                <List
-                  position="absolute" top="100%" left={0} w="100%" mt={2}
-                  bg="#1e293b" border="1px solid #334155" borderRadius="md"
-                  zIndex={20} shadow="2xl" overflow="hidden"
-                >
-                  {searchResults.map((res) => (
-                    <ListItem
-                      key={res.id} p={3} fontSize="13px" fontWeight="bold" color="#e2e8f0"
-                      borderBottom="1px solid #334155" cursor="pointer"
-                      _hover={{ bg: '#334155' }}
-                      onClick={() => selectSearchResult(res)}
-                    >
-                      <HStack>
-                        <Icon as={FaMapMarkerAlt} color="#dc2626" />
-                        <Text noOfLines={1}>{res.place_name}</Text>
-                      </HStack>
-                    </ListItem>
-                  ))}
-                </List>
-              )}
-            </Box>
-          </Flex>
-        </Box>
-
-        {/* Mapa Mapbox */}
-        <div ref={mapContainer} style={{ width: '100%', height: '100%' }} />
-
-        {/* Crosshair central (mira estilo GPS) */}
-        <Box
-          position="absolute" top="50%" left="50%"
-          transform="translate(-50%, -50%)"
-          pointerEvents="none" zIndex={5}
-        >
-          {/* Anillo exterior */}
-          <Box
-            w="34px" h="34px" border="2px solid #ef4444" borderRadius="50%"
-            display="flex" alignItems="center" justifyContent="center"
-            bg="rgba(239,68,68,0.1)"
-          >
-            {/* Punto central */}
-            <Box w="7px" h="7px" bg="#ef4444" borderRadius="50%" />
-          </Box>
-          {/* Líneas cruzadas */}
-          <Box position="absolute" top="50%" left="50%"
-            transform="translate(-50%, -50%)"
-            w="50px" h="1px" bg="rgba(239,68,68,0.4)"
-          />
-          <Box position="absolute" top="50%" left="50%"
-            transform="translate(-50%, -50%)"
-            w="1px" h="50px" bg="rgba(239,68,68,0.4)"
-          />
-        </Box>
-      </Box>
-
     </Flex>
   );
 };

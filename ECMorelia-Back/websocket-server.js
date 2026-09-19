@@ -656,6 +656,83 @@ async function handleEmergencyCall(ws, data) {
   broadcastActiveAmbulances();
 }
 
+// Manejador robusto para imprevistos y cancelación de unidad en ruta
+function handleAmbulanceEmergencyCancel(ws, data) {
+  const { ambulanceId, callId, reason } = data; // reason: 'pinchadura', 'trafico_pesado', 'averia'
+  console.warn(`⚠️ Ambulancia ${ambulanceId} reporta imprevisto/cancelación en llamada ${callId}: ${reason}`);
+
+  const ambulance = activeAmbulances.get(ambulanceId);
+  if (ambulance) {
+    // Si fue falla mecánica o pinchadura, sacarla temporalmente de servicio
+    ambulance.status = (reason === 'pinchadura' || reason === 'averia') ? 'fuera_de_servicio' : 'disponible';
+  }
+
+  // Buscar la emergencia afectada
+  const emergency = activeEmergencies.get(callId);
+  if (emergency) {
+    console.ങ്ങ(`🔄 Reasignando emergencia ${callId} por imprevisto de unidad...`);
+    
+    // Buscar nueva ambulancia disponible descartando la fallida
+    let best = null;
+    let bestDist = Infinity;
+    for (const [, amb] of activeAmbulances) {
+      if (amb.status === 'disponible' && amb.id !== ambulanceId && amb.location) {
+        const d = calculateDistance(emergency.location.lat, emergency.location.lng, amb.location.lat, amb.location.lng);
+        if (d < bestDist) { bestDist = d; best = amb; }
+      }
+    }
+
+    if (best) {
+      emergency.status = 'assigned';
+      emergency.assignedAmbulanceId = best.id;
+      emergency.assignedAmbulanceName = best.nombre || best.placa;
+      emergency.assignedAt = new Date().toISOString();
+      best.status = 'en_ruta';
+      activeEmergencies.set(callId, emergency);
+
+      // Notificar a la nueva ambulancia
+      if (best.ws && best.ws.readyState === WebSocket.OPEN) {
+        sendMessage(best.ws, {
+          type: 'new_emergency_assigned',
+          callId,
+          location: emergency.location,
+          address: emergency.address,
+          emergencyType: emergency.emergencyType,
+          patientInfo: emergency.patientInfo,
+          timestamp: emergency.timestamp,
+          assignedAt: emergency.assignedAt,
+          reassigned: true
+        });
+      }
+
+      broadcastToReceptors({
+        type: 'emergency_assigned_broadcast',
+        callId,
+        ambulanceId: best.id,
+        ambulanceName: best.nombre || best.placa,
+        emergencyType: emergency.emergencyType,
+        address: emergency.address,
+        message: 'Reasignado por imprevisto de unidad anterior',
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      emergency.status = 'pending_no_ambulance';
+      emergency.assignedAmbulanceId = null;
+      activeEmergencies.set(callId, emergency);
+      
+      broadcastToReceptors({
+        type: 'emergency_pending_broadcast',
+        callId,
+        message: 'Unidad anterior canceló por imprevisto. Sin unidades disponibles en este momento.',
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+
+  broadcastActiveAmbulances();
+  broadcastActiveEmergencies();
+}
+
 function handleRequestActiveEmergencies(ws) {
   sendMessage(ws, {
     type: 'active_emergencies_update',

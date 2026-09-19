@@ -1,29 +1,22 @@
-// src/components/receptor/ReceptorDashboard.jsx — VERSIÓN MEJORADA Y COMPLETA
-// Mejoras:
-//   - wsRef usado en callbacks (sin stale closures)
-//   - receptorId único basado en user.id + timestamp
-//   - Panel de folios muestra ambulancia asignada claramente
-//   - Nuevo: lista de ambulancias activas visible para el receptor
-//   - Nuevo: recibe ambulance_status_changed y ambulance_connected/disconnected
-//   - Nuevo: emergencias completadas se eliminan automáticamente del panel
-//   - Compatibilidad total con el nuevo websocket-server.js
-
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import {
-  Box, VStack, HStack, Heading, Text, Badge, useToast, Icon, Flex, Button, Divider, Tooltip
+import { 
+  Box, VStack, HStack, Heading, Text, Badge, useToast, Icon, Flex, Button, 
+  Divider, Tooltip, IconButton, ButtonGroup 
 } from '@chakra-ui/react';
-import {
-  FaClipboardList, FaChevronRight, FaUserShield, FaAmbulance, FaCheckCircle
+import { 
+  FaClipboardList, FaChevronRight, FaUserShield, FaAmbulance, FaCheckCircle, 
+  FaTimes, FaSignOutAlt 
 } from 'react-icons/fa';
-import { FiActivity, FiWifiOff, FiLogOut, FiUsers } from 'react-icons/fi';
+import { FiActivity, FiWifiOff } from 'react-icons/fi';
 import logo from '../img/Logo.png';
 import ReceptorEmergencyForm from './ReceptorEmergencyForm';
+import { useAuth } from '../../auth/useAuth.js';
+import { deleteCookie } from '../../helpers/cookies.js';
 
-const RECONNECT_DELAY_MS     = 3000;
+const RECONNECT_DELAY_MS = 3000;
 const MAX_RECONNECT_ATTEMPTS = 5;
 
-// Genera un ID de receptor persistente por sesión de usuario
 function getReceptorId(user) {
   const base = user?.id || user?.nombre || 'receptor';
   const stored = sessionStorage.getItem('receptorId');
@@ -34,53 +27,44 @@ function getReceptorId(user) {
 }
 
 const STATUS_META = {
-  connected:    { label: 'SISTEMA ONLINE',    color: 'green',  icon: FiActivity },
-  connecting:   { label: 'CONECTANDO...',      color: 'yellow', icon: FiActivity },
-  disconnected: { label: 'RECONECTANDO...',    color: 'orange', icon: FiWifiOff  },
-  failed:       { label: 'OFFLINE',            color: 'red',    icon: FiWifiOff  },
+  connected:    { label: 'SISTEMA ONLINE', color: '#10b981', icon: FiActivity },
+  connecting:   { label: 'CONECTANDO...',  color: '#f59e0b', icon: FiActivity },
+  disconnected: { label: 'RECONECTANDO...',color: '#f97316', icon: FiWifiOff  },
+  failed:       { label: 'OFFLINE',        color: '#ef4444', icon: FiWifiOff  },
 };
 
 const EMERGENCY_STATUS_COLORS = {
-  assigned:            '#10b981',
-  pending:             '#f59e0b',
-  pending_no_ambulance:'#f97316',
-  completed:           '#6b7280',
+  assigned: '#10b981', pending: '#f59e0b', pending_no_ambulance: '#ef4444', completed: '#64748b'
 };
 
 const EMERGENCY_STATUS_LABELS = {
-  assigned:             'ASIGNADA',
-  pending:              'PENDIENTE',
-  pending_no_ambulance: 'SIN UNIDAD',
-  completed:            'COMPLETADA',
+  assigned: 'EN RUTA', pending: 'PENDIENTE', pending_no_ambulance: 'SIN UNIDAD', completed: 'CERRADA'
 };
 
 const ReceptorDashboard = () => {
-  const navigate  = useNavigate();
-  const toast     = useToast();
-  const user      = useMemo(() => JSON.parse(localStorage.getItem('user') || '{}'), []);
+  const navigate = useNavigate();
+  const toast = useToast();
+  const { setAuth } = useAuth();
+  const user = useMemo(() => JSON.parse(localStorage.getItem('user') || '{}'), []);
   const receptorId = useMemo(() => getReceptorId(user), [user]);
 
-  // WebSocket — solo como ref para evitar stale closures en callbacks
-  const wsRef              = useRef(null);
-  const isMountedRef       = useRef(true);
-  const reconnectAttempts  = useRef(0);
-  const reconnectTimerRef  = useRef(null);
+  const wsRef = useRef(null);
+  const isMountedRef = useRef(true);
+  const reconnectAttempts = useRef(0);
+  const reconnectTimerRef = useRef(null);
 
-  const [connectionStatus, setConnectionStatus]     = useState('connecting');
-  const [activeEmergencies, setActiveEmergencies]   = useState([]);
-  const [activeAmbulances, setActiveAmbulances]     = useState([]);
-  const [monitorOpen, setMonitorOpen]               = useState(false);
-  const [activeTab, setActiveTab]                   = useState('emergencies'); // 'emergencies' | 'ambulances'
+  const [connectionStatus, setConnectionStatus] = useState('connecting');
+  const [activeEmergencies, setActiveEmergencies] = useState([]);
+  const [activeAmbulances, setActiveAmbulances] = useState([]);
+  const [monitorOpen, setMonitorOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState('emergencies');
 
   const wsConnected = connectionStatus === 'connected';
 
-  // ---------- CONEXIÓN WEBSOCKET ----------
   useEffect(() => {
     isMountedRef.current = true;
-
     const connectWS = () => {
       if (!isMountedRef.current) return;
-
       const wsUrl = import.meta.env.VITE_WS_URL || 'ws://localhost:3002/ws';
       const socket = new WebSocket(wsUrl);
       wsRef.current = socket;
@@ -89,25 +73,13 @@ const ReceptorDashboard = () => {
         if (!isMountedRef.current) return;
         setConnectionStatus('connected');
         reconnectAttempts.current = 0;
-
-        // Registro con ID único
-        socket.send(JSON.stringify({
-          type: 'register_receptor',
-          receptorId,
-          nombre: user.nombre || user.name || receptorId,
-        }));
-        // Pedir estado actual
+        socket.send(JSON.stringify({ type: 'register_receptor', receptorId, nombre: user.nombre || user.name || receptorId }));
         socket.send(JSON.stringify({ type: 'request_active_emergencies' }));
       };
 
       socket.onmessage = (event) => {
         if (!isMountedRef.current) return;
-        try {
-          const data = JSON.parse(event.data);
-          handleServerMessage(data, socket);
-        } catch (error) {
-          console.error('WS parse error:', error);
-        }
+        try { handleServerMessage(JSON.parse(event.data), socket); } catch (error) {}
       };
 
       socket.onclose = () => {
@@ -122,10 +94,7 @@ const ReceptorDashboard = () => {
         }
       };
 
-      socket.onerror = () => {
-        if (!isMountedRef.current) return;
-        setConnectionStatus('disconnected');
-      };
+      socket.onerror = () => { if (isMountedRef.current) setConnectionStatus('disconnected'); };
     };
 
     connectWS();
@@ -137,273 +106,154 @@ const ReceptorDashboard = () => {
         wsRef.current.close(1000, 'Component unmounted');
       }
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [receptorId]);
 
-  // ---------- MANEJADOR DE MENSAJES ----------
   const handleServerMessage = useCallback((data, socket) => {
-    console.log('📨 Receptor recibió:', data.type);
-
     switch (data.type) {
-
-      case 'receptor_registered':
-        console.log(`✅ Receptor registrado. Total receptores: ${data.totalReceptors}`);
-        break;
-
-      case 'active_emergencies_update':
-        setActiveEmergencies(data.emergencies || []);
-        break;
-
-      case 'active_ambulances_update':
-        setActiveAmbulances(data.ambulances || []);
-        break;
-
-      // Emergencia nueva — notificación crítica
+      case 'active_emergencies_update': setActiveEmergencies(data.emergencies || []); break;
+      case 'active_ambulances_update': setActiveAmbulances(data.ambulances || []); break;
       case 'new_emergency_broadcast':
       case 'emergency_pending_broadcast':
-        toast({
-          title: '🚨 NUEVA ALERTA CRÍTICA',
-          description: `Folio ${data.callId || '—'} — sin ambulancia disponible`,
-          status: 'error',
-          duration: 6000,
-          isClosable: true,
-          position: 'top-right',
-        });
-        socket.send(JSON.stringify({ type: 'request_active_emergencies' }));
-        break;
-
-      // Emergencia asignada exitosamente (respuesta al receptor que la creó)
+        socket.send(JSON.stringify({ type: 'request_active_emergencies' })); break;
       case 'emergency_assigned_ack':
-        toast({
-          title: '✅ EMERGENCIA ASIGNADA',
-          description: `Folio ${data.callId} → ${data.ambulanceName || data.ambulanceId}`,
-          status: 'success',
-          duration: 7000,
-          isClosable: true,
-          position: 'top-right',
-        });
-        socket.send(JSON.stringify({ type: 'request_active_emergencies' }));
-        break;
-
-      // Broadcast a TODOS los receptores cuando se asigna una emergencia
-      case 'emergency_assigned_broadcast':
-        toast({
-          title: '🚑 UNIDAD DESPACHADA',
-          description: `Folio ${data.callId} — ${data.emergencyType || 'Emergencia'} → ${data.ambulanceName}`,
-          status: 'info',
-          duration: 7000,
-          isClosable: true,
-          position: 'top-right',
-        });
-        // Actualizar lista local sin esperar al servidor
-        setActiveEmergencies(prev => prev.map(em =>
-          em.callId === data.callId
-            ? { ...em, status: 'assigned', assignedAmbulanceId: data.ambulanceId, assignedAmbulanceName: data.ambulanceName, assignedAt: data.assignedAt }
-            : em
-        ));
-        break;
-
-      // No hay ambulancia disponible (respuesta al receptor que creó la llamada)
       case 'emergency_assignment_failed':
-        toast({
-          title: '⚠️ SIN AMBULANCIA DISPONIBLE',
-          description: data.message || 'No hay unidades disponibles. Folio en espera.',
-          status: 'warning',
-          duration: 7000,
-          isClosable: true,
-          position: 'top-right',
-        });
-        socket.send(JSON.stringify({ type: 'request_active_emergencies' }));
-        break;
-
-      // Emergencia completada — quitar del panel
+        socket.send(JSON.stringify({ type: 'request_active_emergencies' })); break;
+      case 'emergency_assigned_broadcast':
+        setActiveEmergencies(prev => prev.map(em => em.callId === data.callId ? { ...em, status: 'assigned', assignedAmbulanceId: data.ambulanceId, assignedAmbulanceName: data.ambulanceName, assignedAt: data.assignedAt } : em)); break;
       case 'emergency_completed_broadcast':
-        toast({
-          title: '✅ EMERGENCIA COMPLETADA',
-          description: `Folio ${data.callId} cerrado`,
-          status: 'success',
-          duration: 4000,
-          isClosable: true,
-          position: 'top-right',
-        });
-        setActiveEmergencies(prev => prev.filter(em => em.callId !== data.callId));
-        break;
-
-      // Cambio de estado de ambulancia
+        setActiveEmergencies(prev => prev.filter(em => em.callId !== data.callId)); break;
       case 'ambulance_status_changed':
-        setActiveAmbulances(prev => prev.map(a =>
-          a.id === data.ambulanceId ? { ...a, status: data.newStatus } : a
-        ));
-        if (data.newStatus === 'disponible' && data.prevStatus === 'en_ruta') {
-          toast({
-            title: '🟢 UNIDAD DISPONIBLE',
-            description: `${data.nombre || data.ambulanceId} ha regresado a servicio`,
-            status: 'success',
-            duration: 4000,
-            isClosable: true,
-            position: 'top-right',
-          });
-        }
-        break;
-
-      // Nueva ambulancia conectada
+        setActiveAmbulances(prev => prev.map(a => a.id === data.ambulanceId ? { ...a, status: data.newStatus } : a)); break;
       case 'ambulance_connected':
-        setActiveAmbulances(prev => {
-          const exists = prev.some(a => a.id === data.ambulance.id);
-          return exists ? prev.map(a => a.id === data.ambulance.id ? { ...a, ...data.ambulance } : a) : [...prev, data.ambulance];
-        });
-        break;
-
-      // Ambulancia desconectada
+        setActiveAmbulances(prev => { const exists = prev.some(a => a.id === data.ambulance.id); return exists ? prev.map(a => a.id === data.ambulance.id ? { ...a, ...data.ambulance } : a) : [...prev, data.ambulance]; }); break;
       case 'ambulance_disconnected':
-        setActiveAmbulances(prev => prev.filter(a => a.id !== data.ambulanceId));
-        break;
-
-      // Actualización de ubicación de ambulancia (para conteo en tiempo real)
+        setActiveAmbulances(prev => prev.filter(a => a.id !== data.ambulanceId)); break;
       case 'ambulance_location_update':
-        setActiveAmbulances(prev => prev.map(a =>
-          a.id === data.ambulanceId ? { ...a, location: data.location, speed: data.speed, status: data.status } : a
-        ));
-        break;
-
-      default:
-        console.log('📨 Tipo no manejado en receptor:', data.type);
+        setActiveAmbulances(prev => prev.map(a => a.id === data.ambulanceId ? { ...a, location: data.location, speed: data.speed, status: data.status } : a)); break;
+      default: break;
     }
-  }, [toast]);
+  }, []);
 
-  // ---------- ACCIONES ----------
   const requestRefresh = useCallback(() => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: 'request_active_emergencies' }));
     }
   }, []);
 
+  // Lógica de cierre de sesión unificada
   const handleLogout = useCallback(() => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.close(1000, 'Logout');
     }
-    sessionStorage.removeItem('receptorId');
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
+    deleteCookie("role");
+    if (setAuth) setAuth(false);
+    sessionStorage.removeItem('receptorId'); 
+    localStorage.removeItem('token'); 
+    localStorage.removeItem('user'); 
     navigate('/login');
-  }, [navigate]);
+  }, [navigate, setAuth]);
 
-  // ---------- CÓMPUTOS DERIVADOS ----------
-  const pendingCount    = activeEmergencies.filter(e => e.status === 'pending' || e.status === 'pending_no_ambulance').length;
-  const assignedCount   = activeEmergencies.filter(e => e.status === 'assigned').length;
+  const pendingCount = activeEmergencies.filter(e => e.status === 'pending' || e.status === 'pending_no_ambulance').length;
+  const assignedCount = activeEmergencies.filter(e => e.status === 'assigned').length;
   const disponiblesCount = activeAmbulances.filter(a => a.status === 'disponible').length;
   const statusMeta = STATUS_META[connectionStatus];
 
-  // ---------- RENDER ----------
   return (
-    <Box h="100vh" w="100vw" bg="#000000" overflow="hidden" display="flex" flexDirection="column">
-
-      {/* ===== NAVBAR ===== */}
-      <Flex
-        as="nav" h="65px" w="100%"
-        background="linear-gradient(to right, #0f172a, #000000)"
-        px={6} alignItems="center" justifyContent="space-between"
-        borderBottom="2px solid #0284c7" zIndex="1100" shadow="lg"
-      >
-        <HStack spacing={5}>
-          <img
-            src={logo} alt="C5"
-            style={{ width: '35px', height: 'auto', cursor: 'pointer' }}
-            onClick={() => navigate('/')}
-          />
-          <VStack align="start" spacing={0} display={{ base: 'none', sm: 'flex' }}>
-            <Heading size="sm" color="#ffffff" fontSize="15px" fontWeight="900" letterSpacing="2px">
-              CONSOLA DE DESPACHO UNIFICADO
-            </Heading>
-            <Text color="#38bdf8" fontSize="10px" fontWeight="bold" letterSpacing="1px">
-              CENTRO DE COMANDO C5
-            </Text>
+    <Box h="100vh" w="100vw" bg="#09090b" overflow="hidden" display="flex" flexDirection="column">
+      
+      {/* ==================== EL NUEVO HEADER DE EMERGENCITY ==================== */}
+      <Flex as="nav" h="85px" w="100%" bg="#09090b" px={6} alignItems="center" justifyContent="space-between" borderBottom="1px solid #27272a" zIndex="1100">
+        <HStack spacing={4}>
+          <Box p={2} bg="#18181b" borderRadius="xl" border="1px solid #27272a" display="flex" alignItems="center" justifyContent="center">
+            <img src={logo} alt="C5" style={{ width: '42px', height: '42px', objectFit: 'contain' }} />
+          </Box>
+          <VStack align="start" spacing={0}>
+            <Heading size="sm" color="#f8fafc" fontSize="20px" fontWeight="900" letterSpacing="1.5px">CONSOLA DE DESPACHO UNIFICADO</Heading>
+            <Text color="#38bdf8" fontSize="12px" fontWeight="800" letterSpacing="1px">CENTRO REGULADOR DE URGENCIAS MÉDICAS (CRUM) - MORELIA</Text>
           </VStack>
         </HStack>
 
-        <HStack spacing={4}>
-          {/* Estado de conexión */}
-          <Badge
-            display="flex" alignItems="center" gap="6px"
-            colorScheme={statusMeta.color} px={3} py={1.5}
-            borderRadius="md" fontSize="11px" letterSpacing="1px"
+        <HStack spacing={5}>
+          {/* BADGE DE CONEXIÓN AL SERVIDOR */}
+          <Badge 
+            display="flex" 
+            alignItems="center" 
+            gap="8px" 
+            px={4} 
+            py={3} 
+            borderRadius="xl" 
+            bg={wsConnected ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)'} 
+            border="1px solid" 
+            borderColor={wsConnected ? '#10b981' : '#ef4444'} 
+            color={wsConnected ? '#10b981' : '#ef4444'} 
+            fontSize="13px" 
+            fontWeight="900" 
+            letterSpacing="1px"
           >
-            <Icon as={statusMeta.icon} boxSize={3.5} />
+            <Icon as={statusMeta.icon} boxSize={4} />
             {statusMeta.label}
           </Badge>
 
-          {/* Ambulancias disponibles */}
-          <Tooltip label="Unidades disponibles">
-            <Badge
-              display={{ base: 'none', md: 'flex' }}
-              alignItems="center" gap="6px"
-              colorScheme={disponiblesCount > 0 ? 'green' : 'red'}
-              px={3} py={1.5} borderRadius="md" fontSize="11px"
-            >
-              <Icon as={FaAmbulance} boxSize={3.5} />
-              {disponiblesCount}/{activeAmbulances.length} UNIDADES
-            </Badge>
-          </Tooltip>
-
-          {/* Operador */}
-          <HStack
-            spacing={3} bg="#1e293b" px={4} py={2}
-            borderRadius="md" border="1px solid #334155"
-            display={{ base: 'none', md: 'flex' }}
-          >
-            <Icon as={FaUserShield} color="#94a3b8" />
-            <Text color="#e2e8f0" fontSize="12px" fontWeight="bold">
-              OP: {user.nombre || receptorId}
-            </Text>
+          {/* FICHA DEL OPERADOR DESPACHADOR */}
+          <HStack spacing={3} bg="#18181b" px={5} py={2.5} borderRadius="xl" border="1px solid #27272a">
+            <Box p={1.5} bg="#27272a" borderRadius="lg">
+              <Icon as={FaUserShield} color="#38bdf8" boxSize={4} />
+            </Box>
+            <VStack align="start" spacing={0}>
+              <Text fontSize="10px" color="#a1a1aa" fontWeight="900" letterSpacing="1px">OPERADOR DESPACHADOR</Text>
+              <Text color="#f8fafc" fontSize="13px" fontWeight="900">OP: {user.nombre || user.name || receptorId}</Text>
+            </VStack>
           </HStack>
 
-          {/* Cerrar sesión */}
-          <Button
-            leftIcon={<FiLogOut />}
-            bg="#dc2626" color="#ffffff"
-            variant="solid" size="sm"
-            onClick={handleLogout}
-            fontWeight="900" px={6} shadow="lg"
-            _hover={{ bg: '#b91c1c', transform: 'scale(1.03)' }}
-            _active={{ bg: '#991b1b' }}
-            transition="all 0.2s"
-          >
-            CERRAR SESIÓN
-          </Button>
+          {/* BOTÓN CERRAR SESIÓN DISCRETO CON TOOLTIP */}
+          <Tooltip label="Cerrar Sesión" placement="bottom" hasArrow bg="#18181b" color="#ef4444" fontWeight="bold">
+            <IconButton
+              icon={<FaSignOutAlt />}
+              aria-label="Cerrar Sesión"
+              onClick={handleLogout}
+              bg="#18181b"
+              color="#a1a1aa"
+              border="1px solid #27272a"
+              borderRadius="xl"
+              w="50px"
+              h="50px"
+              _hover={{ bg: 'rgba(239,68,68,0.2)', color: '#ef4444', borderColor: '#ef4444' }}
+              transition="all 0.2s"
+            />
+          </Tooltip>
         </HStack>
       </Flex>
 
-      {/* ===== CUERPO PRINCIPAL ===== */}
+      {/* CUERPO PRINCIPAL DE LA CONSOLA */}
       <Flex flex={1} w="100%" overflow="hidden" position="relative">
-
-        {/* Formulario principal */}
         <Box flex={1} h="100%" overflow="hidden" minW={0}>
-          <ReceptorEmergencyForm
-            wsRef={wsRef}
-            wsConnected={wsConnected}
-            onEmergencySent={requestRefresh}
-          />
+          <ReceptorEmergencyForm wsRef={wsRef} wsConnected={wsConnected} onEmergencySent={requestRefresh} />
         </Box>
 
-        {/* Botón apertura panel lateral */}
+        {/* Botón Flotante para Abrir Panel de Monitoreo */}
         {!monitorOpen && (
-          <Button
-            position="absolute" right="0" top="50%"
-            transform="translateY(-50%)"
-            h="140px" w="45px"
-            bg="#0284c7" color="white"
-            onClick={() => setMonitorOpen(true)}
-            zIndex={20}
-            borderStartRadius="xl" borderEndRadius="0"
-            boxShadow="-4px 0 15px rgba(2,132,199,0.4)"
-            _hover={{ bg: '#0369a1', w: '55px' }}
-            transition="all 0.2s ease"
-            p={0}
+          <Button 
+            position="absolute" 
+            right={0} 
+            top="50%" 
+            transform="translateY(-50%)" 
+            h="120px" 
+            w="60px" 
+            bg="#18181b" 
+            border="1px solid #27272a" 
+            borderRight="none" 
+            color="white" 
+            onClick={() => setMonitorOpen(true)} 
+            zIndex={20} 
+            borderStartRadius="2xl" 
+            borderEndRadius="0" 
+            _hover={{ bg: '#27272a', w: '70px' }} 
+            transition="all 0.2s"
           >
             <VStack spacing={3}>
-              <Icon as={FaClipboardList} boxSize={5} />
+              <Icon as={FaClipboardList} boxSize={6} color="#38bdf8" />
               {activeEmergencies.length > 0 && (
-                <Badge colorScheme="red" borderRadius="full" px={2} fontSize="11px">
+                <Badge colorScheme="red" borderRadius="full" px={3} py={1} fontSize="12px">
                   {activeEmergencies.length}
                 </Badge>
               )}
@@ -411,137 +261,109 @@ const ReceptorDashboard = () => {
           </Button>
         )}
 
-        {/* ===== PANEL LATERAL ===== */}
-        <Box
-          h="100%"
-          w={monitorOpen ? { base: '100%', md: '380px' } : '0px'}
-          minW={monitorOpen ? { base: '100%', md: '380px' } : '0px'}
-          overflow="hidden"
-          bg="#0f172a"
-          borderLeft={monitorOpen ? '2px solid #1e293b' : 'none'}
-          transition="width 0.3s cubic-bezier(0.4,0,0.2,1)"
-          position="relative" zIndex={15} shadow="2xl"
+        {/* PANEL LATERAL DE MONITOREO EN TIEMPO REAL */}
+        <Box 
+          h="100%" 
+          w={monitorOpen ? '420px' : '0px'} 
+          minW={monitorOpen ? '420px' : '0px'} 
+          overflow="hidden" 
+          bg="#09090b" 
+          borderLeft={monitorOpen ? '1px solid #27272a' : 'none'} 
+          transition="width 0.3s cubic-bezier(0.4,0,0.2,1)" 
+          position="relative" 
+          zIndex={15} 
+          shadow="-10px 0 30px rgba(0,0,0,0.5)"
         >
           <VStack spacing={0} h="100%" align="stretch" w="100%">
-
-            {/* Header del panel */}
-            <Flex
-              align="center" justify="space-between"
-              px={4} py={3} bg="#1e293b"
-              borderBottom="1px solid #334155"
-            >
-              <HStack spacing={3}>
-                {/* Tabs */}
-                <Button
-                  size="xs"
-                  bg={activeTab === 'emergencies' ? '#0284c7' : 'transparent'}
-                  color={activeTab === 'emergencies' ? 'white' : '#94a3b8'}
-                  border="1px solid"
-                  borderColor={activeTab === 'emergencies' ? '#0284c7' : '#334155'}
-                  _hover={{ bg: '#0284c7', color: 'white', borderColor: '#0284c7' }}
-                  onClick={() => setActiveTab('emergencies')}
-                  fontSize="10px" fontWeight="900" letterSpacing="0.5px"
-                  leftIcon={<Icon as={FaClipboardList} />}
-                >
-                  FOLIOS {activeEmergencies.length > 0 && `(${activeEmergencies.length})`}
-                </Button>
-                <Button
-                  size="xs"
-                  bg={activeTab === 'ambulances' ? '#0284c7' : 'transparent'}
-                  color={activeTab === 'ambulances' ? 'white' : '#94a3b8'}
-                  border="1px solid"
-                  borderColor={activeTab === 'ambulances' ? '#0284c7' : '#334155'}
-                  _hover={{ bg: '#0284c7', color: 'white', borderColor: '#0284c7' }}
-                  onClick={() => setActiveTab('ambulances')}
-                  fontSize="10px" fontWeight="900" letterSpacing="0.5px"
-                  leftIcon={<Icon as={FaAmbulance} />}
-                >
-                  UNIDADES {activeAmbulances.length > 0 && `(${activeAmbulances.length})`}
-                </Button>
-              </HStack>
-              <Button
-                size="sm" variant="ghost" color="#cbd5e1"
-                _hover={{ bg: '#334155' }}
-                onClick={() => setMonitorOpen(false)}
-                minW="32px"
-              >
-                <FaChevronRight />
-              </Button>
+            
+            {/* Header del Panel Lateral */}
+            <Flex align="center" justify="space-between" px={5} py={4} bg="#18181b" borderBottom="1px solid #27272a">
+              <Heading fontSize="16px" color="white" fontWeight="900">MONITOR ACTIVO EN CAMPO</Heading>
+              <IconButton 
+                icon={<FaTimes />} 
+                size="sm" 
+                bg="transparent" 
+                color="#a1a1aa" 
+                _hover={{ bg: '#27272a', color: 'white' }} 
+                onClick={() => setMonitorOpen(false)} 
+                aria-label="Cerrar panel" 
+              />
             </Flex>
 
-            {/* Contenido scrollable */}
-            <Box
-              flex={1} overflowY="auto" p={3}
-              sx={{
-                '&::-webkit-scrollbar': { width: '5px' },
-                '&::-webkit-scrollbar-thumb': { background: '#475569', borderRadius: '10px' },
-              }}
-            >
+            {/* Selector de Pestañas (Folios vs Unidades) */}
+            <Flex p={3} bg="#09090b" borderBottom="1px solid #27272a">
+              <ButtonGroup isAttached w="100%" size="sm">
+                <Button 
+                  flex={1} 
+                  bg={activeTab === 'emergencies' ? '#0284c7' : '#18181b'} 
+                  color={activeTab === 'emergencies' ? 'white' : '#a1a1aa'} 
+                  borderColor="#27272a" 
+                  onClick={() => setActiveTab('emergencies')} 
+                  _hover={{ bg: activeTab === 'emergencies' ? '#0369a1' : '#27272a' }} 
+                  fontSize="12px" 
+                  fontWeight="800"
+                >
+                  FOLIOS ({activeEmergencies.length})
+                </Button>
+                <Button 
+                  flex={1} 
+                  bg={activeTab === 'ambulances' ? '#0284c7' : '#18181b'} 
+                  color={activeTab === 'ambulances' ? 'white' : '#a1a1aa'} 
+                  borderColor="#27272a" 
+                  onClick={() => setActiveTab('ambulances')} 
+                  _hover={{ bg: activeTab === 'ambulances' ? '#0369a1' : '#27272a' }} 
+                  fontSize="12px" 
+                  fontWeight="800"
+                >
+                  UNIDADES ({activeAmbulances.length})
+                </Button>
+              </ButtonGroup>
+            </Flex>
 
-              {/* ===== TAB: FOLIOS / EMERGENCIAS ===== */}
+            {/* Contenido Scrollable del Monitor */}
+            <Box flex={1} overflowY="auto" p={4} sx={{ '&::-webkit-scrollbar': { width: '8px' }, '&::-webkit-scrollbar-thumb': { bg: '#3f3f46', borderRadius: '4px' } }}>
               {activeTab === 'emergencies' && (
-                <VStack spacing={3} align="stretch">
-
-                  {/* Resumen rápido */}
-                  <HStack spacing={2} mb={1}>
-                    <Box flex={1} bg="#1e293b" p={2} borderRadius="md" border="1px solid #334155" textAlign="center">
-                      <Text fontSize="18px" fontWeight="900" color="#f59e0b">{pendingCount}</Text>
-                      <Text fontSize="9px" color="#94a3b8" fontWeight="bold">PENDIENTES</Text>
+                <VStack spacing={4} align="stretch">
+                  <HStack spacing={3} mb={2}>
+                    <Box flex={1} bg="#18181b" p={3} borderRadius="lg" border="1px solid #27272a" textAlign="center">
+                      <Text fontSize="24px" fontWeight="900" color="#f59e0b">{pendingCount}</Text>
+                      <Text fontSize="10px" color="#a1a1aa" fontWeight="800">PENDIENTES</Text>
                     </Box>
-                    <Box flex={1} bg="#1e293b" p={2} borderRadius="md" border="1px solid #334155" textAlign="center">
-                      <Text fontSize="18px" fontWeight="900" color="#10b981">{assignedCount}</Text>
-                      <Text fontSize="9px" color="#94a3b8" fontWeight="bold">EN RUTA</Text>
-                    </Box>
-                    <Box flex={1} bg="#1e293b" p={2} borderRadius="md" border="1px solid #334155" textAlign="center">
-                      <Text fontSize="18px" fontWeight="900" color="#38bdf8">{activeEmergencies.length}</Text>
-                      <Text fontSize="9px" color="#94a3b8" fontWeight="bold">TOTAL</Text>
+                    <Box flex={1} bg="#18181b" p={3} borderRadius="lg" border="1px solid #27272a" textAlign="center">
+                      <Text fontSize="24px" fontWeight="900" color="#10b981">{assignedCount}</Text>
+                      <Text fontSize="10px" color="#a1a1aa" fontWeight="800">ASIGNADOS</Text>
                     </Box>
                   </HStack>
-
                   {activeEmergencies.length === 0 ? (
-                    <Box p={5} bg="#1e293b" color="#94a3b8" borderRadius="md" border="1px dashed #334155" textAlign="center">
-                      <Icon as={FaCheckCircle} boxSize={8} color="#334155" mb={2} />
-                      <Text fontSize="13px" fontWeight="bold">Sin folios activos</Text>
-                      <Text fontSize="11px" mt={1} color="#475569">Las emergencias aparecerán aquí</Text>
+                    <Box p={8} bg="#18181b" color="#a1a1aa" borderRadius="lg" border="1px dashed #3f3f46" textAlign="center">
+                      <Icon as={FaCheckCircle} boxSize={10} color="#27272a" mb={3} />
+                      <Text fontSize="14px" fontWeight="800">Bandeja de Urgencias Limpia</Text>
                     </Box>
                   ) : (
-                    activeEmergencies.map((em) => (
-                      <EmergencyCard key={em.callId} emergency={em} />
-                    ))
+                    activeEmergencies.map((em) => <EmergencyCard key={em.callId} emergency={em} />)
                   )}
                 </VStack>
               )}
 
-              {/* ===== TAB: UNIDADES / AMBULANCIAS ===== */}
               {activeTab === 'ambulances' && (
-                <VStack spacing={3} align="stretch">
-                  <HStack spacing={2} mb={1}>
-                    <Box flex={1} bg="#1e293b" p={2} borderRadius="md" border="1px solid #334155" textAlign="center">
-                      <Text fontSize="18px" fontWeight="900" color="#10b981">{disponiblesCount}</Text>
-                      <Text fontSize="9px" color="#94a3b8" fontWeight="bold">DISPONIBLES</Text>
+                <VStack spacing={4} align="stretch">
+                  <HStack spacing={3} mb={2}>
+                    <Box flex={1} bg="#18181b" p={3} borderRadius="lg" border="1px solid #27272a" textAlign="center">
+                      <Text fontSize="24px" fontWeight="900" color="#10b981">{disponiblesCount}</Text>
+                      <Text fontSize="10px" color="#a1a1aa" fontWeight="800">DISPONIBLES</Text>
                     </Box>
-                    <Box flex={1} bg="#1e293b" p={2} borderRadius="md" border="1px solid #334155" textAlign="center">
-                      <Text fontSize="18px" fontWeight="900" color="#f59e0b">
-                        {activeAmbulances.filter(a => a.status === 'en_ruta').length}
-                      </Text>
-                      <Text fontSize="9px" color="#94a3b8" fontWeight="bold">EN RUTA</Text>
-                    </Box>
-                    <Box flex={1} bg="#1e293b" p={2} borderRadius="md" border="1px solid #334155" textAlign="center">
-                      <Text fontSize="18px" fontWeight="900" color="#94a3b8">{activeAmbulances.length}</Text>
-                      <Text fontSize="9px" color="#94a3b8" fontWeight="bold">TOTAL</Text>
+                    <Box flex={1} bg="#18181b" p={3} borderRadius="lg" border="1px solid #27272a" textAlign="center">
+                      <Text fontSize="24px" fontWeight="900" color="#f59e0b">{activeAmbulances.filter(a => a.status === 'en_ruta').length}</Text>
+                      <Text fontSize="10px" color="#a1a1aa" fontWeight="800">EN RUTA</Text>
                     </Box>
                   </HStack>
-
                   {activeAmbulances.length === 0 ? (
-                    <Box p={5} bg="#1e293b" color="#94a3b8" borderRadius="md" border="1px dashed #334155" textAlign="center">
-                      <Icon as={FaAmbulance} boxSize={8} color="#334155" mb={2} />
-                      <Text fontSize="13px" fontWeight="bold">Sin unidades activas</Text>
-                      <Text fontSize="11px" mt={1} color="#475569">Las ambulancias conectadas aparecerán aquí</Text>
+                    <Box p={8} bg="#18181b" color="#a1a1aa" borderRadius="lg" border="1px dashed #3f3f46" textAlign="center">
+                      <Icon as={FaAmbulance} boxSize={10} color="#27272a" mb={3} />
+                      <Text fontSize="14px" fontWeight="800">Sin Unidades Registradas</Text>
                     </Box>
                   ) : (
-                    activeAmbulances.map((amb) => (
-                      <AmbulanceCard key={amb.id} ambulance={amb} />
-                    ))
+                    activeAmbulances.map((amb) => <AmbulanceCard key={amb.id} ambulance={amb} />)
                   )}
                 </VStack>
               )}
@@ -553,141 +375,40 @@ const ReceptorDashboard = () => {
   );
 };
 
-// ===== SUB-COMPONENTE: TARJETA DE EMERGENCIA =====
 const EmergencyCard = ({ emergency: em }) => {
-  const statusColor = EMERGENCY_STATUS_COLORS[em.status] || '#6b7280';
-  const statusLabel = EMERGENCY_STATUS_LABELS[em.status] || em.status?.toUpperCase();
-  const folioShort  = em.callId?.replace('EM-', 'F-') || em.callId;
-
+  const statusColor = EMERGENCY_STATUS_COLORS[em.status] || '#64748b';
   return (
-    <Box
-      p={3} borderRadius="md"
-      borderLeft="4px solid" borderLeftColor={statusColor}
-      bg="#1e293b"
-      border="1px solid #334155"
-      borderLeftWidth="4px"
-      shadow="sm"
-      _hover={{ bg: '#1a2744' }}
-      transition="background 0.15s"
-    >
-      {/* Fila superior: folio + hora + badge estado */}
-      <Flex justify="space-between" align="center" mb={1.5}>
-        <Text fontWeight="900" color="#e2e8f0" fontSize="14px" letterSpacing="0.5px">
-          {folioShort}
-        </Text>
-        <HStack spacing={2}>
-          <Badge
-            fontSize="9px" fontWeight="900" letterSpacing="0.5px"
-            px={2} py={0.5} borderRadius="sm"
-            bg={statusColor} color="white"
-          >
-            {statusLabel}
-          </Badge>
-          <Text color="#475569" fontSize="10px" fontFamily="mono">
-            {new Date(em.timestamp).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })}
-          </Text>
-        </HStack>
+    <Box p={4} borderRadius="xl" bg="#18181b" border="1px solid #27272a" borderLeft="6px solid" borderLeftColor={statusColor}>
+      <Flex justify="space-between" align="center" mb={2}>
+        <Text fontWeight="900" color="#f8fafc" fontSize="16px">{em.callId?.replace('EM-', 'F-') || em.callId}</Text>
+        <Badge fontSize="10px" fontWeight="900" px={2} py={1} borderRadius="md" bg={statusColor} color="white">{EMERGENCY_STATUS_LABELS[em.status]}</Badge>
       </Flex>
-
-      {/* Tipo de emergencia */}
-      <Text fontSize="13px" fontWeight="700" color="#38bdf8" noOfLines={1} mb={1}>
-        {em.emergencyType}
-      </Text>
-
-      {/* Dirección */}
-      {em.address && em.address !== 'Sin dirección' && (
-        <Text fontSize="11px" color="#94a3b8" noOfLines={1} mb={1}>
-          📍 {em.address}
-        </Text>
-      )}
-
-      {/* Info del paciente si existe */}
-      {em.patientInfo && (em.patientInfo.condition || em.patientInfo.age) && (
-        <Text fontSize="11px" color="#64748b" noOfLines={1} mb={1}>
-          👤 {[em.patientInfo.age && `${em.patientInfo.age} años`, em.patientInfo.sex, em.patientInfo.condition].filter(Boolean).join(' · ')}
-        </Text>
-      )}
-
-      <Divider borderColor="#334155" my={1.5} />
-
-      {/* Ambulancia asignada */}
-      {em.status === 'assigned' && em.assignedAmbulanceId && (
-        <HStack spacing={2} mt={0.5}>
-          <Icon as={FaAmbulance} color="#10b981" boxSize={3.5} />
-          <Text fontSize="11px" fontWeight="bold" color="#10b981">
-            {em.assignedAmbulanceName || em.assignedAmbulanceId}
-          </Text>
-          {em.assignedAt && (
-            <Text fontSize="10px" color="#475569" fontFamily="mono" ml="auto">
-              {new Date(em.assignedAt).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-            </Text>
-          )}
+      <Text fontSize="14px" fontWeight="800" color="#38bdf8" mb={1}>{em.emergencyType}</Text>
+      {em.address && <Text fontSize="12px" color="#a1a1aa" noOfLines={1} mb={2}>📍 {em.address}</Text>}
+      {em.status === 'assigned' && (
+        <HStack spacing={2} mt={3} pt={3} borderTop="1px solid #27272a">
+          <Icon as={FaAmbulance} color="#10b981" />
+          <Text fontSize="13px" fontWeight="800" color="#10b981">{em.assignedAmbulanceName || em.assignedAmbulanceId}</Text>
         </HStack>
-      )}
-
-      {em.status === 'pending_no_ambulance' && (
-        <HStack spacing={2} mt={0.5}>
-          <Text fontSize="10px" fontWeight="bold" color="#f97316">
-            ⚠️ Sin unidad disponible — en lista de espera
-          </Text>
-        </HStack>
-      )}
-
-      {em.status === 'pending' && (
-        <Text fontSize="10px" color="#f59e0b" fontWeight="bold">
-          ⏳ Buscando unidad disponible...
-        </Text>
       )}
     </Box>
   );
 };
 
-// ===== SUB-COMPONENTE: TARJETA DE AMBULANCIA =====
-const AMBULANCE_STATUS_CONFIG = {
-  disponible:        { color: '#10b981', label: 'DISPONIBLE',      dot: '#10b981' },
-  en_ruta:           { color: '#f59e0b', label: 'EN RUTA',         dot: '#f59e0b' },
-  ocupado:           { color: '#f97316', label: 'OCUPADO',         dot: '#f97316' },
-  fuera_de_servicio: { color: '#6b7280', label: 'FUERA SERVICIO',  dot: '#6b7280' },
+const AMBULANCE_STATUS = {
+  disponible: { color: '#10b981', label: 'DISPONIBLE' }, en_ruta: { color: '#f59e0b', label: 'EN RUTA' },
+  ocupado: { color: '#ef4444', label: 'OCUPADO' }, fuera_de_servicio: { color: '#64748b', label: 'FUERA' },
 };
 
 const AmbulanceCard = ({ ambulance: amb }) => {
-  const cfg = AMBULANCE_STATUS_CONFIG[amb.status] || { color: '#6b7280', label: amb.status?.toUpperCase(), dot: '#6b7280' };
-
+  const cfg = AMBULANCE_STATUS[amb.status] || { color: '#64748b', label: amb.status?.toUpperCase() };
   return (
-    <Box
-      p={3} borderRadius="md" bg="#1e293b"
-      border="1px solid #334155"
-      borderLeft="4px solid" borderLeftColor={cfg.color}
-      shadow="sm"
-    >
+    <Box p={4} borderRadius="xl" bg="#18181b" border="1px solid #27272a" borderLeft="6px solid" borderLeftColor={cfg.color}>
       <Flex justify="space-between" align="center">
-        <HStack spacing={2}>
-          <Box w="8px" h="8px" borderRadius="full" bg={cfg.dot} flexShrink={0} />
-          <VStack align="start" spacing={0}>
-            <Text fontWeight="900" color="#e2e8f0" fontSize="13px">
-              {amb.nombre || amb.placa}
-            </Text>
-            <Text fontSize="10px" color="#64748b" fontFamily="mono">
-              {amb.placa} · {amb.tipo || 'UVI Móvil'}
-            </Text>
-          </VStack>
-        </HStack>
-        <Badge fontSize="9px" fontWeight="900" px={2} py={0.5} borderRadius="sm" bg={cfg.color} color="white">
-          {cfg.label}
-        </Badge>
+        <Text fontWeight="900" color="#f8fafc" fontSize="15px">{amb.nombre || amb.placa}</Text>
+        <Badge fontSize="10px" fontWeight="900" px={2} py={1} borderRadius="md" bg={cfg.color} color="white">{cfg.label}</Badge>
       </Flex>
-
-      {typeof amb.speed === 'number' && amb.speed > 0 && (
-        <Text fontSize="10px" color="#64748b" mt={1.5} fontFamily="mono">
-          🏎️ {amb.speed} km/h
-        </Text>
-      )}
-
-      {amb.lastUpdate && (
-        <Text fontSize="9px" color="#334155" mt={0.5} fontFamily="mono">
-          Actualización: {new Date(amb.lastUpdate).toLocaleTimeString('es-MX')}
-        </Text>
-      )}
+      <Text fontSize="12px" color="#71717a" mt={1} fontWeight="700">{amb.tipo || 'UVI Móvil'}</Text>
     </Box>
   );
 };

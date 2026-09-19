@@ -14,43 +14,66 @@ const ReportePaciente = () => {
   const [ubicacion, setUbicacion] = useState({ lat: null, lng: null, direccion: '' });
   const [obteniendoUbicacion, setObteniendoUbicacion] = useState(false);
 
-  // Ambulancia persistente (localStorage)
-  const [ambulanciaId, setAmbulanciaId] = useState(() => {
-    return localStorage.getItem('ambulanciaId') || '';
+  // --- LÓGICA DE CONFIGURACIÓN INICIAL (SALA / TRIPULACIÓN) ---
+  const [isConfigured, setIsConfigured] = useState(false);
+  const [configInicial, setConfigInicial] = useState({
+    ambulanciaId: '',
+    operador: '',
+    paramedico1: '',
+    paramedico2: ''
   });
 
-  // Estado del reporte (sin triaje ni glasgow derivados)
+  useEffect(() => {
+    // Verificar si ya existe configuración en el dispositivo
+    const guardado = localStorage.getItem('tripulacionConfig');
+    if (guardado) {
+      const parsed = JSON.parse(guardado);
+      setConfigInicial(parsed);
+      setReporte(prev => ({ ...prev, id_ambulancia: parsed.ambulanciaId, tripulacion: parsed }));
+      setIsConfigured(true);
+    }
+  }, []);
+
+  const guardarConfiguracion = (e) => {
+    e.preventDefault();
+    if (!configInicial.ambulanciaId.trim() || !configInicial.paramedico1.trim()) {
+      mostrarNotificacion('Unidad y Paramédico responsable son obligatorios', 'error');
+      return;
+    }
+    localStorage.setItem('tripulacionConfig', JSON.stringify(configInicial));
+    setReporte(prev => ({ ...prev, id_ambulancia: configInicial.ambulanciaId, tripulacion: configInicial }));
+    setIsConfigured(true);
+  };
+  // -------------------------------------------------------------
+
+  // Estado del reporte con ID de emergencia (CRUM) y Tripulación
   const [reporte, setReporte] = useState({
-    id_ambulancia: ambulanciaId,
-    hora_estimada_llegada: '',
-    ubicacion_actual: '',
-    paciente: {
-      nombre: '',
-      edad: '',
-      sexo: '',
-      motivo_urgencia: '',
-      descripcion_lesion: '',
-    },
-    signos_vitales: {
-      frecuencia_cardiaca: '',
-      frecuencia_respiratoria: '',
-      tension_arterial: '',
-      saturacion_oxigeno: '',
-      temperatura: '',
-    },
+    id_ambulancia: '',
+    callId: '',
+    tripulacion: {},
+    seccionA: { folio: '', fecha: new Date().toISOString().split('T')[0], tipo_servicio: 'Urgencia' },
+    seccionB: { activacion: '', salida_base: '', llegada_escena: '', primer_contacto: '', salida_escena: '', llegada_hospital: '', entrega_paciente: '', liberacion_unidad: '' },
+    seccionC: { direccion: '', municipio: '', estado: '', tipo_lugar: 'Vía pública', tipo_lugar_otro: '' },
+    seccionD: { nombre: '', edad: '', sexo: '', peso: '', paciente_identificado: 'Sí', acompanante: '', telefono: '' },
+    seccionE: { alergias: '', medicamentos: '', enfermedades: '', ultima_comida: '', embarazo: 'No' },
+    seccionF: { tipo_urgencia: '', motivo_principal: '' },
+    seccionG: { mecanismo: '', otro_mecanismo: '' },
+    seccionH: { via_aerea: 'Libre', ventilacion: 'Adecuada', circulacion_pulso: 'Periférico', lesiones_exposicion: '' },
+    seccionI: { fc: '', fr: '', ta: '', pam: '', spo2: '', temp: '', glucemia: '', eva: '', hora_toma: '' },
+    seccionK: { cabeza: '', torax: '', abdomen: '', extremidades: '' },
     intervenciones: [],
-    hallazgos_escena: '',
-    instrucciones_hospital: '',
+    seccionN: { eta: '', diagnostico_presuntivo: '', necesidades: '' },
+    seccionOP: { area_receptora: 'Urgencias', medico_recibe: '', estado_final: 'Estable' },
+    riesgos_escena: ''
   });
 
-  // Hook de Glasgow
   const { ocular, setOcular, verbal, setVerbal, motor, setMotor, total, getTriageLevel, GLASGOW } = useGlasgow(4, 5, 6);
   const triaje = getTriageLevel(total);
 
   const API_URL = import.meta.env.VITE_API || 'http://localhost:3000/api';
   const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
+  const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:3002/ws';
 
-  // Cargar hospitales
   useEffect(() => {
     const cargarHospitales = async () => {
       try {
@@ -58,108 +81,88 @@ const ReportePaciente = () => {
         if (res.ok) {
           const data = await res.json();
           setListaHospitales(data);
-          // Si tenemos ubicación, sugerir hospital más cercano
-          if (ubicacion.lat && ubicacion.lng) {
-            sugerirHospitalCercano(data, ubicacion.lat, ubicacion.lng);
-          }
         }
-      } catch (error) {
-        console.error('Error cargando hospitales:', error);
-      }
+      } catch (error) { console.error('Error cargando hospitales:', error); }
     };
     cargarHospitales();
-  }, [API_URL, ubicacion]);
+  }, [API_URL]);
 
-  // Obtener ubicación automáticamente
   useEffect(() => {
-    if (navigator.geolocation) {
+    if (navigator.geolocation && isConfigured) {
       setObteniendoUbicacion(true);
       navigator.geolocation.getCurrentPosition(
         async (position) => {
           const { latitude, longitude } = position.coords;
           setUbicacion(prev => ({ ...prev, lat: latitude, lng: longitude }));
-          // Obtener dirección con Mapbox
           try {
-            const response = await fetch(
-              `https://api.mapbox.com/geocoding/v5/mapbox.places/${longitude},${latitude}.json?access_token=${MAPBOX_TOKEN}&language=es`
-            );
+            const response = await fetch(`https://api.mapbox.com/geocoding/v5/mapbox.places/${longitude},${latitude}.json?access_token=${MAPBOX_TOKEN}&language=es`);
             if (response.ok) {
               const data = await response.json();
               const direccion = data.features[0]?.place_name || 'Ubicación desconocida';
               setUbicacion(prev => ({ ...prev, direccion }));
-              setReporte(prev => ({ ...prev, ubicacion_actual: direccion }));
+              if (!reporte.seccionC.direccion) {
+                setReporte(prev => ({ ...prev, seccionC: { ...prev.seccionC, direccion } }));
+              }
             }
-          } catch (error) {
-            console.error('Error al obtener dirección:', error);
-          }
+          } catch (error) {}
           setObteniendoUbicacion(false);
         },
-        (error) => {
-          console.error('Error de geolocalización:', error);
-          setObteniendoUbicacion(false);
-        },
+        () => setObteniendoUbicacion(false),
         { enableHighAccuracy: true }
       );
-    } else {
-      setObteniendoUbicacion(false);
     }
-  }, []);
+  }, [MAPBOX_TOKEN, reporte.seccionC.direccion, isConfigured]);
 
-  // Sugerir hospital más cercano (distancia de Haversine)
-  const sugerirHospitalCercano = (hospitales, lat, lng) => {
-    if (!hospitales.length) return;
-    let closest = null;
-    let minDist = Infinity;
-    for (const h of hospitales) {
-      if (h.lat && h.lng) {
-        const dist = calcularDistancia(lat, lng, h.lat, h.lng);
-        if (dist < minDist) {
-          minDist = dist;
-          closest = h;
-        }
+  useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
+
+  // Vinculación WebSocket (Solo arranca cuando ya está configurada la unidad)
+  useEffect(() => {
+    if (!isConfigured) return;
+
+    const ws = new WebSocket(WS_URL);
+    
+    ws.onopen = () => {
+      console.log('WS conectado al sistema central');
+      if (configInicial.ambulanciaId) {
+        ws.send(JSON.stringify({
+          type: 'register_ambulance',
+          ambulance: { id: configInicial.ambulanciaId, placa: configInicial.ambulanciaId, status: 'disponible' }
+        }));
       }
-    }
-    if (closest) {
-      setHospitalSeleccionado(closest.id);
-    }
-  };
+    };
 
-  const calcularDistancia = (lat1, lon1, lat2, lon2) => {
-    const R = 6371; // km
-    const dLat = (lat2 - lat1) * Math.PI / 180;
-    const dLon = (lon2 - lon1) * Math.PI / 180;
-    const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-              Math.sin(dLon/2) * Math.sin(dLon/2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-    return R * c;
-  };
-
-  // Tema
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-  }, [theme]);
-
-  // WebSocket (sin cambios relevantes)
-  useEffect(() => {
-    const ws = new WebSocket(import.meta.env.VITE_WS_URL);
-    ws.onopen = () => console.log('✅ WS conectado');
     ws.onmessage = async (event) => {
       const data = event.data instanceof Blob ? await event.data.text() : event.data;
       try {
         const parsed = JSON.parse(data);
+        
         if (parsed.type === 'active_hospitals_update') {
           setListaHospitales(parsed.hospitals);
         }
+        
+        if (parsed.type === 'new_emergency_assigned') {
+          mostrarNotificacion(`Emergencia asignada: ${parsed.callId}`, 'success');
+          setReporte(prev => ({
+            ...prev,
+            callId: parsed.callId,
+            seccionA: { ...prev.seccionA, folio: parsed.callId },
+            seccionC: { ...prev.seccionC, direccion: parsed.address || prev.seccionC.direccion },
+            seccionF: { 
+              ...prev.seccionF, 
+              tipo_urgencia: parsed.emergencyType || '',
+              motivo_principal: parsed.notes || '' 
+            },
+            riesgos_escena: parsed.patientInfo?.riesgos || ''
+          }));
+        }
       } catch (e) { console.error('WS error:', e); }
     };
+    
     ws.onclose = () => console.log('WS desconectado');
-    ws.onerror = (e) => console.error('WS error:', e);
     setSocket(ws);
     return () => ws.close();
-  }, []);
+  }, [isConfigured, configInicial.ambulanciaId, WS_URL]);
 
-  // Funciones de manejo de cambio
   const handleChange = (path, value) => {
     setReporte(prev => {
       const updated = { ...prev };
@@ -174,139 +177,69 @@ const ReportePaciente = () => {
     });
   };
 
-  // Intervenciones
   const agregarIntervencion = () => {
     if (intervencionActual.tipo_intervencion.trim() || intervencionActual.descripcion.trim()) {
       setReporte(prev => ({
         ...prev,
-        intervenciones: [...prev.intervenciones, { ...intervencionActual, hora_intervencion: intervencionActual.hora_intervencion || '' }],
+        intervenciones: [...prev.intervenciones, { ...intervencionActual, hora_intervencion: intervencionActual.hora_intervencion || new Date().toTimeString().slice(0,5) }],
       }));
       setIntervencionActual({ tipo_intervencion: '', descripcion: '', hora_intervencion: '' });
       mostrarNotificacion('Intervención agregada', 'success');
-    } else {
-      mostrarNotificacion('Complete al menos tipo o descripción', 'error');
     }
   };
+  
   const eliminarIntervencion = (index) => {
-    setReporte(prev => ({
-      ...prev,
-      intervenciones: prev.intervenciones.filter((_, i) => i !== index),
-    }));
+    setReporte(prev => ({ ...prev, intervenciones: prev.intervenciones.filter((_, i) => i !== index) }));
   };
 
-  // Notificaciones
   const mostrarNotificacion = (texto, tipo = 'info') => {
     setMensajeNotificacion({ texto, tipo });
     setTimeout(() => setMensajeNotificacion({ texto: '', tipo: '' }), 4000);
   };
 
-  // Función para recibir datos del NLP
+  const handleNLPData = (data) => {
+    mostrarNotificacion('Datos de voz procesados (Pendiente mapeo)', 'success');
+  };
 
-const handleNLPData = (data) => {
-    const ahora = new Date();
-    const horas = String(ahora.getHours()).padStart(2, '0');
-    const minutos = String(ahora.getMinutes()).padStart(2, '0');
-    const horaActual = `${horas}:${minutos}`;
-
-    // Asegurar que las intervenciones tengan hora
-    const intervencionesConHora = (data.intervenciones || []).map(iv => ({
-        ...iv,
-        hora_intervencion: iv.hora_intervencion || horaActual
-    }));
-
-    setReporte(prev => ({
-        ...prev,
-        paciente: {
-            ...prev.paciente,
-            nombre: data.paciente.nombre || prev.paciente.nombre,
-            edad: data.paciente.edad || prev.paciente.edad,
-            sexo: data.paciente.sexo || prev.paciente.sexo,
-            motivo_urgencia: data.motivo_urgencia || prev.paciente.motivo_urgencia,
-            descripcion_lesion: data.descripcion_lesion || prev.paciente.descripcion_lesion,
-        },
-        signos_vitales: {
-            ...prev.signos_vitales,
-            frecuencia_cardiaca: data.signos_vitales.frecuencia_cardiaca || prev.signos_vitales.frecuencia_cardiaca,
-            frecuencia_respiratoria: data.signos_vitales.frecuencia_respiratoria || prev.signos_vitales.frecuencia_respiratoria,
-            tension_arterial: data.signos_vitales.tension_arterial || prev.signos_vitales.tension_arterial,
-            saturacion_oxigeno: data.signos_vitales.saturacion_oxigeno || prev.signos_vitales.saturacion_oxigeno,
-            temperatura: data.signos_vitales.temperatura || prev.signos_vitales.temperatura,
-        },
-        hallazgos_escena: data.hallazgos_escena || prev.hallazgos_escena,
-        intervenciones: intervencionesConHora.length > 0 ? intervencionesConHora : prev.intervenciones,
-    }));
-
-    // Actualizar Glasgow
-    if (data.glasgow) {
-        if (data.glasgow.ocular) setOcular(data.glasgow.ocular);
-        if (data.glasgow.verbal) setVerbal(data.glasgow.verbal);
-        if (data.glasgow.motor) setMotor(data.glasgow.motor);
-    }
-
-    // Hora estimada de llegada
-    setReporte(prev => ({
-        ...prev,
-        hora_estimada_llegada: data.hora_estimada || horaActual
-    }));
-
-    mostrarNotificacion('✅ Datos extraídos correctamente', 'success');
-};
-  // Al finalizar la grabación, se procesa automáticamente (ya está en VoiceAssistant)
-
-  // Validación
   const validarFormulario = () => {
     const errores = [];
-    if (!reporte.id_ambulancia.trim()) errores.push('Número de ambulancia');
-    if (!reporte.hora_estimada_llegada.trim()) errores.push('Hora estimada de llegada');
-    if (!reporte.ubicacion_actual.trim()) errores.push('Ubicación actual');
-    if (!hospitalSeleccionado) errores.push('Hospital destino');
-    if (!reporte.paciente.nombre.trim()) errores.push('Nombre del paciente');
-    if (!reporte.paciente.edad) errores.push('Edad');
-    if (!reporte.paciente.sexo) errores.push('Sexo');
-    if (!reporte.paciente.motivo_urgencia.trim()) errores.push('Motivo de urgencia');
+    if (!hospitalSeleccionado) errores.push('Hospital Destino');
     if (errores.length > 0) {
-      mostrarNotificacion(`Faltan campos: ${errores.join(', ')}`, 'error');
+      mostrarNotificacion(`Campos requeridos: ${errores.join(', ')}`, 'error');
       return false;
     }
     return true;
   };
 
-  // Envío
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!validarFormulario()) return;
 
-    const callId = Date.now().toString();
+    const activeCallId = reporte.callId || `EM-LOCAL-${Date.now()}`;
 
     if (socket && socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify({
         type: 'patient_transfer_notification',
-        callId,
+        callId: activeCallId,
         ambulanceId: reporte.id_ambulancia,
         patientInfo: {
-          age: reporte.paciente.edad,
-          sex: reporte.paciente.sexo,
+          age: reporte.seccionD.edad,
+          sex: reporte.seccionD.sexo,
           condition: triaje.label,
           glasgow: total,
         },
-        eta: reporte.hora_estimada_llegada,
+        eta: reporte.seccionN.eta,
         hospitalId: hospitalSeleccionado,
-        ubicacion: reporte.ubicacion_actual,
+        ubicacion: reporte.seccionC.direccion,
       }));
     }
 
-    window.open(`/videocall?room=${callId}`, '_blank');
-
     const reporteParaEnviar = {
       ...reporte,
+      callId: activeCallId,
       hospitalId: hospitalSeleccionado,
       glasgow: { ocular, verbal, motor, total },
-      triaje: triaje,
-      paciente: {
-        ...reporte.paciente,
-        observaciones: `[VideoID: ${callId}] ${reporte.paciente.observaciones || ''}`.trim(),
-      },
-      hora_estimada_llegada: combinarFechaYHora(reporte.hora_estimada_llegada),
+      triaje: triaje
     };
 
     try {
@@ -316,84 +249,144 @@ const handleNLPData = (data) => {
         body: JSON.stringify(reporteParaEnviar),
       });
       if (response.ok) {
-        mostrarNotificacion('✅ Reporte enviado exitosamente', 'success');
+        mostrarNotificacion('Reporte sincronizado con éxito', 'success');
       } else {
-        const errorText = await response.text();
-        mostrarNotificacion(`❌ Error al guardar: ${errorText}`, 'error');
+        mostrarNotificacion('Error al sincronizar', 'error');
       }
     } catch (error) {
-      mostrarNotificacion('❌ Error de red al enviar', 'error');
+      mostrarNotificacion('Error de conexión', 'error');
     }
   };
 
-  const combinarFechaYHora = (hora) => {
-    if (!hora) return '';
-    const [horas, minutos] = hora.split(':');
-    const fecha = new Date();
-    fecha.setHours(parseInt(horas, 10), parseInt(minutos, 10), 0, 0);
-    return fecha.toISOString();
-  };
-
-  // Cerrar sesión
   const handleLogout = () => {
-    localStorage.removeItem('ambulanciaId');
-    // Aquí también limpiar token de autenticación si existe
+    localStorage.removeItem('tripulacionConfig'); // Limpiar datos de vinculación
     navigate('/login');
   };
 
-  // Actualizar ambulancia en localStorage y estado
-  const handleAmbulanciaChange = (value) => {
-    setAmbulanciaId(value);
-    localStorage.setItem('ambulanciaId', value);
-    setReporte(prev => ({ ...prev, id_ambulancia: value }));
-  };
+  // VISTA 1: CONFIGURACIÓN INICIAL DE SALA/UNIDAD
+  if (!isConfigured) {
+    return (
+      <div className={`reporte-root ${theme === 'dark' ? 'theme-dark' : 'theme-light'}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <style>{`
+          :root {
+            --bg-light: #f5f7fa; --panel-light: #ffffff; --text-light: #2c3e50;
+            --bg-dark: #0f172a; --panel-dark: #1e293b; --text-dark: #f1f5f9;
+            --accent: #2563eb; --accent-hover: #1d4ed8; --border-light: #e2e8f0; --border-dark: #334155;
+          }
+          .setup-container { width: 100%; max-width: 400px; padding: 24px; background: var(--panel-light); border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.05); border: 1px solid var(--border-light); }
+          [data-theme="dark"] .setup-container { background: var(--panel-dark); border-color: var(--border-dark); }
+          .setup-header { text-align: center; margin-bottom: 24px; }
+          .setup-header h2 { margin: 0 0 8px 0; font-size: 1.5rem; }
+          .setup-header p { opacity: 0.7; font-size: 0.9rem; margin: 0; }
+          .form-group { margin-bottom: 16px; }
+          .form-group label { display: block; font-size: 0.8rem; font-weight: 600; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.8; }
+          .form-group input { width: 100%; padding: 12px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--bg-light); color: inherit; font-size: 1rem; }
+          [data-theme="dark"] .form-group input { border-color: var(--border-dark); background: rgba(0,0,0,0.2); }
+          .btn-primary { width: 100%; padding: 14px; background: var(--accent); color: white; border: none; border-radius: 8px; font-size: 1rem; font-weight: 600; cursor: pointer; transition: background 0.2s; }
+          .btn-primary:hover { background: var(--accent-hover); }
+        `}</style>
 
+        <div className="setup-container">
+          <div className="setup-header">
+            <h2>Vincular Unidad</h2>
+            <p>Por favor, ingrese los datos de la tripulación operativa. Esto solo se solicitará una vez.</p>
+          </div>
+          <form onSubmit={guardarConfiguracion}>
+            <div className="form-group">
+              <label>Identificador de Unidad *</label>
+              <input type="text" value={configInicial.ambulanciaId} onChange={e => setConfigInicial({...configInicial, ambulanciaId: e.target.value})} placeholder="Ej. AMB-01" required />
+            </div>
+            <div className="form-group">
+              <label>Paramédico Responsable *</label>
+              <input type="text" value={configInicial.paramedico1} onChange={e => setConfigInicial({...configInicial, paramedico1: e.target.value})} placeholder="Nombre completo" required />
+            </div>
+            <div className="form-group">
+              <label>Operador / Conductor</label>
+              <input type="text" value={configInicial.operador} onChange={e => setConfigInicial({...configInicial, operador: e.target.value})} placeholder="Nombre completo (Opcional)" />
+            </div>
+            <div className="form-group">
+              <label>Paramédico Auxiliar</label>
+              <input type="text" value={configInicial.paramedico2} onChange={e => setConfigInicial({...configInicial, paramedico2: e.target.value})} placeholder="Nombre completo (Opcional)" />
+            </div>
+            <button type="submit" className="btn-primary">Iniciar Operación</button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  // VISTA 2: REPORTE PREHOSPITALARIO (PRINCIPAL)
   return (
     <div className={`reporte-root ${theme === 'dark' ? 'theme-dark' : 'theme-light'}`}>
       <style>{`
         :root {
-          --bg-light: #f5f7f8;
-          --panel-light: #ffffff;
-          --text-light: #1f2d3d;
-          --bg-dark: #111418;
-          --panel-dark: #1f262a;
-          --text-dark: #e6eef6;
-          --accent: #1d8cf8;
+          --bg-light: #f5f7fa; --panel-light: #ffffff; --text-light: #2c3e50;
+          --bg-dark: #0f172a; --panel-dark: #1e293b; --text-dark: #f1f5f9;
+          --accent: #2563eb; --accent-hover: #1d4ed8;
+          --border-light: #e2e8f0; --border-dark: #334155;
+          --danger: #ef4444; --warning: #f59e0b; --success: #10b981;
         }
-        [data-theme="light"] .reporte-root { background: var(--bg-light); color: var(--text-light); min-height: 100vh; }
-        [data-theme="dark"] .reporte-root { background: var(--bg-dark); color: var(--text-dark); min-height: 100vh; }
-        .container { max-width: 1100px; margin: 24px auto 120px; padding: 20px; background: var(--panel-light); border-radius: 12px; box-shadow: 0 6px 18px rgba(0,0,0,0.06); }
-        [data-theme="dark"] .container { background: var(--panel-dark); box-shadow: none; }
-        .header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
+        * { box-sizing: border-box; }
+        [data-theme="light"] .reporte-root { background: var(--bg-light); color: var(--text-light); min-height: 100vh; padding-bottom: 120px; font-family: system-ui, -apple-system, sans-serif; }
+        [data-theme="dark"] .reporte-root { background: var(--bg-dark); color: var(--text-dark); min-height: 100vh; padding-bottom: 120px; font-family: system-ui, -apple-system, sans-serif; }
+        
+        .container { max-width: 768px; margin: 0 auto; padding: 16px; }
+        
+        /* HEADER ORIGINAL RESTAURADO */
+        .header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 24px; background: var(--panel-light); padding: 16px; border-radius: 12px; border: 1px solid var(--border-light); }
+        [data-theme="dark"] .header { background: var(--panel-dark); border-color: var(--border-dark); }
         .brand { display: flex; align-items: center; gap: 12px; }
-        .logo { width: 36px; height: 36px; border-radius: 8px; background: linear-gradient(135deg, var(--accent), #0aa); }
+        .logo { width: 36px; height: 36px; border-radius: 8px; background: linear-gradient(135deg, var(--accent), #0ea5e9); }
         .header-actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
         .triage-indicator { display: flex; align-items: center; gap: 8px; }
         .triage-circle { width: 40px; height: 40px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.2); }
-        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-        .signs-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 8px; }
-        .intervencion-item { padding: 10px; border-radius: 8px; background: rgba(0,0,0,0.03); border: 1px solid rgba(0,0,0,0.04); margin-bottom: 8px; }
-        [data-theme="dark"] .intervencion-item { background: rgba(255,255,255,0.02); border-color: rgba(255,255,255,0.03); }
-        fieldset { border: none; padding: 12px 0; margin: 0; }
-        legend { font-weight: 700; font-size: 1.05rem; margin-bottom: 10px; }
-        label { display: block; font-size: 0.85rem; margin-bottom: 4px; font-weight: 500; }
-        input, select, textarea { width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid rgba(0,0,0,0.08); background: transparent; color: inherit; font-size: 0.95rem; }
-        [data-theme="dark"] input, [data-theme="dark"] select, [data-theme="dark"] textarea { border-color: rgba(255,255,255,0.04); background: rgba(255,255,255,0.02); }
-        .btn { padding: 6px 12px; border-radius: 6px; border: none; cursor: pointer; }
-        .btn-primary { background: var(--accent); color: white; }
-        .btn-danger { background: #ff4d4f; color: white; }
-        .icon-btn { background: transparent; border: 1px solid rgba(0,0,0,0.06); padding: 6px 10px; border-radius: 6px; cursor: pointer; }
-        .sticky-submit { position: fixed; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.02); backdrop-filter: blur(6px); padding: 14px 20px; display: flex; justify-content: center; z-index: 60; }
-        [data-theme="dark"] .sticky-submit { background: rgba(0,0,0,0.6); }
-        .send-button { width: calc(100% - 20px); max-width: 420px; padding: 12px 22px; border-radius: 10px; font-weight: 700; border: none; cursor: pointer; background: var(--accent); color: white; }
-        .send-button.dark { background: #e94b4b; }
-        .toast { position: fixed; top: 20px; right: 20px; padding: 12px 20px; border-radius: 8px; color: white; font-weight: 500; z-index: 9999; box-shadow: 0 4px 12px rgba(0,0,0,0.15); max-width: 400px; }
-        .toast.success { background: #52c41a; }
-        .toast.error { background: #ff4d4f; }
-        .toast.info { background: #1d8cf8; }
-        .logout-btn { background: transparent; border: 1px solid rgba(0,0,0,0.1); padding: 6px 14px; border-radius: 6px; cursor: pointer; color: inherit; }
-        [data-theme="dark"] .logout-btn { border-color: rgba(255,255,255,0.1); }
-        @media (max-width: 700px) { .grid-2 { grid-template-columns: 1fr; } .signs-grid { grid-template-columns: 1fr 1fr; } }
+        .logout-btn { background: transparent; border: 1px solid var(--danger); padding: 8px 16px; border-radius: 8px; cursor: pointer; color: var(--danger); font-weight: 600; font-size: 0.9rem; }
+        .icon-btn { background: transparent; border: 1px solid var(--border-light); padding: 8px; border-radius: 8px; cursor: pointer; color: inherit; }
+        [data-theme="dark"] .icon-btn { border-color: var(--border-dark); }
+
+        .status-banner { background: var(--panel-light); border-left: 4px solid var(--accent); padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; font-size: 0.9rem; font-weight: 500; border: 1px solid var(--border-light); }
+        [data-theme="dark"] .status-banner { background: var(--panel-dark); border-color: var(--border-dark); border-left-color: var(--accent); }
+        
+        details { background: var(--panel-light); border-radius: 10px; margin-bottom: 12px; border: 1px solid var(--border-light); transition: all 0.2s ease; overflow: hidden; }
+        [data-theme="dark"] details { background: var(--panel-dark); border-color: var(--border-dark); }
+        details[open] { box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+        
+        .priority-red { border-left: 4px solid var(--danger); }
+        .priority-yellow { border-left: 4px solid var(--warning); }
+        .priority-green { border-left: 4px solid var(--success); }
+        
+        summary { font-weight: 600; padding: 16px; cursor: pointer; user-select: none; list-style: none; display: flex; justify-content: space-between; align-items: center; font-size: 1rem; }
+        summary::-webkit-details-marker { display: none; }
+        summary:after { content: '+'; font-size: 1.2em; font-weight: 300; opacity: 0.5; }
+        details[open] summary:after { content: '-'; }
+        details[open] summary { border-bottom: 1px solid var(--border-light); }
+        [data-theme="dark"] details[open] summary { border-bottom-color: var(--border-dark); }
+        
+        .section-content { padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+        
+        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+        
+        label { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.7; margin-bottom: 6px; display: block; }
+        input, select, textarea { width: 100%; padding: 12px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--bg-light); font-size: 1rem; color: inherit; font-family: inherit; transition: border-color 0.2s; }
+        [data-theme="dark"] input, [data-theme="dark"] select, [data-theme="dark"] textarea { border-color: var(--border-dark); background: rgba(0,0,0,0.2); }
+        input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+        
+        /* MEJORA EN BOTÓN DE SINCRONIZAR Y CONTENEDOR FLOTANTE */
+        .bottom-action-area { position: fixed; bottom: 0; left: 0; width: 100%; background: var(--panel-light); border-top: 1px solid var(--border-light); padding: 16px; z-index: 100; box-shadow: 0 -10px 20px rgba(0,0,0,0.05); display: flex; flex-direction: column; gap: 12px; }
+        [data-theme="dark"] .bottom-action-area { background: var(--panel-dark); border-top-color: var(--border-dark); }
+        
+        .pln-container { width: 100%; display: flex; justify-content: center; margin-bottom: 4px; }
+        
+        .btn-sync { width: 100%; padding: 16px; background: var(--accent); color: white; border: none; border-radius: 12px; font-size: 1.1rem; font-weight: 700; cursor: pointer; transition: background 0.2s; text-transform: uppercase; letter-spacing: 0.5px; }
+        .btn-sync:hover { background: var(--accent-hover); }
+        
+        .toast { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); padding: 12px 24px; border-radius: 8px; color: white; font-weight: 500; z-index: 9999; box-shadow: 0 4px 12px rgba(0,0,0,0.15); font-size: 0.9rem; }
+        .toast.success { background: var(--success); }
+        .toast.error { background: var(--danger); }
+        .toast.info { background: var(--accent); }
+        
+        @media (max-width: 480px) { .grid-3 { grid-template-columns: 1fr 1fr; } }
       `}</style>
 
       {mensajeNotificacion.texto && (
@@ -401,12 +394,13 @@ const handleNLPData = (data) => {
       )}
 
       <div className="container">
+        {/* HEADER RESTAURADO */}
         <div className="header">
           <div className="brand">
             <div className="logo" />
             <div>
-              <div style={{ fontWeight: 700 }}>Emergencity</div>
-              <div style={{ fontSize: 12, opacity: 0.7 }}>Reporte prehospitalario</div>
+              <div style={{ fontWeight: 700, fontSize: '1.1rem' }}>Emergencity</div>
+              <div style={{ fontSize: '0.8rem', opacity: 0.7 }}>Reporte prehospitalario</div>
             </div>
           </div>
           <div className="header-actions">
@@ -416,188 +410,172 @@ const handleNLPData = (data) => {
               <span style={{ fontSize: '13px', opacity: 0.6 }}>GCS: {total}</span>
             </div>
             <button onClick={() => setTheme(t => t === 'light' ? 'dark' : 'light')} className="icon-btn">
-              {theme === 'light' ? '🌙' : '🌤️'}
+              {theme === 'light' ? 'Noche' : 'Día'}
             </button>
             <button onClick={handleLogout} className="logout-btn">
-              🚪 Cerrar sesión
+              Cerrar sesión
             </button>
           </div>
         </div>
 
-        <form onSubmit={handleSubmit}>
-          <fieldset>
-            <legend>1. Identificación del Servicio</legend>
-            <div className="grid-2">
-              <div>
-                <label>Número de ambulancia *</label>
-                <input
-                  type="text"
-                  value={ambulanciaId}
-                  onChange={(e) => handleAmbulanciaChange(e.target.value)}
-                  placeholder="Ej. AMB-001"
-                  required
-                />
-                <small style={{ opacity: 0.6 }}>Este dato se guarda automáticamente</small>
-              </div>
-              <div>
-                <label>Hora estimada de llegada *</label>
-                <input
-                  type="time"
-                  value={reporte.hora_estimada_llegada}
-                  onChange={e => handleChange(['hora_estimada_llegada'], e.target.value)}
-                  required
-                />
-                <small style={{ opacity: 0.6 }}>Se actualiza al grabar</small>
-              </div>
-            </div>
-            <div>
-              <label>Ubicación actual *</label>
-              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                <input
-                  type="text"
-                  value={reporte.ubicacion_actual}
-                  onChange={e => handleChange(['ubicacion_actual'], e.target.value)}
-                  required
-                  style={{ flex: 1 }}
-                />
-                {obteniendoUbicacion && <span>🔄 Obteniendo...</span>}
-                {ubicacion.lat && <span style={{ fontSize: '12px', opacity: 0.6 }}>📍 {ubicacion.lat.toFixed(4)}, {ubicacion.lng.toFixed(4)}</span>}
-              </div>
-            </div>
-            <div>
-              <label>Hospital destino *</label>
-              <select value={hospitalSeleccionado} onChange={e => setHospitalSeleccionado(e.target.value)} required>
-  <option value="">-- Seleccionar --</option>
-  {listaHospitales.map(h => (
-    <option key={h.id} value={h.id}>
-      {h.nombre} {h.camasDisponibles ? `(Camas: ${h.camasDisponibles})` : ''}
-      {ubicacion.lat && h.lat && h.lng && ` (${calcularDistancia(ubicacion.lat, ubicacion.lng, h.lat, h.lng).toFixed(1)} km)`}
-    </option>
-  ))}
-</select>
-              {ubicacion.lat && <small style={{ opacity: 0.6 }}>Sugerencia: hospital más cercano seleccionado</small>}
-            </div>
-          </fieldset>
+        {reporte.callId ? (
+          <div className="status-banner">
+            <div><strong>Emergencia Asignada:</strong> {reporte.callId}</div>
+            <div style={{ opacity: 0.8, fontSize: '0.8rem', marginTop: '4px' }}>Sincronizado con CRUM. Unidad {configInicial.ambulanciaId}.</div>
+          </div>
+        ) : (
+          <div className="status-banner" style={{ borderLeftColor: 'var(--warning)' }}>
+            <div style={{ opacity: 0.8, fontSize: '0.85rem' }}>Esperando asignación del sistema central (Unidad: {configInicial.ambulanciaId}).</div>
+          </div>
+        )}
 
-          <fieldset>
-            <legend>2. Datos del Paciente</legend>
-            <div className="grid-2">
-              <div>
-                <label>Nombre completo *</label>
-                <input type="text" value={reporte.paciente.nombre} onChange={e => handleChange(['paciente', 'nombre'], e.target.value)} required />
-              </div>
-              <div>
-                <label>Edad (años) *</label>
-                <input type="number" value={reporte.paciente.edad} onChange={e => handleChange(['paciente', 'edad'], e.target.value)} required />
-              </div>
-            </div>
-            <div style={{ margin: '8px 0' }}>
-              <label>Sexo *</label>
-              <div style={{ display: 'flex', gap: '16px' }}>
-                <label><input type="radio" name="sexo" value="M" checked={reporte.paciente.sexo === 'M'} onChange={e => handleChange(['paciente', 'sexo'], e.target.value)} /> Masculino</label>
-                <label><input type="radio" name="sexo" value="F" checked={reporte.paciente.sexo === 'F'} onChange={e => handleChange(['paciente', 'sexo'], e.target.value)} /> Femenino</label>
-              </div>
-            </div>
-            <div>
-              <label>Motivo de urgencia *</label>
-              <textarea value={reporte.paciente.motivo_urgencia} onChange={e => handleChange(['paciente', 'motivo_urgencia'], e.target.value)} required />
-            </div>
-            <div>
-              <label>Descripción de la lesión</label>
-              <textarea value={reporte.paciente.descripcion_lesion} onChange={e => handleChange(['paciente', 'descripcion_lesion'], e.target.value)} />
-            </div>
-          </fieldset>
-
-          <fieldset>
-            <legend>3. Signos Vitales (opcional)</legend>
-            <div className="signs-grid">
-              <div><label>FC</label><input value={reporte.signos_vitales.frecuencia_cardiaca} onChange={e => handleChange(['signos_vitales', 'frecuencia_cardiaca'], e.target.value)} /></div>
-              <div><label>FR</label><input value={reporte.signos_vitales.frecuencia_respiratoria} onChange={e => handleChange(['signos_vitales', 'frecuencia_respiratoria'], e.target.value)} /></div>
-              <div><label>TA</label><input value={reporte.signos_vitales.tension_arterial} onChange={e => handleChange(['signos_vitales', 'tension_arterial'], e.target.value)} placeholder="120/80" /></div>
-              <div><label>SpO₂</label><input value={reporte.signos_vitales.saturacion_oxigeno} onChange={e => handleChange(['signos_vitales', 'saturacion_oxigeno'], e.target.value)} /></div>
-              <div><label>Temperatura</label><input value={reporte.signos_vitales.temperatura} onChange={e => handleChange(['signos_vitales', 'temperatura'], e.target.value)} /></div>
-            </div>
-          </fieldset>
-
-          <fieldset>
-            <legend>4. Escala de Glasgow</legend>
-            <div className="grid-2">
-              <div>
-                <label>Ocular</label>
-                <select value={ocular} onChange={e => setOcular(Number(e.target.value))}>
-                  {Object.entries(GLASGOW.ocular).map(([key, desc]) => (
-                    <option key={key} value={key}>{key} - {desc}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label>Verbal</label>
-                <select value={verbal} onChange={e => setVerbal(Number(e.target.value))}>
-                  {Object.entries(GLASGOW.verbal).map(([key, desc]) => (
-                    <option key={key} value={key}>{key} - {desc}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label>Motor</label>
-                <select value={motor} onChange={e => setMotor(Number(e.target.value))}>
-                  {Object.entries(GLASGOW.motor).map(([key, desc]) => (
-                    <option key={key} value={key}>{key} - {desc}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label>Total: <strong>{total}</strong></label>
-                <div style={{ fontSize: '14px', marginTop: '4px' }}>Triaje: {triaje.label}</div>
-              </div>
-            </div>
-          </fieldset>
-
-          <fieldset>
-            <legend>5. Intervenciones</legend>
-            {reporte.intervenciones.length === 0 && <div style={{ color: 'gray', fontSize: '14px' }}>No hay intervenciones registradas.</div>}
-            {reporte.intervenciones.map((iv, idx) => (
-              <div key={idx} className="intervencion-item">
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <div><strong>{iv.tipo_intervencion || 'Interv.'}</strong> {iv.hora_intervencion && `· ${iv.hora_intervencion}`}</div>
-                  <button type="button" className="icon-btn" onClick={() => eliminarIntervencion(idx)}>🗑️</button>
+        <form>
+          <details className="priority-red" open>
+            <summary>A y F. Datos y Motivo (Obligatorio)</summary>
+            <div className="section-content">
+              <div className="grid-2">
+                <div><label>Folio</label><input type="text" readOnly value={reporte.seccionA.folio || 'Pendiente'} disabled /></div>
+                <div><label>Fecha</label><input type="date" value={reporte.seccionA.fecha} onChange={e => handleChange(['seccionA', 'fecha'], e.target.value)} /></div>
+                <div>
+                  <label>Tipo Servicio</label>
+                  <select value={reporte.seccionA.tipo_servicio} onChange={e => handleChange(['seccionA', 'tipo_servicio'], e.target.value)}>
+                    <option>Urgencia</option><option>Traslado</option><option>Cuidados Intensivos</option>
+                  </select>
                 </div>
-                <div style={{ fontSize: '14px' }}>{iv.descripcion || <i>Sin descripción</i>}</div>
+                <div>
+                  <label>Tipo Urgencia</label>
+                  <select value={reporte.seccionF.tipo_urgencia} onChange={e => handleChange(['seccionF', 'tipo_urgencia'], e.target.value)}>
+                    <option value="">Seleccione...</option>
+                    <option>Accidente vehicular</option><option>Motociclista lesionado</option>
+                    <option>Atropellamiento</option><option>Caída</option>
+                    <option>Agresión</option><option>Persona inconsciente</option>
+                    <option>Otro</option>
+                  </select>
+                </div>
               </div>
-            ))}
-            <div style={{ marginTop: '12px', padding: '12px', border: '1px dashed rgba(0,0,0,0.1)', borderRadius: '6px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontWeight: 'bold' }}>Agregar</span>
-                <button type="button" className="btn btn-primary" onClick={agregarIntervencion}>➕ Agregar</button>
+              <div>
+                <label>Motivo principal / Notas de despacho</label>
+                <textarea rows="3" value={reporte.seccionF.motivo_principal} onChange={e => handleChange(['seccionF', 'motivo_principal'], e.target.value)} placeholder="Describa el motivo..."></textarea>
               </div>
-              <div className="grid-2" style={{ marginTop: '8px' }}>
-                <div><label>Tipo</label><input value={intervencionActual.tipo_intervencion} onChange={e => setIntervencionActual({...intervencionActual, tipo_intervencion: e.target.value})} placeholder="Ej. Oxigenoterapia" /></div>
-                <div><label>Hora</label><input type="time" value={intervencionActual.hora_intervencion} onChange={e => setIntervencionActual({...intervencionActual, hora_intervencion: e.target.value})} /></div>
+              {reporte.riesgos_escena && (
+                <div>
+                  <label>Riesgos en Escena</label>
+                  <input type="text" readOnly value={reporte.riesgos_escena} disabled style={{ color: 'var(--danger)', fontWeight: 'bold' }} />
+                </div>
+              )}
+              <div className="grid-3">
+                <div><label>Activación</label><input type="time" value={reporte.seccionB.activacion} onChange={e => handleChange(['seccionB', 'activacion'], e.target.value)} /></div>
+                <div><label>Salida Base</label><input type="time" value={reporte.seccionB.salida_base} onChange={e => handleChange(['seccionB', 'salida_base'], e.target.value)} /></div>
+                <div><label>En Escena</label><input type="time" value={reporte.seccionB.llegada_escena} onChange={e => handleChange(['seccionB', 'llegada_escena'], e.target.value)} /></div>
               </div>
-              <div><label>Descripción</label><textarea value={intervencionActual.descripcion} onChange={e => setIntervencionActual({...intervencionActual, descripcion: e.target.value})} /></div>
             </div>
-          </fieldset>
+          </details>
 
-          <fieldset>
-            <legend>6. Observaciones / Hallazgos</legend>
-            <label>Hallazgos en la escena</label>
-            <textarea value={reporte.hallazgos_escena} onChange={e => handleChange(['hallazgos_escena'], e.target.value)} />
-            <label style={{ marginTop: '8px' }}>Instrucciones para el hospital</label>
-            <textarea value={reporte.instrucciones_hospital} onChange={e => handleChange(['instrucciones_hospital'], e.target.value)} />
-          </fieldset>
+          <details className="priority-yellow">
+            <summary>C y D. Localización y Paciente</summary>
+            <div className="section-content">
+              <div>
+                <label>Dirección del Incidente</label>
+                <input type="text" value={reporte.seccionC.direccion} onChange={e => handleChange(['seccionC', 'direccion'], e.target.value)} placeholder="Calle, Número, Colonia..." />
+              </div>
+              <div className="grid-2">
+                <div>
+                  <label>Tipo de lugar</label>
+                  <select value={reporte.seccionC.tipo_lugar} onChange={e => handleChange(['seccionC', 'tipo_lugar'], e.target.value)}>
+                    <option>Vía pública</option><option>Hogar</option><option>Trabajo</option><option>Otro</option>
+                  </select>
+                </div>
+                <div><label>Nombre del Paciente</label><input type="text" value={reporte.seccionD.nombre} onChange={e => handleChange(['seccionD', 'nombre'], e.target.value)} placeholder="Desconocido"/></div>
+                <div><label>Edad Aprox.</label><input type="number" value={reporte.seccionD.edad} onChange={e => handleChange(['seccionD', 'edad'], e.target.value)} /></div>
+                <div>
+                  <label>Sexo</label>
+                  <select value={reporte.seccionD.sexo} onChange={e => handleChange(['seccionD', 'sexo'], e.target.value)}>
+                    <option value="">Seleccione</option><option value="M">Masculino</option><option value="F">Femenino</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          </details>
+
+          <details className="priority-yellow">
+            <summary>H. Evaluación Primaria y Glasgow</summary>
+            <div className="section-content">
+              <div className="grid-2">
+                <div><label>Vía Aérea</label><select value={reporte.seccionH.via_aerea} onChange={e => handleChange(['seccionH', 'via_aerea'], e.target.value)}><option>Libre</option><option>Comprometida</option></select></div>
+                <div><label>Ventilación</label><select value={reporte.seccionH.ventilacion} onChange={e => handleChange(['seccionH', 'ventilacion'], e.target.value)}><option>Adecuada</option><option>Dificultosa</option></select></div>
+              </div>
+              <div style={{ padding: '16px', background: 'var(--bg-light)', borderRadius: '8px', border: '1px solid var(--border-light)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                  <span style={{ fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-light)' }}>Total Glasgow: {total}</span>
+                </div>
+                <div className="grid-3">
+                  <div><label>Ocular</label><select value={ocular} onChange={e => setOcular(Number(e.target.value))}><option value={4}>4</option><option value={3}>3</option><option value={2}>2</option><option value={1}>1</option></select></div>
+                  <div><label>Verbal</label><select value={verbal} onChange={e => setVerbal(Number(e.target.value))}><option value={5}>5</option><option value={4}>4</option><option value={3}>3</option><option value={2}>2</option><option value={1}>1</option></select></div>
+                  <div><label>Motor</label><select value={motor} onChange={e => setMotor(Number(e.target.value))}><option value={6}>6</option><option value={5}>5</option><option value={4}>4</option><option value={3}>3</option><option value={2}>2</option><option value={1}>1</option></select></div>
+                </div>
+              </div>
+            </div>
+          </details>
+
+          <details className="priority-yellow">
+            <summary>I. Signos Vitales y Tiempos</summary>
+            <div className="section-content">
+              <div className="grid-3">
+                <div><label>FC</label><input type="number" value={reporte.seccionI.fc} onChange={e => handleChange(['seccionI', 'fc'], e.target.value)} /></div>
+                <div><label>FR</label><input type="number" value={reporte.seccionI.fr} onChange={e => handleChange(['seccionI', 'fr'], e.target.value)} /></div>
+                <div><label>SpO₂</label><input type="number" value={reporte.seccionI.spo2} onChange={e => handleChange(['seccionI', 'spo2'], e.target.value)} /></div>
+                <div><label>T/A</label><input type="text" placeholder="120/80" value={reporte.seccionI.ta} onChange={e => handleChange(['seccionI', 'ta'], e.target.value)} /></div>
+                <div><label>Temp</label><input type="number" step="0.1" value={reporte.seccionI.temp} onChange={e => handleChange(['seccionI', 'temp'], e.target.value)} /></div>
+                <div><label>Gluc</label><input type="number" value={reporte.seccionI.glucemia} onChange={e => handleChange(['seccionI', 'glucemia'], e.target.value)} /></div>
+              </div>
+              <div className="grid-2" style={{ marginTop: '8px', borderTop: '1px solid var(--border-light)', paddingTop: '16px' }}>
+                <div><label>Hora Contacto</label><input type="time" value={reporte.seccionB.primer_contacto} onChange={e => handleChange(['seccionB', 'primer_contacto'], e.target.value)} /></div>
+                <div><label>Salida Escena</label><input type="time" value={reporte.seccionB.salida_escena} onChange={e => handleChange(['seccionB', 'salida_escena'], e.target.value)} /></div>
+              </div>
+            </div>
+          </details>
+
+          <details className="priority-green">
+            <summary>N y O. Destino y Cierre</summary>
+            <div className="section-content">
+              <div className="grid-2">
+                <div style={{ gridColumn: 'span 2' }}>
+                  <label>Hospital Destino *</label>
+                  <select value={hospitalSeleccionado} onChange={e => setHospitalSeleccionado(e.target.value)}>
+                    <option value="">Seleccione un hospital...</option>
+                    {listaHospitales.map(h => <option key={h.id} value={h.id}>{h.nombre}</option>)}
+                  </select>
+                </div>
+                <div><label>ETA (Estimada)</label><input type="time" value={reporte.seccionN.eta} onChange={e => handleChange(['seccionN', 'eta'], e.target.value)} /></div>
+                <div>
+                  <label>Área Receptora</label>
+                  <select value={reporte.seccionOP.area_receptora} onChange={e => handleChange(['seccionOP', 'area_receptora'], e.target.value)}>
+                    <option>Urgencias</option><option>Choque</option><option>Tococirugía</option>
+                  </select>
+                </div>
+              </div>
+              <div className="grid-3" style={{ marginTop: '8px', borderTop: '1px solid var(--border-light)', paddingTop: '16px' }}>
+                <div><label>Llegada Hosp.</label><input type="time" value={reporte.seccionB.llegada_hospital} onChange={e => handleChange(['seccionB', 'llegada_hospital'], e.target.value)} /></div>
+                <div><label>Entrega Paciente</label><input type="time" value={reporte.seccionB.entrega_paciente} onChange={e => handleChange(['seccionB', 'entrega_paciente'], e.target.value)} /></div>
+                <div><label>Libera Unidad</label><input type="time" value={reporte.seccionB.liberacion_unidad} onChange={e => handleChange(['seccionB', 'liberacion_unidad'], e.target.value)} /></div>
+              </div>
+            </div>
+          </details>
         </form>
         <Outlet />
       </div>
 
-      <VoiceAssistant
-        onDataExtracted={handleNLPData}
-        onError={(msg) => mostrarNotificacion(msg, 'error')}
-        onRecordingComplete={() => mostrarNotificacion('Grabación procesada', 'success')}
-      />
-
-      <div className="sticky-submit">
-        <button onClick={handleSubmit} className={`send-button ${theme === 'dark' ? 'dark' : ''}`}>
-          Enviar reporte
+      {/* ÁREA DE ACCIÓN INFERIOR (MICRÓFONO Y ENVIAR) */}
+      <div className="bottom-action-area">
+        <div className="pln-container">
+          <VoiceAssistant
+            onDataExtracted={handleNLPData}
+            onError={(msg) => mostrarNotificacion(msg, 'error')}
+            onRecordingComplete={() => mostrarNotificacion('Grabación completada', 'success')}
+          />
+        </div>
+        <button onClick={handleSubmit} className="btn-sync">
+          Sincronizar Reporte
         </button>
       </div>
     </div>
