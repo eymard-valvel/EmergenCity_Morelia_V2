@@ -28,7 +28,7 @@ import {
 import { FiNavigation, FiWifiOff, FiActivity } from 'react-icons/fi';
 import { MdMyLocation, MdSpeed, MdExplore, MdCenterFocusStrong } from 'react-icons/md';
 import { CloseIcon, SearchIcon } from '@chakra-ui/icons';
-
+import 'mapbox-gl/dist/mapbox-gl.css';
 // ========================================================================
 // CONFIGURACIÓN
 // ========================================================================
@@ -105,6 +105,7 @@ const MapaOperador = () => {
   const [mapZoom, setMapZoom] = useState(17);
   const [mapPitch, setMapPitch] = useState(60);
   const [isFollowing, setIsFollowing] = useState(true);
+  const [isGpsMode, setIsGpsMode] = useState(false);
 
   // ---- ESTADO ----
   const [ambulanceStatus, setAmbulanceStatus] = useState('disponible');
@@ -407,8 +408,36 @@ const MapaOperador = () => {
   };
 
   const UberCamera = () => {
-    
+  // Asegurar que la instancia de Mapbox exista en map.current
+  if (!map.current) return;
+  
+  const currentCenter = map.current.getCenter();
+    console.log(isGpsMode)
+  if (isGpsMode) {
+    // Retornar a la vista normal: Cenital y con Zoom Out
+    map.current.flyTo({
+      center: currentCenter,
+      zoom: 20,       // Nivel de alejamiento
+      pitch: 0,       // Sin inclinación
+      bearing: 0,     // Orientación al norte
+      duration: 2000,
+      essential: true
+    });
+  } else {
+    // Cambiar a vista GPS tipo Uber: Acercamiento e inclinación 3D
+    map.current.flyTo({
+      center: currentCenter,
+      zoom: 12,       // Nivel de acercamiento
+      pitch: 60,      // Inclinación de la cámara
+      bearing: map.current.getBearing(), // Mantener orientación actual
+      duration: 2000, 
+      essential: true
+    });
   }
+
+  // Alternar el estado
+  setIsGpsMode(!isGpsMode);
+};
 
 
   const toggleTraffic = () => {

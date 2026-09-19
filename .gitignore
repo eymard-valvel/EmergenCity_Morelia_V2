@@ -1,3 +1,5 @@
 node_modules
 .env
 ./ECMorelia-Back/node_modules
+./ECMorelia-Front/package-lock.json
+./ECMorelia-Back/package-lock.json
