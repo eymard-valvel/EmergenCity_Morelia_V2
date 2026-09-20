@@ -3,10 +3,8 @@ const app = express()
 const cors = require('cors')
 const { swaggerUi, swaggerDocs } = require('./config/swagger')
 const cookieParser = require('cookie-parser')
-const WebSocket = require('ws');
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
-
+const { PrismaClient } = require('@prisma/client')
+const prisma = new PrismaClient()
 const dotenv = require('dotenv')
 dotenv.config()
 
@@ -17,219 +15,23 @@ const paramedico = require('./routes/paramedico.js')
 const hospital = require('./routes/hospital.js')
 const operador = require('./routes/operador.js')
 const doctor = require('./routes/doctor.js')
-const reportePrehospitalario = require('./routes/reportePrehospitalario.js');
-
+const reportePrehospitalario = require('./routes/reportePrehospitalario.js')
 const receptor = require('./routes/receptor.js')
+const nlpRoutes = require('./routes/nlp')
 
-const nlpRoutes = require('./routes/nlp');
-app.use('/api/nlp', nlpRoutes);
+const { attachV2WebSocket } = require('./ws-core')
 
 // CORS
 app.use(cors({
-    origin: '*',
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
-}));
+  origin: '*',
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}))
 
 const PORT = process.env.PORT || 3000
 
-// ==================== CONFIGURACIÓN WEBSOCKET MEJORADA ====================
-// ***** CAMBIO IMPORTANTE: WebSocket compartirá el mismo servidor HTTP que Express *****
-let server;  // se definirá después
-let wss;     // se inicializará después
-
-// Almacenamiento para el sistema de ambulancias
-const activeAmbulances = new Map();
-const hospitals = new Set();
-
-// ==================== MANEJO DE MENSAJES DE AMBULANCIAS ====================
-function handleAmbulanceMessage(ws, data) {
-  console.log('📨 Mensaje recibido:', data.type);
-  
-  switch (data.type) {
-    case 'register_ambulance':
-      activeAmbulances.set(data.ambulance.id, {
-        ...data.ambulance,
-        ws: ws,
-        location: null,
-        status: 'disponible',
-        lastUpdate: new Date()
-      });
-      
-      console.log(`🚑 Ambulancia registrada: ${data.ambulance.id}`);
-      broadcastActiveAmbulances();
-      break;
-
-    case 'register_hospital':
-      hospitals.add(ws);
-      
-      const ambulancesList = Array.from(activeAmbulances.entries()).map(([id, ambulance]) => ({
-        id: ambulance.id,
-        placa: ambulance.placa,
-        tipo: ambulance.tipo,
-        status: ambulance.status,
-        location: ambulance.location,
-        speed: ambulance.speed,
-        lastUpdate: ambulance.lastUpdate
-      }));
-      
-      ws.send(JSON.stringify({
-        type: 'active_ambulances_update',
-        ambulances: ambulancesList
-      }));
-      
-      console.log('🏥 Hospital registrado');
-      break;
-
-    case 'location_update':
-      const ambulanceData = activeAmbulances.get(data.ambulanceId);
-      if (ambulanceData) {
-        ambulanceData.location = data.location;
-        ambulanceData.speed = data.speed;
-        ambulanceData.status = data.status || ambulanceData.status;
-        ambulanceData.lastUpdate = new Date();
-        
-        broadcastToHospitals({
-          type: 'location_update',
-          ambulanceId: data.ambulanceId,
-          location: data.location,
-          speed: data.speed,
-          status: ambulanceData.status
-        });
-      }
-      break;
-
-    case 'hospital_note':
-      const targetAmbulance = activeAmbulances.get(data.ambulanceId);
-      if (targetAmbulance && targetAmbulance.ws.readyState === WebSocket.OPEN) {
-        targetAmbulance.ws.send(JSON.stringify({
-          type: 'hospital_note',
-          note: data.note
-        }));
-        console.log(`📋 Nota enviada a ambulancia ${data.ambulanceId}`);
-      }
-      break;
-
-    case 'emergency_assignment':
-      const emergencyAmbulance = activeAmbulances.get(data.ambulanceId);
-      if (emergencyAmbulance && emergencyAmbulance.ws.readyState === WebSocket.OPEN) {
-        emergencyAmbulance.ws.send(JSON.stringify({
-          type: 'emergency_assignment',
-          emergency: data.emergency
-        }));
-        
-        emergencyAmbulance.status = 'en_ruta';
-        console.log(`🚨 Emergencia asignada a ambulancia ${data.ambulanceId}`);
-        broadcastActiveAmbulances();
-      }
-      break;
-
-    case 'navigation_started':
-      const startedAmbulance = activeAmbulances.get(data.ambulanceId);
-      if (startedAmbulance) {
-        startedAmbulance.status = 'en_ruta';
-        broadcastActiveAmbulances();
-      }
-      break;
-
-    case 'navigation_finished':
-      const finishedAmbulance = activeAmbulances.get(data.ambulanceId);
-      if (finishedAmbulance) {
-        finishedAmbulance.status = 'disponible';
-        broadcastActiveAmbulances();
-      }
-      break;
-
-    case 'note_accepted':
-      console.log(`✅ Nota ${data.noteId} aceptada por ambulancia ${data.ambulanceId}`);
-      break;
-
-    case 'patient_transfer_notification':
-        console.log(`🚨 ALERTA DE EMERGENCIA: Traslado iniciado. Sala: ${data.callId}`);
-
-        if (data.ambulanceId && activeAmbulances.has(data.ambulanceId)) {
-            const amb = activeAmbulances.get(data.ambulanceId);
-            amb.status = 'ocupada';
-            broadcastActiveAmbulances();
-        }
-
-        const alertMsg = JSON.stringify({
-            type: 'patient_transfer_notification',
-            ambulanceId: data.ambulanceId,
-            callId: data.callId,
-            patientInfo: data.patientInfo,
-            eta: data.eta,
-            timestamp: new Date().toISOString()
-        });
-
-        wss.clients.forEach((client) => {
-            if (client.readyState === WebSocket.OPEN) {
-                client.send(alertMsg);
-            }
-        });
-        break;
-
-    case 'hospital_accept_patient':
-        console.log(`✅ Hospital aceptó. Avisando a ambulancia ${data.ambulanceId}`);
-        const targetAmbAccept = activeAmbulances.get(data.ambulanceId);
-
-        if (targetAmbAccept && targetAmbAccept.ws.readyState === WebSocket.OPEN) {
-            targetAmbAccept.ws.send(JSON.stringify({
-                type: 'patient_accepted',
-                hospitalId: data.hospitalId,
-                hospitalInfo: data.hospitalInfo,
-                message: '¡El hospital te espera!'
-            }));
-        } else {
-            console.warn("⚠️ Ambulancia no encontrada en mapa activo, intentando broadcast...");
-        }
-        break;
-
-    case 'hospital_reject_patient':
-        console.log(`❌ Hospital rechazó. Avisando a ambulancia ${data.ambulanceId}`);
-        const targetAmbReject = activeAmbulances.get(data.ambulanceId);
-        if (targetAmbReject && targetAmbReject.ws.readyState === WebSocket.OPEN) {
-            targetAmbReject.ws.send(JSON.stringify({
-                type: 'patient_rejected',
-                hospitalId: data.hospitalId,
-                reason: data.reason
-            }));
-        }
-        break;
-
-    default:
-      console.log('❓ Tipo de mensaje no reconocido:', data.type);
-  }
-}
-
-function broadcastToHospitals(message) {
-  const messageStr = JSON.stringify(message);
-  hospitals.forEach(hospitalWs => {
-    if (hospitalWs.readyState === WebSocket.OPEN) {
-      hospitalWs.send(messageStr);
-    }
-  });
-}
-
-function broadcastActiveAmbulances() {
-  const ambulancesList = Array.from(activeAmbulances.entries()).map(([id, ambulance]) => ({
-    id: ambulance.id,
-    placa: ambulance.placa,
-    tipo: ambulance.tipo,
-    status: ambulance.status,
-    location: ambulance.location,
-    speed: ambulance.speed,
-    lastUpdate: ambulance.lastUpdate
-  }));
-
-  broadcastToHospitals({
-    type: 'active_ambulances_update',
-    ambulances: ambulancesList
-  });
-}
-
-// ==================== MIDDLEWARE Y RUTAS EXISTENTES ====================
+// ==================== RUTAS EXISTENTES (SIN CAMBIOS) ====================
 app.use(express.json())
 app.use(cookieParser())
 app.use(cors())
@@ -242,139 +44,101 @@ app.use('/paramedico', paramedico)
 app.use('/hospital', hospital)
 app.use('/operador', operador)
 app.use('/doctor', doctor)
-app.use('/reporte-prehospitalario', reportePrehospitalario);
-
+app.use('/reporte-prehospitalario', reportePrehospitalario)
 app.use('/receptor', receptor)
+app.use('/api/nlp', nlpRoutes)
 
-// ==================== RUTAS WEBSOCKET PARA AMBULANCIAS ====================
+// ==================== ESTADO COMPARTIDO CON WS ====================
+// Después de attachV2WebSocket(server) tendremos acceso a estas estructuras.
+let wsState = null
+
+// ==================== RUTAS HTTP COMPATIBLES CON EL WS ====================
 app.get('/api/ambulances/active', (req, res) => {
-  const ambulancesList = Array.from(activeAmbulances.entries()).map(([id, ambulance]) => ({
-    id: ambulance.id,
-    placa: ambulance.placa,
-    tipo: ambulance.tipo,
-    status: ambulance.status,
-    location: ambulance.location,
-    speed: ambulance.speed,
-    lastUpdate: ambulance.lastUpdate
-  }));
-  
-  res.json({
-    success: true,
-    data: ambulancesList,
-    total: ambulancesList.length
-  });
-});
+  if (!wsState) return res.json({ success: true, data: [], total: 0 })
+  const ambulancesList = Array.from(wsState.activeAmbulances.values()).map(amb => ({
+    id: amb.id, placa: amb.placa, tipo: amb.tipo,
+    status: amb.status, location: amb.location,
+    speed: amb.speed, lastUpdate: amb.lastUpdate
+  }))
+  res.json({ success: true, data: ambulancesList, total: ambulancesList.length })
+})
 
 app.get('/api/ambulances/health', (req, res) => {
-  res.json({ 
-    status: 'ok', 
-    activeAmbulances: activeAmbulances.size,
-    activeHospitals: hospitals.size,
+  if (!wsState) {
+    return res.json({ status: 'ok', activeAmbulances: 0, activeHospitals: 0, timestamp: new Date().toISOString() })
+  }
+  res.json({
+    status: 'ok',
+    protocolVersion: 2,
+    activeAmbulances: wsState.activeAmbulances.size,
+    activeHospitals: wsState.activeHospitals.size,
+    activeReceptors: wsState.activeReceptors.size,
+    activeParamedics: wsState.activeParamedics.size,
+    activeDoctors: wsState.activeDoctors.size,
+    activeEmergencies: wsState.activeEmergencies.size,
     timestamp: new Date().toISOString()
-  });
-});
+  })
+})
 
-// Obtener lista de doctores (Para asignaciones)
 app.get('/api/doctores', async (req, res) => {
-    try {
-        const doctores = await prisma.doctor.findMany({
-            select: { id: true, nombre: true, especialidad: true }
-        });
-        res.json(doctores);
-    } catch (error) {
-        console.error("Error obteniendo doctores:", error);
-        res.status(500).json({ error: 'Error interno' });
-    }
-});
+  try {
+    const doctores = await prisma.doctor.findMany({
+      select: { id: true, nombre: true, especialidad: true }
+    })
+    res.json(doctores)
+  } catch (error) {
+    console.error("Error obteniendo doctores:", error)
+    res.status(500).json({ error: 'Error interno' })
+  }
+})
 
-// Ruta existente para Python (mantener compatibilidad)
+// Compatibilidad con Python: /api/pacientes broadcast crudo
 app.post('/api/pacientes', async (req, res) => {
   try {
-    const { seccion, datos } = req.body;
+    const { seccion, datos } = req.body
+    console.log('📨 Datos recibidos desde Python:', { seccion, datos })
 
-    console.log('📨 Datos recibidos desde Python:', { seccion, datos });
-
-    wss.clients.forEach((client) => {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(JSON.stringify({ seccion, datos }));
-      }
-    });
-
-    res.status(200).json({ 
-      success: true,
-      message: 'Datos recibidos y enviados a WebSocket' 
-    });
+    // Emitimos un mensaje estructurado hacia todos los clientes conectados.
+    const message = JSON.stringify({
+      type: 'recepcion_reporte_paciente',
+      reporte: { seccion, datos, id: `pydata_${Date.now()}` }
+    })
+    if (wsState?.activeHospitals) {
+      wsState.activeHospitals.forEach(h => {
+        if (h.ws?.readyState === 1) try { h.ws.send(message) } catch (_) {}
+      })
+    }
+    res.status(200).json({ success: true, message: 'Datos recibidos y enviados' })
   } catch (error) {
-    console.error('❌ Error al enviar datos:', error);
-    res.status(500).json({ 
-      success: false,
-      message: 'Error al enviar datos' 
-    });
+    console.error('❌ Error al enviar datos:', error)
+    res.status(500).json({ success: false, message: 'Error al enviar datos' })
   }
-});
+})
 
-// Ruta principal
 app.get('/', (req, res) => {
   res.json({
     message: '🚑 ECMorelia Backend API',
-    version: '1.0.0',
+    version: '2.0.0',
+    protocolVersion: 2,
     endpoints: {
       docs: '/docs',
       ambulances: '/api/ambulances/active',
-      health: '/api/ambulances/health'
+      health: '/api/ambulances/health',
+      ws: 'wss://<host>/ws'
     }
   })
-});
+})
 
-// ==================== INICIO DEL SERVIDOR UNIFICADO ====================
-// Creamos el servidor HTTP a partir de Express
-server = app.listen(PORT, "0.0.0.0", () => {
-  console.log(`\n🚀 Servidor ECMorelia ejecutándose en puerto ${PORT}`)
-  console.log(`📡 WebSocket Server integrado en el mismo puerto ${PORT}`)
-  console.log(`📚 Documentación: http://localhost:${PORT}/docs`)
-  console.log(`🏥 Health Check: http://localhost:${PORT}/api/ambulances/health`)
-  console.log(`🚑 Ambulancias activas: http://localhost:${PORT}/api/ambulances/active\n`)
-});
+// ==================== ARRANQUE ====================
+const server = app.listen(PORT, '0.0.0.0', () => {
+  console.log(`\n🚀 Servidor ECMorelia en puerto ${PORT}`)
+  console.log(`📚 Docs: http://localhost:${PORT}/docs`)
+  console.log(`🏥 Health: http://localhost:${PORT}/api/ambulances/health`)
+  console.log(`🚑 Ambulancias: http://localhost:${PORT}/api/ambulances/active\n`)
+})
 
-// Montamos el WebSocket Server sobre el MISMO servidor HTTP
-wss = new WebSocket.Server({ server });
+// Adjuntamos el WS v2 al mismo servidor HTTP
+const attached = attachV2WebSocket(server, { path: '/ws' })
+wsState = attached.state
 
-wss.on('connection', (ws, req) => {
-  console.log('🔌 Cliente WebSocket conectado');
-
-  ws.on('message', (message) => {
-    try {
-      const data = JSON.parse(message);
-      handleAmbulanceMessage(ws, data);
-    } catch (error) {
-      console.error('❌ Error procesando mensaje WebSocket:', error);
-      
-      if (typeof message === 'string') {
-        console.log('📨 Mensaje de texto recibido:', message);
-        wss.clients.forEach((client) => {
-          if (client.readyState === WebSocket.OPEN) {
-            client.send(message);
-          }
-        });
-      }
-    }
-  });
-
-  ws.on('close', () => {
-    console.log('🔌 Cliente WebSocket desconectado');
-    hospitals.delete(ws);
-    
-    for (let [ambulanceId, ambulanceData] of activeAmbulances.entries()) {
-      if (ambulanceData.ws === ws) {
-        activeAmbulances.delete(ambulanceId);
-        console.log(`🚑 Ambulancia ${ambulanceId} desconectada`);
-        broadcastActiveAmbulances();
-        break;
-      }
-    }
-  });
-
-  ws.on('error', (error) => {
-    console.error('❌ Error en WebSocket:', error);
-  });
-});
+console.log(`✅ WS v2 activo en ws://0.0.0.0:${PORT}/ws`)
