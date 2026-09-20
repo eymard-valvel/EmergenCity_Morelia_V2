@@ -326,7 +326,12 @@ const ReceptorDashboard = () => {
       {/* ==================== CUERPO ==================== */}
       <Flex flex={1} w="100%" overflow="hidden" position="relative">
         <Box flex={1} h="100%" overflow="hidden" minW={0}>
-          <ReceptorEmergencyForm wsRef={wsRef} wsConnected={wsConnected} onEmergencySent={requestRefresh} />
+          <ReceptorEmergencyForm
+  wsRef={wsRef}
+  wsConnected={wsConnected}
+  onEmergencySent={requestRefresh}
+  activeAmbulances={activeAmbulances}
+/>
         </Box>
 
         {!monitorOpen && (

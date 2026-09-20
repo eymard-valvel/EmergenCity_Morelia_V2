@@ -109,6 +109,8 @@ export default function MapaOperador() {
 
   // ---- OFERTA DE EMERGENCIA (handshake) ----
   const [pendingOffer, setPendingOffer] = useState(null);
+  const isNavigatingRef = useRef(false);
+useEffect(() => { isNavigatingRef.current = isNavigating; }, [isNavigating]);
   const [offerTimeLeft, setOfferTimeLeft] = useState(20);
   const [offerRejecting, setOfferRejecting] = useState(false);
   const offerTimerRef = useRef(null);
@@ -148,26 +150,33 @@ export default function MapaOperador() {
   }, [ambulancia, sendWS]);
 
   // Handler de oferta entrante (nuevo handshake WS v2)
-  const handleEmergencyOffer = useCallback((data) => {
-    // Si ya hay una oferta abierta, la reemplazamos (server controla una a la vez por unidad)
-    if (offerTimerRef.current) clearInterval(offerTimerRef.current);
-    setPendingOffer(data);
-    setOfferRejecting(false);
-    const secs = Math.max(5, Math.ceil((data.expiresInMs || 20000) / 1000));
-    setOfferTimeLeft(secs);
+const handleEmergencyOffer = useCallback((data) => {
+  // Bloqueo defensivo: si ya está en servicio, rechazar sin mostrar modal
+  if (isNavigatingRef.current) {
+    sendWS({ type: 'emergency_reject', offerId: data.offerId, reason: 'Unidad en servicio' });
+    return;
+  }
 
-    offerTimerRef.current = setInterval(() => {
-      setOfferTimeLeft(prev => {
-        if (prev <= 1) {
-          clearInterval(offerTimerRef.current);
-          // El server auto-aceptará a los 20s; cerramos el modal por consistencia visual
-          setPendingOffer(null);
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-  }, []);
+  if (offerTimerRef.current) clearInterval(offerTimerRef.current);
+  setPendingOffer(data);
+  setOfferRejecting(false);
+
+  // Si está en standby (fuera_de_servicio), el server NO auto-asignará.
+  // Si está disponible, el server auto-aceptará a los 20s.
+  const secs = Math.max(5, Math.ceil((data.expiresInMs || 20000) / 1000));
+  setOfferTimeLeft(secs);
+
+  offerTimerRef.current = setInterval(() => {
+    setOfferTimeLeft(prev => {
+      if (prev <= 1) {
+        clearInterval(offerTimerRef.current);
+        setPendingOffer(null);
+        return 0;
+      }
+      return prev - 1;
+    });
+  }, 1000);
+}, [sendWS]);
 
   useEffect(() => {
     if (!ambulancia) return;
@@ -560,33 +569,63 @@ export default function MapaOperador() {
     });
   }, []);
 
-  const startNavigationEngine = async (targetLoc, mode = 'manual', address = '') => {
-    if (!myLocation) return;
-    activeDestination.current = { ...targetLoc, mode, address };
-    placeDestinationMarker(targetLoc);
+const startNavigationEngine = async (targetLoc, mode = 'manual', address = '') => {
+  // 1) Resolver ubicación actual (o pedir GPS fresco si no hay)
+  let loc = myLocation;
+  if (!loc) {
+    try {
+      loc = await new Promise((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(
+          pos => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+          err => reject(err),
+          { enableHighAccuracy: true, timeout: 5000 }
+        );
+      });
+      setMyLocation(loc);
+    } catch {
+      toast({
+        title: '⚠️ SIN GPS',
+        description: 'No se pudo obtener ubicación. La ruta visual no está disponible.',
+        status: 'warning',
+        duration: 5000,
+        position: 'bottom'
+      });
+      // Aun sin GPS, entramos en modo emergencia
+    }
+  }
 
+  // 2) Activar modo emergencia INMEDIATAMENTE (sin esperar al routing)
+  activeDestination.current = { ...targetLoc, mode, address };
+  placeDestinationMarker(targetLoc);
+  setIsNavigating(true);
+  setCancelStep('idle');
+  changeStatus('en_ruta');
+  setIsFollowing(true);
+  onDrawerClose();
+
+  if (map.current) {
+    if (loc) {
+      map.current.flyTo({
+        center: [loc.lng, loc.lat],
+        zoom: 18, pitch: 60, bearing: myHeading, duration: 1200
+      });
+    } else {
+      map.current.flyTo({ center: [targetLoc.lng, targetLoc.lat], zoom: 15, duration: 1200 });
+    }
+    setIsGpsMode(true);
+  }
+
+  // 3) Calcular ruta (async, sin bloquear la activación)
+  if (loc) {
     const routeColor = mode === 'emergency' ? '#ef4444' : '#0ea5e9';
-    const route = await computeRoute(myLocation, targetLoc);
-
+    const route = await computeRoute(loc, targetLoc);
     if (route) {
       drawRoute(route.geometry, routeColor);
       setCurrentManeuver(route.steps[0]);
       setRouteProgress({ distanceRemaining: route.distance, durationRemaining: route.duration });
-      setIsNavigating(true);
-      setCancelStep('idle');
-      changeStatus('en_ruta');
-      setIsFollowing(true);
-      onDrawerClose();
-
-      if (map.current) {
-        map.current.flyTo({
-          center: [myLocation.lng, myLocation.lat],
-          zoom: 18, pitch: 60, bearing: myHeading, duration: 1200
-        });
-        setIsGpsMode(true);
-      }
     }
-  };
+  }
+};
 
   useEffect(() => {
     if (isNavigating && activeDestination.current) {
@@ -1271,11 +1310,12 @@ export default function MapaOperador() {
       >
         <ModalOverlay bg="rgba(0,0,0,0.92)" backdropFilter="blur(8px)" />
         <ModalContent bg="#09090b" border="3px solid #ef4444" borderRadius="2xl" overflow="hidden" mx={4}>
+          {/* ─── CAMBIO 4.4 (a): Título dinámico según standby ─── */}
           <Box bg="#ef4444" py={4} textAlign="center">
             <HStack justify="center" spacing={3}>
               <Icon as={FaAmbulance} boxSize={7} color="white" />
               <Text fontSize="22px" fontWeight="900" color="white" letterSpacing="2px">
-                NUEVA EMERGENCIA
+                {pendingOffer?.isStandby ? 'EMERGENCIA — ESTÁS EN STANDBY' : 'NUEVA EMERGENCIA'}
               </Text>
             </HStack>
           </Box>
@@ -1308,6 +1348,15 @@ export default function MapaOperador() {
                 }}
               />
             </Box>
+
+            {/* ─── CAMBIO 4.4 (b): Aviso ámbar cuando el operador está en standby ─── */}
+            {pendingOffer?.isStandby && (
+              <Box bg="rgba(245,158,11,0.15)" p={3} borderRadius="md" border="1px solid #f59e0b" mb={4}>
+                <Text fontSize="12px" fontWeight="900" color="#f59e0b" letterSpacing="0.5px" textAlign="center">
+                  ⚠️ ESTÁS EN FUERA DE SERVICIO. Si ACEPTAS, tu unidad cambiará a EN RUTA.
+                </Text>
+              </Box>
+            )}
 
             {/* Tipo de emergencia */}
             <Box bg="#18181b" p={5} borderRadius="xl" border="1px solid #3f3f46" mb={4}>
