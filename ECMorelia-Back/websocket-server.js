@@ -1134,7 +1134,7 @@ setInterval(async () => {
 }, 15000);
 
 // ---------- INICIO ----------
-const PORT = process.env.WS_PORT || 3002;
+const PORT = process.env.PORT || 3002;
 server.listen(PORT, () => {
   console.log(`🚀 Servidor WebSocket en puerto ${PORT}`);
   console.log(`📡 WebSocket: ws://localhost:${PORT}/ws`);
