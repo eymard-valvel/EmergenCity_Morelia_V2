@@ -187,7 +187,8 @@ async function getHospitalsList() {
 function findNearestAvailableAmbulance(location, excludeIds = new Set()) {
   let best = null, bestDist = Infinity;
   for (const [, amb] of activeAmbulances) {
-    if (amb.status !== 'disponible') continue;
+    // Acepta "disponible" Y "fuera_de_servicio" (standby = el operador decide)
+    if (amb.status !== 'disponible' && amb.status !== 'fuera_de_servicio') continue;
     if (!amb.location) continue;
     if (excludeIds.has(amb.id)) continue;
     const d = calculateDistance(location.lat, location.lng, amb.location.lat, amb.location.lng);
@@ -198,6 +199,7 @@ function findNearestAvailableAmbulance(location, excludeIds = new Set()) {
 
 function emitEmergencyOffer(emergency, ambulance, excludedIds = new Set()) {
   const offerId = generateId('offer');
+  const isStandby = ambulance.status === 'fuera_de_servicio';
   const payload = {
     type: 'emergency_offer',
     offerId,
@@ -211,6 +213,7 @@ function emitEmergencyOffer(emergency, ambulance, excludedIds = new Set()) {
       ? calculateDistance(emergency.location.lat, emergency.location.lng, ambulance.location.lat, ambulance.location.lng)
       : null,
     expiresInMs: OFFER_TIMEOUT_MS,
+    isStandby,
     timestamp: new Date().toISOString(),
     correlationId: emergency.correlationId
   };
@@ -219,13 +222,19 @@ function emitEmergencyOffer(emergency, ambulance, excludedIds = new Set()) {
   const timer = setTimeout(() => {
     if (!pendingOffers.has(offerId)) return;
     pendingOffers.delete(offerId);
-    console.log(`⏱️ Oferta ${offerId} expirada → auto-aceptando`);
-    acceptEmergencyOffer(offerId, true);
+    console.log(`⏱️ Oferta ${offerId} expirada (standby=${isStandby})`);
+    if (!isStandby) {
+      // Auto-aceptar solo a unidades "disponibles"
+      acceptEmergencyOffer(offerId, true);
+    } else {
+      // Standby que no respondió → se descarta y se busca siguiente
+      rejectEmergencyOffer(offerId, 'Standby sin respuesta');
+    }
   }, OFFER_TIMEOUT_MS);
 
   pendingOffers.set(offerId, {
     offerId, callId: emergency.callId, ambulanceId: ambulance.id,
-    ws: ambulance.ws, timer, excludedIds
+    ws: ambulance.ws, timer, excludedIds, isStandby
   });
 }
 
