@@ -65,25 +65,43 @@ app.get('/api/ambulances/active', (req, res) => {
   res.json({ success: true, data: ambulancesList, total: ambulancesList.length })
 })
 
+// ==================== PROXY FOURSQUARE PLACES ====================
 app.post('/api/places/search', async (req, res) => {
-  try {
-    const { query, lat, lng, radius = 15000, limit = 10 } = req.body || {};
+  // --- Logs de diagnóstico (temporal) ---
+  console.log('[places/search] Content-Type:', req.headers['content-type']);
+  console.log('[places/search] body:', JSON.stringify(req.body));
+  console.log('[places/search] key presente:', !!FOURSQUARE_KEY, '· len:', FOURSQUARE_KEY.length);
 
-    if (!query || typeof query !== 'string' || query.trim().length < 2) {
-      return res.status(400).json({ error: 'query requerido' });
+  try {
+    const body = req.body || {};
+    const query = typeof body.query === 'string' ? body.query.trim() : '';
+    const lat = Number.isFinite(body.lat) ? body.lat : 19.7024;
+    const lng = Number.isFinite(body.lng) ? body.lng : -101.1969;
+    const radius = Number.isFinite(body.radius) ? body.radius : 15000;
+    const limit = Number.isFinite(body.limit) ? body.limit : 10;
+
+    if (query.length < 2) {
+      console.warn('[places/search] 400 · query inválido:', JSON.stringify(query));
+      return res.status(400).json({
+        error: 'query requerido (min 2 caracteres)',
+        received: { query, bodyKeys: Object.keys(body) }
+      });
     }
+
     if (!FOURSQUARE_KEY) {
       return res.status(503).json({ error: 'FOURSQUARE_KEY no configurada' });
     }
 
     const params = new URLSearchParams({
-      query: query.trim(),
-      ll: `${lat ?? 19.7024},${lng ?? -101.1969}`,
+      query,
+      ll: `${lat},${lng}`,
       radius: String(radius),
       limit: String(limit),
       sort: 'RELEVANCE',
       fields: 'fsq_place_id,name,location,categories,distance,geocodes',
     });
+
+    console.log('[places/search] → Foursquare:', params.toString());
 
     const resp = await fetch(`${FOURSQUARE_BASE}?${params.toString()}`, {
       headers: {
@@ -94,16 +112,31 @@ app.post('/api/places/search', async (req, res) => {
     });
 
     if (!resp.ok) {
-      console.warn('[Foursquare proxy] HTTP', resp.status);
-      return res.status(resp.status).json({ error: `Foursquare HTTP ${resp.status}` });
+      const errText = await resp.text().catch(() => '');
+      console.warn('[places/search] Foursquare HTTP', resp.status, '·', errText.slice(0, 200));
+      return res.status(resp.status).json({
+        error: `Foursquare HTTP ${resp.status}`,
+        detail: errText.slice(0, 200),
+      });
     }
 
     const data = await resp.json();
+    console.log('[places/search] OK · resultados:', (data.results || []).length);
     res.json({ results: data.results || [] });
   } catch (e) {
-    console.error('[Foursquare proxy] Error:', e.message);
-    res.status(500).json({ error: 'Error consultando Foursquare' });
+    console.error('[places/search] Error:', e.message, e.stack);
+    res.status(500).json({ error: 'Error consultando Foursquare', detail: e.message });
   }
+});
+
+// TEMPORAL · verifica que el body parser funcione
+app.post('/api/debug/echo', (req, res) => {
+  res.json({
+    receivedBody: req.body,
+    contentType: req.headers['content-type'],
+    bodyKeys: Object.keys(req.body || {}),
+    timestamp: new Date().toISOString(),
+  });
 });
 
 app.get('/api/ambulances/health', (req, res) => {
