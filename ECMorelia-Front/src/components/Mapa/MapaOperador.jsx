@@ -1,11 +1,9 @@
 // src/components/operador/MapaOperador.jsx
-// ========================================================================
-// EMERGENCITY - CONSOLA DE NAVEGACIÓN MÓVIL
-// UI Dinámica (Confirmación Inline sin bloqueo de pantalla), GPS Inmediato
-// v2: Handshake de oferta, cancelación con motivo, pairing paramédico
-// ========================================================================
+// EmergenCity - Consola de navegación móvil
+// v3: rutas con validación, auto-recalculo inteligente, sin emojis
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { searchPlaces, getPlaceTypeLabel } from '../../helpers/placeSearch.js';
 import { useNavigate } from 'react-router-dom';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
@@ -20,22 +18,27 @@ import {
 import {
   FaAmbulance, FaHospital, FaMapMarkerAlt,
   FaSignOutAlt, FaLocationArrow, FaArrowLeft, FaMap,
-  FaArrowRight, FaPlus, FaMinus, FaSearch, FaTimes, FaUndo, FaArrowUp, FaTimesCircle
+  FaArrowRight, FaPlus, FaMinus, FaSearch, FaTimes, FaUndo, FaArrowUp, FaTimesCircle,
+  FaSyncAlt
 } from 'react-icons/fa';
 import { MdCenterFocusStrong } from 'react-icons/md';
 import { resolveWsUrl } from '../../helpers/wsUrl.js';
 
-// ========================================================================
-// CONFIGURACIÓN TÁCTICA Y DE RUTAS
-// ========================================================================
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN ||
-  'pk.eyJ1IjoiZXltYXJkMjkiLCJhIjoiY21tcDY4YzNpMGw3bjJzb203YmZyNTVnMyJ9.OvZlnCMfUkUYe6Ib83DUVw';
+  'pk.eyJ1IjoiZXltYXJkMjkiLCJhIjoiY21tcDY4YzNpMGw3bjJzb203YmZyNTVnMyI';
 
 const WS_URL = resolveWsUrl();
-const DEFAULT_CENTER = { lat: 19.7024, lng: -101.1969 }; // Morelia, Michoacán
+const DEFAULT_CENTER = { lat: 19.7024, lng: -101.1969 };
 const RECONNECT_DELAY = 3000;
 const MAX_RECONNECT = 5;
-const ROUTE_POLLING_INTERVAL = 20000; // Recalcular tráfico cada 20s
+
+// === Estrategia anti-costo Mapbox (100k req/mes free tier) ===
+const ROUTE_POLL_INTERVAL = 20000;      // Poll cada 20s
+const MIN_MOVE_FOR_POLL = 150;          // Solo recalcular si se movió >150m
+const OFF_ROUTE_THRESHOLD_M = 120;      // Desvío considerado "fuera de ruta"
+const OFF_ROUTE_CHECK_INTERVAL = 5000;  // Chequeo local cada 5s
+const OFF_ROUTE_RECALC_COOLDOWN = 20000;// Mín 20s entre recalculos por desvío
+const MAX_REASONABLE_ROUTE_FACTOR = 3;  // Ruta > 3x línea recta = sospechosa
 
 const TIPOS_AMBULANCIA = ['UVI Móvil', 'Ambulancia Básica', 'Ambulancia Avanzada', 'Motocicleta de Respuesta'];
 const DIAGNOSTICOS_RAPIDOS = [
@@ -52,25 +55,73 @@ const STATUS_OPTIONS = [
 ];
 
 const SESSION_KEY = 'ambulanciaRegistrada';
-function loadSavedAmbulance() { try { return JSON.parse(sessionStorage.getItem(SESSION_KEY)); } catch { return null; } }
-function saveAmbulance(data) { sessionStorage.setItem(SESSION_KEY, JSON.stringify(data)); }
-function clearAmbulance() { sessionStorage.removeItem(SESSION_KEY); }
+const loadSavedAmbulance = () => { try { return JSON.parse(sessionStorage.getItem(SESSION_KEY)); } catch { return null; } };
+const saveAmbulance = (data) => sessionStorage.setItem(SESSION_KEY, JSON.stringify(data));
+const clearAmbulance = () => sessionStorage.removeItem(SESSION_KEY);
 
-function fmtDist(km) { return km < 1 ? `${Math.round(km * 1000)}m` : `${km.toFixed(1)}km`; }
-function fmtDur(seconds) {
-  if (!seconds) return '—';
+const fmtDist = (km) => km < 1 ? `${Math.round(km * 1000)}m` : `${km.toFixed(1)}km`;
+const fmtDur = (seconds) => {
+  if (!seconds || !Number.isFinite(seconds)) return '—';
   const m = Math.round(seconds / 60);
   return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${m % 60}m`;
+};
+
+function calcDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-// ========================================================================
-// COMPONENTE PRINCIPAL
-// ========================================================================
+function isValidCoord(c) {
+  return c &&
+    Number.isFinite(c.lat) &&
+    Number.isFinite(c.lng) &&
+    Math.abs(c.lat) <= 90 &&
+    Math.abs(c.lng) <= 180 &&
+    !(Math.abs(c.lat) < 0.0001 && Math.abs(c.lng) < 0.0001);
+}
+
+// Distancia mínima de un punto a una polilínea (aprox, en metros)
+function distanceToRouteMeters(location, geometry) {
+  if (!location || !Array.isArray(geometry) || geometry.length < 2) return Infinity;
+  const R = 6371000;
+  const toRad = (d) => d * Math.PI / 180;
+  const lat0 = toRad(location.lat);
+  const px = toRad(location.lng) * R * Math.cos(lat0);
+  const py = toRad(location.lat) * R;
+
+  let minDist = Infinity;
+  // Muestreamos cada ~2 puntos de la polilínea para eficiencia
+  const step = geometry.length > 200 ? 2 : 1;
+  for (let i = 0; i < geometry.length - step; i += step) {
+    const a = geometry[i];
+    const b = geometry[i + step];
+    const ax = toRad(a[0]) * R * Math.cos(lat0);
+    const ay = toRad(a[1]) * R;
+    const bx = toRad(b[0]) * R * Math.cos(lat0);
+    const by = toRad(b[1]) * R;
+
+    const dx = bx - ax;
+    const dy = by - ay;
+    const lenSq = dx * dx + dy * dy;
+    let t = 0;
+    if (lenSq > 0) t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lenSq));
+    const projX = ax + t * dx;
+    const projY = ay + t * dy;
+    const dist = Math.hypot(px - projX, py - projY);
+    if (dist < minDist) minDist = dist;
+  }
+  return minDist;
+}
+
 export default function MapaOperador() {
   const toast = useToast();
   const navigate = useNavigate();
 
-  // ---- SESIÓN & WEBSOCKET ----
   const [ambulancia, setAmbulancia] = useState(() => loadSavedAmbulance());
   const wsRef = useRef(null);
   const isMounted = useRef(true);
@@ -78,7 +129,6 @@ export default function MapaOperador() {
   const reconnectTimer = useRef(null);
   const [wsStatus, setWsStatus] = useState('connecting');
 
-  // ---- GPS & TRACKING ----
   const watchId = useRef(null);
   const gpsHeading = useRef(0);
   const isInitialMapCentered = useRef(false);
@@ -86,7 +136,6 @@ export default function MapaOperador() {
   const [mySpeed, setMySpeed] = useState(0);
   const [myHeading, setMyHeading] = useState(0);
 
-  // ---- MAPA & NAVEGACIÓN ----
   const mapContainer = useRef(null);
   const map = useRef(null);
   const ambulanceMarker = useRef(null);
@@ -94,48 +143,45 @@ export default function MapaOperador() {
 
   const [isFollowing, setIsFollowing] = useState(true);
   const [isGpsMode, setIsGpsMode] = useState(true);
-  const [trafficEnabled, setTrafficEnabled] = useState(true);
 
-  // Estado del motor de rutas
   const activeDestination = useRef(null);
   const routeIntervalRef = useRef(null);
+  const offRouteCheckRef = useRef(null);
+  const lastRouteCalcRef = useRef({ loc: null, time: 0 });
+  const lastOffRouteRecalcRef = useRef(0);
+  const searchAbortRef = useRef(null);
+const searchDebounceRef = useRef(null);
+  const currentRouteGeometry = useRef(null);
+  const isNavigatingRef = useRef(false);
+
   const [isNavigating, setIsNavigating] = useState(false);
   const [currentManeuver, setCurrentManeuver] = useState(null);
   const [routeProgress, setRouteProgress] = useState(null);
-
-  // ---- UI DE CANCELACIÓN (fricción con motivo) ----
-  // 'idle' | 'confirm' | 'reason'
+  const [isRecalculating, setIsRecalculating] = useState(false);
   const [cancelStep, setCancelStep] = useState('idle');
 
-  // ---- OFERTA DE EMERGENCIA (handshake) ----
   const [pendingOffer, setPendingOffer] = useState(null);
-  const isNavigatingRef = useRef(false);
-useEffect(() => { isNavigatingRef.current = isNavigating; }, [isNavigating]);
   const [offerTimeLeft, setOfferTimeLeft] = useState(20);
   const [offerRejecting, setOfferRejecting] = useState(false);
   const offerTimerRef = useRef(null);
 
-  // ---- ESTADO OPERATIVO ----
   const [ambulanceStatus, setAmbulanceStatus] = useState('disponible');
   const [hospitals, setHospitals] = useState([]);
   const [assignedEmergency, setAssignedEmergency] = useState(null);
 
-  // ---- UI RESPONSIVA ----
   const { isOpen: isDrawerOpen, onOpen: onDrawerOpen, onClose: onDrawerClose } = useDisclosure();
   const { isOpen: isAlertOpen, onOpen: onAlertOpen, onClose: onAlertClose } = useDisclosure();
 
   const [drawerMode, setDrawerMode] = useState('atender');
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
-
   const [selectedHospitalId, setSelectedHospitalId] = useState(null);
   const [patientData, setPatientData] = useState({ edad: 35, sexo: 'N/S', diagnostico: DIAGNOSTICOS_RAPIDOS[0] });
   const [isSending, setIsSending] = useState(false);
   const [pendingAction, setPendingAction] = useState(null);
 
-  // ========================================================================
-  // WEBSOCKET
-  // ========================================================================
+  useEffect(() => { isNavigatingRef.current = isNavigating; }, [isNavigating]);
+
   const sendWS = useCallback((data) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify(data));
@@ -149,35 +195,25 @@ useEffect(() => { isNavigatingRef.current = isNavigating; }, [isNavigating]);
     sendWS({ type: 'ambulance_status_update', ambulanceId: ambulancia?.id, status: newStatus });
   }, [ambulancia, sendWS]);
 
-  // Handler de oferta entrante (nuevo handshake WS v2)
-const handleEmergencyOffer = useCallback((data) => {
-  // Bloqueo defensivo: si ya está en servicio, rechazar sin mostrar modal
-  if (isNavigatingRef.current) {
-    sendWS({ type: 'emergency_reject', offerId: data.offerId, reason: 'Unidad en servicio' });
-    return;
-  }
+  const handleEmergencyOffer = useCallback((data) => {
+    if (isNavigatingRef.current) {
+      sendWS({ type: 'emergency_reject', offerId: data.offerId, reason: 'Unidad en servicio' });
+      return;
+    }
+    if (offerTimerRef.current) clearInterval(offerTimerRef.current);
+    setPendingOffer(data);
+    setOfferRejecting(false);
+    const secs = Math.max(5, Math.ceil((data.expiresInMs || 20000) / 1000));
+    setOfferTimeLeft(secs);
+    offerTimerRef.current = setInterval(() => {
+      setOfferTimeLeft(prev => {
+        if (prev <= 1) { clearInterval(offerTimerRef.current); setPendingOffer(null); return 0; }
+        return prev - 1;
+      });
+    }, 1000);
+  }, [sendWS]);
 
-  if (offerTimerRef.current) clearInterval(offerTimerRef.current);
-  setPendingOffer(data);
-  setOfferRejecting(false);
-
-  // Si está en standby (fuera_de_servicio), el server NO auto-asignará.
-  // Si está disponible, el server auto-aceptará a los 20s.
-  const secs = Math.max(5, Math.ceil((data.expiresInMs || 20000) / 1000));
-  setOfferTimeLeft(secs);
-
-  offerTimerRef.current = setInterval(() => {
-    setOfferTimeLeft(prev => {
-      if (prev <= 1) {
-        clearInterval(offerTimerRef.current);
-        setPendingOffer(null);
-        return 0;
-      }
-      return prev - 1;
-    });
-  }, 1000);
-}, [sendWS]);
-
+  // ==================== WS ====================
   useEffect(() => {
     if (!ambulancia) return;
     isMounted.current = true;
@@ -191,14 +227,12 @@ const handleEmergencyOffer = useCallback((data) => {
       ws.onopen = () => {
         if (!isMounted.current) return;
         setWsStatus('connected');
-        reconnectAttempts.current = 0; // reset en conexión exitosa
+        reconnectAttempts.current = 0;
         ws.send(JSON.stringify({
           type: 'register_ambulance',
           ambulance: {
-            id: ambulancia.id,
-            placa: ambulancia.placa,
-            nombre: ambulancia.nombre,
-            tipo: ambulancia.tipo,
+            id: ambulancia.id, placa: ambulancia.placa,
+            nombre: ambulancia.nombre, tipo: ambulancia.tipo,
             status: ambulanceStatus,
             location: myLocation || DEFAULT_CENTER
           }
@@ -211,128 +245,56 @@ const handleEmergencyOffer = useCallback((data) => {
         try {
           const data = JSON.parse(e.data);
           switch (data.type) {
-            case 'connection_established':
-              // eslint-disable-next-line no-console
-              console.info(`[WS] Protocolo v${data.protocolVersion ?? '?'} · ${data.message || ''}`);
-              break;
-
-            case 'active_hospitals_update':
-              setHospitals(data.hospitals || []);
-              break;
-
-            // -------- Handshake de emergencia (NUEVO) --------
-            case 'emergency_offer':
-              handleEmergencyOffer(data);
-              break;
-
-            // -------- Confirmación de asignación (tras aceptar) --------
+            case 'connection_established': break;
+            case 'active_hospitals_update': setHospitals(data.hospitals || []); break;
+            case 'emergency_offer': handleEmergencyOffer(data); break;
             case 'new_emergency_assigned':
               setPendingOffer(null);
               if (offerTimerRef.current) clearInterval(offerTimerRef.current);
               setAssignedEmergency(data);
               if (data.location) startNavigationEngine(data.location, 'emergency', data.address);
-              toast({
-                title: '🚨 EMERGENCIA ASIGNADA',
-                description: data.address || 'Diríjase al punto',
-                status: 'error',
-                duration: 10000,
-                position: 'bottom'
-              });
+              toast({ title: 'Emergencia asignada', description: data.address || 'Diríjase al punto', status: 'error', duration: 10000, position: 'bottom' });
               break;
-
-            // -------- Hospital acepta (con o sin ruta) --------
             case 'patient_accepted_with_route':
             case 'patient_accepted': {
               const hospitalName = data.hospitalInfo?.nombre || data.hospitalId;
-              toast({
-                title: '✅ HOSPITAL ACEPTÓ',
-                description: `Diríjase a ${hospitalName}`,
-                status: 'success',
-                duration: 8000,
-                position: 'bottom'
-              });
-              // Si viene ruta precalculada, la dibujamos de una vez
+              toast({ title: 'Hospital aceptó', description: `Diríjase a ${hospitalName}`, status: 'success', duration: 8000, position: 'bottom' });
               if (data.routeGeometry && data.hospitalInfo?.lat) {
                 const dest = { lat: data.hospitalInfo.lat, lng: data.hospitalInfo.lng };
                 activeDestination.current = { ...dest, mode: 'transfer', address: hospitalName };
                 placeDestinationMarker(dest);
                 drawRoute(data.routeGeometry, '#0ea5e9');
-                setRouteProgress({
-                  distanceRemaining: data.distance,
-                  durationRemaining: data.duration
-                });
+                currentRouteGeometry.current = data.routeGeometry;
+                setRouteProgress({ distanceRemaining: data.distance, durationRemaining: data.duration });
                 setIsNavigating(true);
                 setCancelStep('idle');
                 changeStatus('en_ruta');
               }
               break;
             }
-
             case 'patient_rejected':
-              toast({
-                title: '❌ HOSPITAL RECHAZÓ',
-                description: 'Seleccione otra alternativa.',
-                status: 'error',
-                duration: 8000,
-                position: 'bottom'
-              });
+              toast({ title: 'Hospital rechazó', description: 'Seleccione otra alternativa.', status: 'error', duration: 8000, position: 'bottom' });
               silentCleanupNavigation();
               break;
-
             case 'automatic_redirect':
-              toast({
-                title: '↪️ REENVÍO AUTOMÁTICO',
-                description: `Nueva solicitud enviada a ${data.hospitalInfo?.nombre || data.newHospitalId}`,
-                status: 'info',
-                duration: 5000,
-                position: 'bottom'
-              });
+              toast({ title: 'Reenvío automático', description: `Nueva solicitud a ${data.hospitalInfo?.nombre || data.newHospitalId}`, status: 'info', duration: 5000, position: 'bottom' });
               break;
-
             case 'no_hospitals_available':
-              toast({
-                title: '⚠️ SIN HOSPITALES',
-                description: 'Todos los hospitales rechazaron.',
-                status: 'warning',
-                duration: 8000,
-                position: 'bottom'
-              });
+              toast({ title: 'Sin hospitales', description: 'Todos los hospitales rechazaron.', status: 'warning', duration: 8000, position: 'bottom' });
               break;
-
             case 'navigation_cancelled':
-              toast({
-                title: '🛑 RUTA CANCELADA',
-                description: 'El CRUM canceló el servicio.',
-                status: 'info',
-                duration: 5000,
-                position: 'bottom'
-              });
+              toast({ title: 'Ruta cancelada', description: 'El CRUM canceló el servicio.', status: 'info', duration: 5000, position: 'bottom' });
               silentCleanupNavigation();
               break;
-
             case 'paramedic_paired':
-              toast({
-                title: '🩺 PARAMÉDICO VINCULADO',
-                description: `${data.nombre || data.paramedicId} en esta unidad`,
-                status: 'success',
-                duration: 5000,
-                position: 'bottom'
-              });
+              toast({ title: 'Paramédico vinculado', description: `${data.nombre || data.paramedicId} en esta unidad`, status: 'success', duration: 5000, position: 'bottom' });
               break;
-
-            case 'status_updated':
-              // Confirmación del server; el estado local ya fue actualizado optimistamente
-              break;
-
             case 'error':
-              // eslint-disable-next-line no-console
               console.warn('[WS error]', data.message);
               break;
-
-            default:
-              break;
+            default: break;
           }
-        } catch (_) { /* ignorar mensajes no-JSON */ }
+        } catch (_) {}
       };
 
       ws.onclose = () => {
@@ -342,15 +304,10 @@ const handleEmergencyOffer = useCallback((data) => {
           setWsStatus('disconnected');
           reconnectAttempts.current += 1;
           reconnectTimer.current = setTimeout(connect, RECONNECT_DELAY);
-        } else {
-          setWsStatus('failed');
-        }
+        } else setWsStatus('failed');
       };
 
-      ws.onerror = () => {
-        if (!isMounted.current) return;
-        setWsStatus('disconnected');
-      };
+      ws.onerror = () => { if (isMounted.current) setWsStatus('disconnected'); };
     };
 
     connect();
@@ -363,16 +320,14 @@ const handleEmergencyOffer = useCallback((data) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ambulancia]);
 
-  // ========================================================================
-  // MAPBOX & TRACKING GPS INMEDIATO
-  // ========================================================================
+  // ==================== MAPBOX ====================
   useEffect(() => {
     if (!ambulancia || !mapContainer.current) return;
 
-    // Obtener GPS Inmediatamente para asegurar el centrado rápido
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const loc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        if (!isValidCoord(loc)) return;
         setMyLocation(loc);
         if (map.current && !isInitialMapCentered.current) {
           map.current.jumpTo({ center: [loc.lng, loc.lat], zoom: 18, pitch: 60 });
@@ -380,8 +335,7 @@ const handleEmergencyOffer = useCallback((data) => {
           updateAmbulanceMarker(loc, 0);
         }
       },
-      () => {},
-      { enableHighAccuracy: true, timeout: 5000 }
+      () => {}, { enableHighAccuracy: true, timeout: 5000 }
     );
 
     const mapInstance = new mapboxgl.Map({
@@ -389,8 +343,7 @@ const handleEmergencyOffer = useCallback((data) => {
       style: 'mapbox://styles/mapbox/dark-v11',
       center: [DEFAULT_CENTER.lng, DEFAULT_CENTER.lat],
       zoom: 14, pitch: 0, bearing: 0,
-      attributionControl: false,
-      logoPosition: 'bottom-left'
+      attributionControl: false, logoPosition: 'bottom-left'
     });
 
     mapInstance.on('load', () => {
@@ -400,21 +353,12 @@ const handleEmergencyOffer = useCallback((data) => {
       }
       if (!mapInstance.getLayer('traffic-layer-amb')) {
         mapInstance.addLayer({
-          id: 'traffic-layer-amb',
-          type: 'line',
-          source: 'mapbox-traffic',
-          'source-layer': 'traffic',
+          id: 'traffic-layer-amb', type: 'line', source: 'mapbox-traffic', 'source-layer': 'traffic',
           paint: {
             'line-color': ['match', ['get', 'congestion'],
-              'low', '#00C853',
-              'moderate', '#FFD600',
-              'heavy', '#FF9100',
-              'severe', '#D50000',
-              '#00C853'],
-            'line-width': 6,
-            'line-opacity': 0.8
-          },
-          layout: { 'visibility': 'visible' }
+              'low', '#00C853', 'moderate', '#FFD600', 'heavy', '#FF9100', 'severe', '#D50000', '#00C853'],
+            'line-width': 6, 'line-opacity': 0.8
+          }
         }, 'waterway-label');
       }
 
@@ -444,6 +388,7 @@ const handleEmergencyOffer = useCallback((data) => {
     watchId.current = navigator.geolocation.watchPosition(
       (pos) => {
         const loc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        if (!isValidCoord(loc)) return;
         const spd = pos.coords.speed != null ? parseFloat((pos.coords.speed * 3.6).toFixed(1)) : 0;
         const hdg = pos.coords.heading != null && !isNaN(pos.coords.heading) ? pos.coords.heading : gpsHeading.current;
 
@@ -454,33 +399,21 @@ const handleEmergencyOffer = useCallback((data) => {
 
         if (isFollowing && map.current) {
           if (!isInitialMapCentered.current) {
-            map.current.jumpTo({
-              center: [loc.lng, loc.lat],
-              zoom: isGpsMode ? 18 : 14,
-              pitch: isGpsMode ? 60 : 0
-            });
+            map.current.jumpTo({ center: [loc.lng, loc.lat], zoom: isGpsMode ? 18 : 14, pitch: isGpsMode ? 60 : 0 });
             isInitialMapCentered.current = true;
           } else {
             map.current.easeTo({
-              center: [loc.lng, loc.lat],
-              bearing: isGpsMode ? hdg : 0,
-              pitch: isGpsMode ? 60 : 0,
-              zoom: isGpsMode ? 18 : 14,
-              duration: 1000
+              center: [loc.lng, loc.lat], bearing: isGpsMode ? hdg : 0,
+              pitch: isGpsMode ? 60 : 0, zoom: isGpsMode ? 18 : 14, duration: 1000
             });
           }
         }
         sendWS({
-          type: 'location_update',
-          ambulanceId: ambulancia.id,
-          location: loc,
-          speed: spd,
-          heading: hdg,
-          status: ambulanceStatus
+          type: 'location_update', ambulanceId: ambulancia.id,
+          location: loc, speed: spd, heading: hdg, status: ambulanceStatus
         });
       },
-      () => {},
-      { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
+      () => {}, { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
     );
     return () => {
       window.removeEventListener('deviceorientation', handleOrientation, true);
@@ -509,11 +442,8 @@ const handleEmergencyOffer = useCallback((data) => {
           <div style="width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-bottom:10px solid white;position:absolute;top:3px;"></div>
         </div>`;
       ambulanceMarker.current = new mapboxgl.Marker({ element: el, anchor: 'center' })
-        .setLngLat([loc.lng, loc.lat])
-        .addTo(map.current);
-    } else {
-      ambulanceMarker.current.setLngLat([loc.lng, loc.lat]);
-    }
+        .setLngLat([loc.lng, loc.lat]).addTo(map.current);
+    } else ambulanceMarker.current.setLngLat([loc.lng, loc.lat]);
   }, []);
 
   const placeDestinationMarker = useCallback((loc) => {
@@ -522,29 +452,49 @@ const handleEmergencyOffer = useCallback((data) => {
     const el = document.createElement('div');
     el.innerHTML = `<div style="width:20px;height:20px;border-radius:50%;background:#ef4444;border:3px solid #ffffff;box-shadow:0 0 12px rgba(0,0,0,0.6);"></div>`;
     destinationMarker.current = new mapboxgl.Marker({ element: el, anchor: 'center' })
-      .setLngLat([loc.lng, loc.lat])
-      .addTo(map.current);
+      .setLngLat([loc.lng, loc.lat]).addTo(map.current);
   }, []);
 
-  // ========================================================================
-  // MOTOR DE RUTAS Y TRÁFICO EN TIEMPO REAL
-  // ========================================================================
+  // ==================== MOTOR DE RUTAS ====================
   const computeRoute = useCallback(async (start, end) => {
-    if (!start || !end) return null;
+    if (!isValidCoord(start) || !isValidCoord(end)) {
+      console.warn('[route] Coordenadas inválidas:', start, end);
+      return null;
+    }
+
+    const straightKm = calcDistance(start.lat, start.lng, end.lat, end.lng);
+    // Sanity check 1: no rutas absurdas (>500 km en Morelia es imposible)
+    if (straightKm > 500) {
+      console.warn('[route] Distancia lineal irreal:', straightKm, 'km');
+      return null;
+    }
+
     try {
       const coords = `${start.lng},${start.lat};${end.lng},${end.lat}`;
       const url = `https://api.mapbox.com/directions/v5/mapbox/driving-traffic/${coords}?geometries=geojson&overview=full&steps=true&access_token=${mapboxgl.accessToken}&language=es`;
       const resp = await fetch(url);
+      if (!resp.ok) return null;
       const data = await resp.json();
-      return data.routes?.[0]
-        ? {
-            geometry: data.routes[0].geometry.coordinates,
-            distance: data.routes[0].distance,
-            duration: data.routes[0].duration,
-            steps: data.routes[0].legs?.[0]?.steps || []
-          }
-        : null;
-    } catch { return null; }
+      const route = data.routes?.[0];
+      if (!route) return null;
+
+      const routeKm = route.distance / 1000;
+      // Sanity check 2: ruta > 3x línea recta + margen = corrupta
+      if (routeKm > straightKm * MAX_REASONABLE_ROUTE_FACTOR + 5) {
+        console.warn(`[route] Ruta sospechosa: ${routeKm.toFixed(1)}km vs ${straightKm.toFixed(1)}km recto`);
+        return null;
+      }
+
+      return {
+        geometry: route.geometry.coordinates,
+        distance: route.distance,
+        duration: route.duration,
+        steps: route.legs?.[0]?.steps || []
+      };
+    } catch (e) {
+      console.warn('[route] Error:', e.message);
+      return null;
+    }
   }, []);
 
   const drawRoute = useCallback((geometry, color = '#0ea5e9') => {
@@ -569,118 +519,150 @@ const handleEmergencyOffer = useCallback((data) => {
     });
   }, []);
 
-const startNavigationEngine = async (targetLoc, mode = 'manual', address = '') => {
-  // 1) Resolver ubicación actual (o pedir GPS fresco si no hay)
-  let loc = myLocation;
-  if (!loc) {
+  const recalcRoute = useCallback(async (silent = false) => {
+    if (!activeDestination.current || !myLocation) return;
+    if (isRecalculating) return;
+    setIsRecalculating(true);
     try {
-      loc = await new Promise((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(
-          pos => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-          err => reject(err),
-          { enableHighAccuracy: true, timeout: 5000 }
-        );
-      });
-      setMyLocation(loc);
-    } catch {
-      toast({
-        title: '⚠️ SIN GPS',
-        description: 'No se pudo obtener ubicación. La ruta visual no está disponible.',
-        status: 'warning',
-        duration: 5000,
-        position: 'bottom'
-      });
-      // Aun sin GPS, entramos en modo emergencia
+      const route = await computeRoute(myLocation, activeDestination.current);
+      if (route) {
+        const color = activeDestination.current.mode === 'emergency' ? '#ef4444' : '#0ea5e9';
+        drawRoute(route.geometry, color);
+        currentRouteGeometry.current = route.geometry;
+        setCurrentManeuver(route.steps[0]);
+        setRouteProgress({ distanceRemaining: route.distance, durationRemaining: route.duration });
+        lastRouteCalcRef.current = { loc: { ...myLocation }, time: Date.now() };
+        if (!silent) toast({ title: 'Ruta actualizada', status: 'info', duration: 2000, position: 'bottom' });
+      }
+    } finally {
+      setIsRecalculating(false);
     }
-  }
+  }, [myLocation, computeRoute, drawRoute, isRecalculating, toast]);
 
-  // 2) Activar modo emergencia INMEDIATAMENTE (sin esperar al routing)
-  activeDestination.current = { ...targetLoc, mode, address };
-  placeDestinationMarker(targetLoc);
-  setIsNavigating(true);
-  setCancelStep('idle');
-  changeStatus('en_ruta');
-  setIsFollowing(true);
-  onDrawerClose();
+  const startNavigationEngine = async (targetLoc, mode = 'manual', address = '') => {
+    let loc = myLocation;
+    if (!loc) {
+      try {
+        loc = await new Promise((resolve, reject) => {
+          navigator.geolocation.getCurrentPosition(
+            pos => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+            err => reject(err), { enableHighAccuracy: true, timeout: 5000 }
+          );
+        });
+        if (isValidCoord(loc)) setMyLocation(loc);
+        else loc = null;
+      } catch {
+        toast({ title: 'Sin GPS', description: 'No se pudo obtener ubicación. La ruta visual no está disponible.', status: 'warning', duration: 5000, position: 'bottom' });
+        loc = null;
+      }
+    }
 
-  if (map.current) {
+    activeDestination.current = { ...targetLoc, mode, address };
+    placeDestinationMarker(targetLoc);
+    setIsNavigating(true);
+    setCancelStep('idle');
+    changeStatus('en_ruta');
+    setIsFollowing(true);
+    onDrawerClose();
+
+    if (map.current) {
+      if (loc) {
+        map.current.flyTo({ center: [loc.lng, loc.lat], zoom: 18, pitch: 60, bearing: myHeading, duration: 1200 });
+      } else {
+        map.current.flyTo({ center: [targetLoc.lng, targetLoc.lat], zoom: 15, duration: 1200 });
+      }
+      setIsGpsMode(true);
+    }
+
     if (loc) {
-      map.current.flyTo({
-        center: [loc.lng, loc.lat],
-        zoom: 18, pitch: 60, bearing: myHeading, duration: 1200
-      });
-    } else {
-      map.current.flyTo({ center: [targetLoc.lng, targetLoc.lat], zoom: 15, duration: 1200 });
+      const color = mode === 'emergency' ? '#ef4444' : '#0ea5e9';
+      const route = await computeRoute(loc, targetLoc);
+      if (route) {
+        drawRoute(route.geometry, color);
+        currentRouteGeometry.current = route.geometry;
+        setCurrentManeuver(route.steps[0]);
+        setRouteProgress({ distanceRemaining: route.distance, durationRemaining: route.duration });
+        lastRouteCalcRef.current = { loc: { ...loc }, time: Date.now() };
+      } else {
+        toast({ title: 'Ruta no disponible', description: 'Mostrando destino. Reintente al moverse.', status: 'warning', duration: 5000, position: 'bottom' });
+      }
     }
-    setIsGpsMode(true);
-  }
+  };
 
-  // 3) Calcular ruta (async, sin bloquear la activación)
-  if (loc) {
-    const routeColor = mode === 'emergency' ? '#ef4444' : '#0ea5e9';
-    const route = await computeRoute(loc, targetLoc);
-    if (route) {
-      drawRoute(route.geometry, routeColor);
-      setCurrentManeuver(route.steps[0]);
-      setRouteProgress({ distanceRemaining: route.distance, durationRemaining: route.duration });
-    }
-  }
-};
-
+  // Poll regular (20s, solo si se movió >150m)
   useEffect(() => {
-    if (isNavigating && activeDestination.current) {
-      routeIntervalRef.current = setInterval(async () => {
-        if (!myLocation || !activeDestination.current) return;
-        const route = await computeRoute(myLocation, activeDestination.current);
-        if (route) {
-          const routeColor = activeDestination.current.mode === 'emergency' ? '#ef4444' : '#0ea5e9';
-          drawRoute(route.geometry, routeColor);
-          setCurrentManeuver(route.steps[0]);
-          setRouteProgress({ distanceRemaining: route.distance, durationRemaining: route.duration });
-        }
-      }, ROUTE_POLLING_INTERVAL);
-    }
+    if (!isNavigating || !activeDestination.current) return;
+    routeIntervalRef.current = setInterval(async () => {
+      if (!myLocation || !activeDestination.current) return;
+      const last = lastRouteCalcRef.current;
+      const moved = last.loc
+        ? calcDistance(last.loc.lat, last.loc.lng, myLocation.lat, myLocation.lng) * 1000
+        : Infinity;
+      if (moved < MIN_MOVE_FOR_POLL) return;
+      await recalcRoute(true);
+    }, ROUTE_POLL_INTERVAL);
     return () => { if (routeIntervalRef.current) clearInterval(routeIntervalRef.current); };
-  }, [isNavigating, myLocation, computeRoute, drawRoute]);
+  }, [isNavigating, myLocation, recalcRoute]);
 
-  // ========================================================================
-  // BÚSQUEDA MANUAL - CAJÓN
-  // ========================================================================
-  const searchAddresses = useCallback(async (query) => {
-    if (!query || query.trim().length < 3) { setSearchResults([]); return; }
+  // Detección de fuera de ruta (cada 5s, cálculo local)
+  useEffect(() => {
+    if (!isNavigating) return;
+    offRouteCheckRef.current = setInterval(() => {
+      if (!myLocation || !currentRouteGeometry.current) return;
+      const distM = distanceToRouteMeters(myLocation, currentRouteGeometry.current);
+      const now = Date.now();
+      if (distM > OFF_ROUTE_THRESHOLD_M && now - lastOffRouteRecalcRef.current > OFF_ROUTE_RECALC_COOLDOWN) {
+        lastOffRouteRecalcRef.current = now;
+        console.info(`[route] Fuera de ruta (${Math.round(distM)}m). Recalculando…`);
+        recalcRoute(true);
+      }
+    }, OFF_ROUTE_CHECK_INTERVAL);
+    return () => { if (offRouteCheckRef.current) clearInterval(offRouteCheckRef.current); };
+  }, [isNavigating, myLocation, recalcRoute]);
+
+  // ==================== BÚSQUEDA ====================
+const searchAddresses = useCallback((query) => {
+  if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+  if (!query || query.trim().length < 2) {
+    setSearchResults([]);
+    return;
+  }
+  searchDebounceRef.current = setTimeout(async () => {
+    if (searchAbortRef.current) searchAbortRef.current.abort();
+    const controller = new AbortController();
+    searchAbortRef.current = controller;
+
     try {
-      const prox = myLocation ? `${myLocation.lng},${myLocation.lat}` : '-101.1969,19.7024';
-      const bbox = '-101.35,19.55,-101.00,19.85';
-      const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query.trim())}.json?access_token=${mapboxgl.accessToken}&country=mx&proximity=${prox}&bbox=${bbox}&limit=5&language=es`;
-      const res = await fetch(url);
-      const data = await res.json();
-      setSearchResults((data.features || []).map(f => ({
-        id: f.id, place_name: f.place_name, lat: f.center[1], lng: f.center[0]
-      })));
-    } catch (e) { /* ignorar */ }
-  }, [myLocation]);
+      const results = await searchPlaces(query, {
+  proximity: myLocation || DEFAULT_CENTER,
+  mapboxToken: mapboxgl.accessToken,
+  foursquareKey: import.meta.env.VITE_FOURSQUARE_KEY,
+  signal: controller.signal,
+});
+      setSearchResults(results);
+    } catch (e) {
+      if (e.name !== 'AbortError') setSearchResults([]);
+    }
+  }, 250);
+}, [myLocation]);
 
   const selectSearchResult = async (result) => {
-    setSearchQuery('');
-    setSearchResults([]);
+    setSearchQuery(''); setSearchResults([]);
     const targetLoc = { lat: result.lat, lng: result.lng };
     startNavigationEngine(targetLoc, 'manual', result.place_name);
   };
 
-  // ========================================================================
-  // CANCELACIÓN DE RUTAS Y SERVICIOS
-  // ========================================================================
+  // ==================== CANCELACIÓN ====================
   const silentCleanupNavigation = useCallback(() => {
-    if (destinationMarker.current) {
-      destinationMarker.current.remove();
-      destinationMarker.current = null;
-    }
+    if (destinationMarker.current) { destinationMarker.current.remove(); destinationMarker.current = null; }
     try {
-      if (map.current.getLayer('active-route')) map.current.removeLayer('active-route');
-      if (map.current.getLayer('active-route-glow')) map.current.removeLayer('active-route-glow');
-      if (map.current.getSource('active-route')) map.current.removeSource('active-route');
+      if (map.current?.getLayer('active-route')) map.current.removeLayer('active-route');
+      if (map.current?.getLayer('active-route-glow')) map.current.removeLayer('active-route-glow');
+      if (map.current?.getSource('active-route')) map.current.removeSource('active-route');
     } catch {}
     activeDestination.current = null;
+    currentRouteGeometry.current = null;
+    lastRouteCalcRef.current = { loc: null, time: 0 };
     setIsNavigating(false);
     setCancelStep('idle');
     setCurrentManeuver(null);
@@ -690,15 +672,13 @@ const startNavigationEngine = async (targetLoc, mode = 'manual', address = '') =
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /** Cancelación con motivo (envía ambulance_emergency_cancel al server). */
   const handleCancelWithReason = useCallback((reasonCode) => {
     const callId = assignedEmergency?.callId;
 
-    // Sin emergencia activa: solo limpiar UI (por ejemplo, cancelar ruta manual)
     if (!callId) {
       silentCleanupNavigation();
       changeStatus('disponible');
-      toast({ title: 'NAVEGACIÓN FINALIZADA', status: 'info', duration: 3000, position: 'bottom' });
+      toast({ title: 'Navegación finalizada', status: 'info', duration: 3000, position: 'bottom' });
       return;
     }
 
@@ -707,36 +687,21 @@ const startNavigationEngine = async (targetLoc, mode = 'manual', address = '') =
       silentCleanupNavigation();
       setAssignedEmergency(null);
       changeStatus('disponible');
-      toast({ title: '✅ SERVICIO COMPLETADO', status: 'success', duration: 4000, position: 'bottom' });
+      toast({ title: 'Servicio completado', status: 'success', duration: 4000, position: 'bottom' });
     } else {
       sendWS({
         type: 'ambulance_emergency_cancel',
-        ambulanceId: ambulancia?.id,
-        callId,
-        reason: reasonCode,
-        notes: ''
+        ambulanceId: ambulancia?.id, callId,
+        reason: reasonCode, notes: ''
       });
       silentCleanupNavigation();
       setAssignedEmergency(null);
-      // AVERÍA / PONCHADURA → fuera de servicio; TRÁFICO / OTRO → disponible
       if (reasonCode === 'averia' || reasonCode === 'pinchadura') {
         changeStatus('fuera_de_servicio');
-        toast({
-          title: '🛠️ UNIDAD FUERA DE SERVICIO',
-          description: 'Emergencia reasignada a otra unidad',
-          status: 'warning',
-          duration: 6000,
-          position: 'bottom'
-        });
+        toast({ title: 'Unidad fuera de servicio', description: 'Emergencia reasignada a otra unidad', status: 'warning', duration: 6000, position: 'bottom' });
       } else {
         changeStatus('disponible');
-        toast({
-          title: '⚠️ SERVICIO CANCELADO',
-          description: 'Emergencia reasignada',
-          status: 'info',
-          duration: 5000,
-          position: 'bottom'
-        });
+        toast({ title: 'Servicio cancelado', description: 'Emergencia reasignada', status: 'info', duration: 5000, position: 'bottom' });
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -746,7 +711,6 @@ const startNavigationEngine = async (targetLoc, mode = 'manual', address = '') =
     const hospital = hospitals.find(h => h.id === selectedHospitalId);
     if (!hospital || !myLocation) return;
     setIsSending(true);
-
     sendWS({
       type: 'patient_transfer_notification',
       notificationId: `notif_${Date.now()}`,
@@ -763,19 +727,11 @@ const startNavigationEngine = async (targetLoc, mode = 'manual', address = '') =
       ambulanceLocation: myLocation,
       emergencyMode: 'trasladar_paciente'
     });
-
-    toast({
-      title: '📩 SOLICITUD ENVIADA',
-      description: `Esperando confirmación de ${hospital.nombre}`,
-      status: 'success',
-      duration: 4000,
-      position: 'bottom'
-    });
+    toast({ title: 'Solicitud enviada', description: `Esperando confirmación de ${hospital.nombre}`, status: 'success', duration: 4000, position: 'bottom' });
     setIsSending(false);
     onDrawerClose();
   };
 
-  // Confirmación genérica (solo para logout)
   const confirmAction = useCallback((action, title, body) => {
     setPendingAction({ fn: action, title, body });
     onAlertOpen();
@@ -787,9 +743,6 @@ const startNavigationEngine = async (targetLoc, mode = 'manual', address = '') =
     setPendingAction(null);
   }, [pendingAction, onAlertClose]);
 
-  // ========================================================================
-  // HANDLERS DE OFERTA DE EMERGENCIA
-  // ========================================================================
   const acceptOffer = useCallback(() => {
     if (!pendingOffer) return;
     sendWS({ type: 'emergency_accept', offerId: pendingOffer.offerId });
@@ -804,18 +757,9 @@ const startNavigationEngine = async (targetLoc, mode = 'manual', address = '') =
     if (offerTimerRef.current) clearInterval(offerTimerRef.current);
     setPendingOffer(null);
     setOfferRejecting(false);
-    toast({
-      title: 'RECHAZO ENVIADO',
-      description: 'Se buscará otra unidad',
-      status: 'info',
-      duration: 3000,
-      position: 'bottom'
-    });
+    toast({ title: 'Rechazo enviado', description: 'Se buscará otra unidad', status: 'info', duration: 3000, position: 'bottom' });
   }, [pendingOffer, sendWS, toast]);
 
-  // ========================================================================
-  // HELPERS DE NAVEGACIÓN
-  // ========================================================================
   const getManeuverIcon = (step) => {
     if (!step) return <FaArrowUp />;
     const m = step.maneuver?.modifier || '';
@@ -854,28 +798,17 @@ const startNavigationEngine = async (targetLoc, mode = 'manual', address = '') =
   };
 
   if (!ambulancia) {
-    return (
-      <RegistrationModal
-        onRegister={(d) => {
-          setAmbulancia(d);
-          changeStatus('disponible');
-        }}
-      />
-    );
+    return <RegistrationModal onRegister={(d) => { setAmbulancia(d); changeStatus('disponible'); }} />;
   }
 
   const currentStatusOpt = STATUS_OPTIONS.find(s => s.value === ambulanceStatus) || STATUS_OPTIONS[0];
 
-  // ========================================================================
-  // RENDER
-  // ========================================================================
   return (
     <Box h="100vh" w="100vw" bg="#000" overflow="hidden" position="relative" display="flex" flexDirection="column">
 
-      {/* ===== MAPA ===== */}
       <Box ref={mapContainer} position="absolute" inset={0} zIndex={0} />
 
-      {/* ===== HEADER NORMAL (CONDICIONADO: SE ELIMINA AL NAVEGAR) ===== */}
+      {/* HEADER NORMAL */}
       {!isNavigating && (
         <SlideFade in={true} offsetY="-20px" style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10 }}>
           <Flex bg="rgba(9, 9, 11, 0.85)" backdropFilter="blur(12px)" px={4} py={3} alignItems="center" justify="space-between" borderBottom="1px solid #27272a">
@@ -894,34 +827,21 @@ const startNavigationEngine = async (targetLoc, mode = 'manual', address = '') =
               <Select
                 value={ambulanceStatus}
                 onChange={(e) => changeStatus(e.target.value)}
-                bg="#18181b"
-                border="2px solid"
-                borderColor={currentStatusOpt.color}
-                color={currentStatusOpt.color}
-                borderRadius="xl"
-                h="45px"
-                fontSize="15px"
-                fontWeight="900"
-                w="130px"
+                bg="#18181b" border="2px solid" borderColor={currentStatusOpt.color}
+                color={currentStatusOpt.color} borderRadius="xl" h="45px" fontSize="15px" fontWeight="900" w="130px"
               >
                 {STATUS_OPTIONS.map(s => (
                   <option key={s.value} value={s.value} style={{ background: '#09090b', color: s.color }}>{s.label}</option>
                 ))}
               </Select>
               <IconButton
-                aria-label="Cerrar"
-                icon={<FaSignOutAlt />}
+                aria-label="Cerrar" icon={<FaSignOutAlt />}
                 onClick={() => confirmAction(() => {
                   if (wsRef.current) wsRef.current.close();
-                  clearAmbulance();
-                  setAmbulancia(null);
+                  clearAmbulance(); setAmbulancia(null);
                 }, 'FINALIZAR TURNO', '¿Desconectar unidad?')}
-                bg="#18181b"
-                color="#a1a1aa"
-                border="1px solid #27272a"
-                borderRadius="xl"
-                w="45px"
-                h="45px"
+                bg="#18181b" color="#a1a1aa" border="1px solid #27272a" borderRadius="xl"
+                w="45px" h="45px"
                 _hover={{ bg: 'rgba(239,68,68,0.2)', color: '#ef4444' }}
               />
             </HStack>
@@ -929,7 +849,7 @@ const startNavigationEngine = async (targetLoc, mode = 'manual', address = '') =
         </SlideFade>
       )}
 
-      {/* ===== MODO NAVEGACIÓN: INDICACIONES Y VELOCÍMETRO ===== */}
+      {/* MODO NAVEGACIÓN */}
       {isNavigating && (
         <>
           <SlideFade in={true} offsetY="-20px" style={{ position: 'absolute', top: '15px', left: '5%', right: '5%', zIndex: 20 }}>
@@ -942,11 +862,16 @@ const startNavigationEngine = async (targetLoc, mode = 'manual', address = '') =
                   </Text>
                   <HStack spacing={4} mt={1}>
                     <Text fontSize="18px" fontWeight="900" color="#38bdf8">
-                      {currentManeuver?.distance ? fmtDist(currentManeuver.distance) : ''}
+                      {currentManeuver?.distance ? fmtDist(currentManeuver.distance / 1000) : ''}
                     </Text>
                     {routeProgress && (
                       <Text fontSize="18px" fontWeight="900" color="#10b981">
                         ETA: {fmtDur(routeProgress.durationRemaining)}
+                      </Text>
+                    )}
+                    {routeProgress && (
+                      <Text fontSize="14px" fontWeight="800" color="#a1a1aa">
+                        {fmtDist(routeProgress.distanceRemaining / 1000)}
                       </Text>
                     )}
                   </HStack>
@@ -955,86 +880,80 @@ const startNavigationEngine = async (targetLoc, mode = 'manual', address = '') =
             </Box>
           </SlideFade>
 
+          {/* Velocímetro + Recalcular */}
           <SlideFade in={true} offsetX="20px" style={{ position: 'absolute', right: '20px', bottom: '100px', zIndex: 20 }}>
-            <Flex bg="rgba(9, 9, 11, 0.9)" border="2px solid #3f3f46" w="80px" h="80px" borderRadius="full" direction="column" justify="center" align="center" shadow="xl" backdropFilter="blur(10px)">
-              <Text color="#10b981" fontWeight="900" fontSize="28px" lineHeight="1">{mySpeed}</Text>
-              <Text color="#a1a1aa" fontSize="11px" fontWeight="900">KM/H</Text>
-            </Flex>
+            <VStack spacing={3}>
+              <Flex bg="rgba(9, 9, 11, 0.9)" border="2px solid #3f3f46" w="80px" h="80px" borderRadius="full"
+                direction="column" justify="center" align="center" shadow="xl" backdropFilter="blur(10px)">
+                <Text color="#10b981" fontWeight="900" fontSize="28px" lineHeight="1">{mySpeed}</Text>
+                <Text color="#a1a1aa" fontSize="11px" fontWeight="900">KM/H</Text>
+              </Flex>
+              <Tooltip label="Recalcular ruta" placement="left" hasArrow bg="#18181b" color="white" fontWeight="bold">
+                <IconButton
+                  aria-label="Recalcular ruta"
+                  icon={<FaSyncAlt />}
+                  onClick={() => recalcRoute(false)}
+                  isLoading={isRecalculating}
+                  w="60px" h="60px"
+                  bg="rgba(24,24,27,0.9)" color="#38bdf8"
+                  border="2px solid #3f3f46"
+                  borderRadius="full"
+                  fontSize="20px"
+                  _hover={{ bg: '#27272a', borderColor: '#38bdf8' }}
+                />
+              </Tooltip>
+            </VStack>
           </SlideFade>
         </>
       )}
 
-      {/* ===== CONTROLES LATERALES ===== */}
+      {/* CONTROLES LATERALES */}
       {!isDrawerOpen && !isNavigating && (
         <SlideFade in={true} offsetX="20px" style={{ position: 'absolute', right: '12px', top: '15%', zIndex: 5 }}>
           <VStack spacing={4}>
             <Box bg="rgba(24,24,27,0.9)" backdropFilter="blur(10px)" borderRadius="xl" border="1px solid #3f3f46" overflow="hidden" shadow="lg">
               <Tooltip label="Centrar GPS" placement="left" hasArrow bg="#18181b" color="white">
-                <IconButton
-                  aria-label="Centrar"
-                  icon={<MdCenterFocusStrong />}
-                  w="50px" h="50px"
-                  onClick={centerMapAction}
-                  color={isFollowing ? '#0ea5e9' : 'white'}
-                  variant="ghost"
-                  fontSize="22px"
-                  _hover={{ bg: '#27272a' }}
-                />
+                <IconButton aria-label="Centrar" icon={<MdCenterFocusStrong />} w="50px" h="50px"
+                  onClick={centerMapAction} color={isFollowing ? '#0ea5e9' : 'white'}
+                  variant="ghost" fontSize="22px" _hover={{ bg: '#27272a' }} />
               </Tooltip>
               <Divider borderColor="#3f3f46" />
               <Tooltip label={isGpsMode ? 'Vista 2D Cenital' : 'Vista 3D Navegación'} placement="left" hasArrow bg="#18181b" color="white">
-                <IconButton
-                  aria-label="Alternar Vista"
-                  icon={isGpsMode ? <FaMap /> : <FaLocationArrow />}
-                  w="50px" h="50px"
-                  onClick={toggleCameraAction}
-                  color={isGpsMode ? '#0ea5e9' : 'white'}
-                  variant="ghost"
-                  fontSize="20px"
-                  _hover={{ bg: '#27272a' }}
-                />
+                <IconButton aria-label="Alternar Vista" icon={isGpsMode ? <FaMap /> : <FaLocationArrow />}
+                  w="50px" h="50px" onClick={toggleCameraAction}
+                  color={isGpsMode ? '#0ea5e9' : 'white'} variant="ghost" fontSize="20px" _hover={{ bg: '#27272a' }} />
               </Tooltip>
             </Box>
           </VStack>
         </SlideFade>
       )}
 
-      {/* ===== BARRA INFERIOR (BOTONES DE BÚSQUEDA Y TRASLADO) ===== */}
+      {/* BARRA INFERIOR */}
       {!isDrawerOpen && !isNavigating && (
         <SlideFade in={true} offsetY="20px" style={{ position: 'absolute', bottom: '20px', left: 0, right: 0, zIndex: 10 }}>
           <HStack px={4} spacing={3} w="100%" justify="center">
-            <Button
-              flex={0.5} h="65px"
-              bg="#18181b" border="2px solid #3f3f46" color="white"
+            <Button flex={0.5} h="65px" bg="#18181b" border="2px solid #3f3f46" color="white"
               fontSize="16px" fontWeight="900" borderRadius="2xl" shadow="2xl"
-              onClick={() => { setDrawerMode('atender'); onDrawerOpen(); }}
-            >
+              onClick={() => { setDrawerMode('atender'); onDrawerOpen(); }}>
               <Icon as={FaSearch} mr={2} color="#0ea5e9" /> NAVEGAR A...
             </Button>
-            <Button
-              flex={0.5} h="65px"
-              bg="#0ea5e9" color="white"
+            <Button flex={0.5} h="65px" bg="#0ea5e9" color="white"
               fontSize="16px" fontWeight="900" borderRadius="2xl" shadow="2xl"
-              onClick={() => { setDrawerMode('trasladar'); onDrawerOpen(); }}
-            >
+              onClick={() => { setDrawerMode('trasladar'); onDrawerOpen(); }}>
               <Icon as={FaHospital} mr={2} /> TRASLADO HOSP.
             </Button>
           </HStack>
         </SlideFade>
       )}
 
-      {/* ===== INTERFAZ DE CANCELACIÓN CON MOTIVO (FRICCIÓN) ===== */}
+      {/* CANCELACIÓN CON MOTIVO */}
       {isNavigating && (
         <SlideFade in={true} offsetY="20px" style={{ position: 'absolute', bottom: '20px', left: 0, right: 0, zIndex: 20 }}>
           <Box px={4}>
             {cancelStep === 'idle' && (
-              <Button
-                w="100%" h="65px"
-                bg="#ef4444" color="white"
+              <Button w="100%" h="65px" bg="#ef4444" color="white"
                 fontSize="18px" fontWeight="900" borderRadius="2xl" shadow="dark-lg"
-                _hover={{ bg: '#dc2626' }}
-                onClick={() => setCancelStep('confirm')}
-              >
+                _hover={{ bg: '#dc2626' }} onClick={() => setCancelStep('confirm')}>
                 <Icon as={FaTimesCircle} mr={2} boxSize={5} /> CANCELAR RUTA
               </Button>
             )}
@@ -1043,20 +962,10 @@ const startNavigationEngine = async (targetLoc, mode = 'manual', address = '') =
               <VStack spacing={3} bg="rgba(24, 24, 27, 0.95)" p={4} borderRadius="2xl" border="2px solid #ef4444" shadow="2xl" backdropFilter="blur(10px)">
                 <Text color="#ef4444" fontWeight="900" fontSize="18px">¿TERMINAR NAVEGACIÓN?</Text>
                 <HStack w="100%" spacing={3}>
-                  <Button
-                    flex={1} h="55px"
-                    bg="#27272a" color="white"
-                    fontSize="16px" fontWeight="900" borderRadius="xl"
-                    onClick={() => setCancelStep('idle')}
-                  >
+                  <Button flex={1} h="55px" bg="#27272a" color="white" fontSize="16px" fontWeight="900" borderRadius="xl" onClick={() => setCancelStep('idle')}>
                     VOLVER
                   </Button>
-                  <Button
-                    flex={1} h="55px"
-                    bg="#ef4444" color="white"
-                    fontSize="16px" fontWeight="900" borderRadius="xl"
-                    onClick={() => setCancelStep('reason')}
-                  >
+                  <Button flex={1} h="55px" bg="#ef4444" color="white" fontSize="16px" fontWeight="900" borderRadius="xl" onClick={() => setCancelStep('reason')}>
                     SÍ, CONTINUAR
                   </Button>
                 </HStack>
@@ -1067,50 +976,25 @@ const startNavigationEngine = async (targetLoc, mode = 'manual', address = '') =
               <VStack spacing={3} bg="rgba(24, 24, 27, 0.97)" p={4} borderRadius="2xl" border="2px solid #3f3f46" shadow="2xl" backdropFilter="blur(10px)">
                 <Text color="#f8fafc" fontWeight="900" fontSize="16px" letterSpacing="1px">MOTIVO DE TÉRMINO</Text>
                 <SimpleGrid columns={2} spacing={3} w="100%">
-                  <Button
-                    h="60px"
-                    bg="rgba(16,185,129,0.15)" color="#10b981"
-                    border="2px solid #10b981"
+                  <Button h="60px" bg="rgba(16,185,129,0.15)" color="#10b981" border="2px solid #10b981"
                     fontSize="14px" fontWeight="900" borderRadius="xl"
-                    _hover={{ bg: 'rgba(16,185,129,0.25)' }}
-                    onClick={() => handleCancelWithReason('completed')}
-                  >
-                    ✓ SERVICIO COMPLETADO
+                    _hover={{ bg: 'rgba(16,185,129,0.25)' }} onClick={() => handleCancelWithReason('completed')}>
+                    SERVICIO COMPLETADO
                   </Button>
-                  <Button
-                    h="60px"
-                    bg="#27272a" color="white"
-                    fontSize="14px" fontWeight="900" borderRadius="xl"
-                    _hover={{ bg: '#3f3f46' }}
-                    onClick={() => handleCancelWithReason('averia')}
-                  >
-                    🛠️ AVERÍA MECÁNICA
+                  <Button h="60px" bg="#27272a" color="white" fontSize="14px" fontWeight="900" borderRadius="xl"
+                    _hover={{ bg: '#3f3f46' }} onClick={() => handleCancelWithReason('averia')}>
+                    AVERÍA MECÁNICA
                   </Button>
-                  <Button
-                    h="60px"
-                    bg="#27272a" color="white"
-                    fontSize="14px" fontWeight="900" borderRadius="xl"
-                    _hover={{ bg: '#3f3f46' }}
-                    onClick={() => handleCancelWithReason('pinchadura')}
-                  >
-                    🔧 LLANTA PONCHADA
+                  <Button h="60px" bg="#27272a" color="white" fontSize="14px" fontWeight="900" borderRadius="xl"
+                    _hover={{ bg: '#3f3f46' }} onClick={() => handleCancelWithReason('pinchadura')}>
+                    LLANTA PONCHADA
                   </Button>
-                  <Button
-                    h="60px"
-                    bg="#27272a" color="white"
-                    fontSize="14px" fontWeight="900" borderRadius="xl"
-                    _hover={{ bg: '#3f3f46' }}
-                    onClick={() => handleCancelWithReason('trafico_pesado')}
-                  >
-                    🚗 TRÁFICO IMPOSIBLE
+                  <Button h="60px" bg="#27272a" color="white" fontSize="14px" fontWeight="900" borderRadius="xl"
+                    _hover={{ bg: '#3f3f46' }} onClick={() => handleCancelWithReason('trafico_pesado')}>
+                    TRÁFICO IMPOSIBLE
                   </Button>
                 </SimpleGrid>
-                <Button
-                  variant="ghost"
-                  color="#a1a1aa"
-                  fontSize="14px" fontWeight="900"
-                  onClick={() => setCancelStep('confirm')}
-                >
+                <Button variant="ghost" color="#a1a1aa" fontSize="14px" fontWeight="900" onClick={() => setCancelStep('confirm')}>
                   ← VOLVER
                 </Button>
               </VStack>
@@ -1119,7 +1003,7 @@ const startNavigationEngine = async (targetLoc, mode = 'manual', address = '') =
         </SlideFade>
       )}
 
-      {/* ==================== CAJÓN MULTIFUNCIÓN (BÚSQUEDA Y TRASLADO) ==================== */}
+      {/* DRAWER */}
       <Drawer isOpen={isDrawerOpen} placement="bottom" onClose={onDrawerClose} size="full">
         <DrawerOverlay backdropFilter="blur(5px)" bg="rgba(0,0,0,0.6)" />
         <DrawerContent bg="#09090b" borderTopRadius="3xl" h="85vh" mt="15vh" borderTop="2px solid #27272a" zIndex={1400}>
@@ -1139,32 +1023,30 @@ const startNavigationEngine = async (targetLoc, mode = 'manual', address = '') =
             {drawerMode === 'atender' ? (
               <VStack spacing={4} align="stretch" h="100%">
                 <InputGroup size="lg">
-                  <Input
-                    value={searchQuery}
+                  <Input value={searchQuery}
                     onChange={(e) => { setSearchQuery(e.target.value); searchAddresses(e.target.value); }}
-                    placeholder="Buscar calle, colonia..."
-                    bg="#18181b" width="100%"
-                    border="2px solid #3f3f46" color="white"
-                    h="65px" fontSize="18px" fontWeight="800"
-                    _focus={{ borderColor: '#0ea5e9' }}
-                  />
+                    placeholder="Buscar calle, colonia, plaza..." bg="#18181b" width="100%"
+                    border="2px solid #3f3f46" color="white" h="65px" fontSize="18px" fontWeight="800"
+                    _focus={{ borderColor: '#0ea5e9' }} autoComplete="off" />
                 </InputGroup>
-
                 <Box flex={1} overflowY="auto">
                   {searchResults.map((r) => (
-                    <Button
-                      key={r.id} w="100%" h="auto" py={4} mb={3}
-                      justifyContent="flex-start"
-                      bg="#18181b" border="1px solid #27272a"
-                      _hover={{ bg: '#27272a' }}
-                      onClick={() => selectSearchResult(r)}
-                    >
-                      <HStack w="100%" spacing={4}>
-                        <Icon as={FaMapMarkerAlt} color="#ef4444" boxSize={5} />
-                        <Text color="white" fontSize="18px" fontWeight="800" whiteSpace="normal" textAlign="left">
+                    <Button key={r.id} w="100%" h="auto" py={4} mb={3} justifyContent="flex-start"
+                      bg="#18181b" border="1px solid #27272a" _hover={{ bg: '#27272a' }}
+                      onClick={() => selectSearchResult(r)}>
+                      <HStack w="100%" spacing={4} align="flex-start">
+                      <Icon as={FaMapMarkerAlt} color="#ef4444" boxSize={5} mt={1} />
+                      <VStack align="start" spacing={1} flex={1} minW={0}>
+                        <Box px={2} py={0.5} bg="#27272a" borderRadius="sm">
+                          <Text fontSize="9px" fontWeight="900" color="#38bdf8" letterSpacing="0.5px">
+                            {getPlaceTypeLabel(r.type, r.source, r.categories)}
+                          </Text>
+                        </Box>
+                        <Text color="white" fontSize="16px" fontWeight="800" whiteSpace="normal" textAlign="left" noOfLines={3}>
                           {r.place_name}
                         </Text>
-                      </HStack>
+                      </VStack>
+                    </HStack>
                     </Button>
                   ))}
                   {searchQuery.length > 2 && searchResults.length === 0 && (
@@ -1180,23 +1062,15 @@ const startNavigationEngine = async (targetLoc, mode = 'manual', address = '') =
                   <FormControl mb={4}>
                     <FormLabel color="#0ea5e9" fontWeight="900" fontSize="14px">EDAD APROXIMADA</FormLabel>
                     <HStack>
-                      <IconButton
-                        aria-label="Menos edad"
-                        icon={<FaMinus />}
+                      <IconButton aria-label="Menos edad" icon={<FaMinus />}
                         onClick={() => setPatientData(p => ({ ...p, edad: Math.max(0, p.edad - 1) }))}
-                        w="60px" h="60px" bg="#27272a" color="white" fontSize="20px"
-                        _hover={{ bg: '#3f3f46' }}
-                      />
+                        w="60px" h="60px" bg="#27272a" color="white" fontSize="20px" _hover={{ bg: '#3f3f46' }} />
                       <Flex flex={1} bg="#09090b" h="60px" border="2px solid #3f3f46" borderRadius="xl" align="center" justify="center">
                         <Text fontSize="28px" fontWeight="900" color="white">{patientData.edad}</Text>
                       </Flex>
-                      <IconButton
-                        aria-label="Más edad"
-                        icon={<FaPlus />}
+                      <IconButton aria-label="Más edad" icon={<FaPlus />}
                         onClick={() => setPatientData(p => ({ ...p, edad: p.edad + 1 }))}
-                        w="60px" h="60px" bg="#27272a" color="white" fontSize="20px"
-                        _hover={{ bg: '#3f3f46' }}
-                      />
+                        w="60px" h="60px" bg="#27272a" color="white" fontSize="20px" _hover={{ bg: '#3f3f46' }} />
                     </HStack>
                   </FormControl>
 
@@ -1204,28 +1078,21 @@ const startNavigationEngine = async (targetLoc, mode = 'manual', address = '') =
                     <FormLabel color="#0ea5e9" fontWeight="900" fontSize="14px">SEXO</FormLabel>
                     <ButtonGroup w="100%" isAttached>
                       {['Hombre', 'Mujer', 'N/S'].map(s => (
-                        <Button
-                          key={s} flex={1} h="50px"
-                          fontSize="16px" fontWeight="900"
+                        <Button key={s} flex={1} h="50px" fontSize="16px" fontWeight="900"
                           bg={patientData.sexo === s ? '#0ea5e9' : '#27272a'}
                           color={patientData.sexo === s ? 'white' : '#a1a1aa'}
                           _hover={{ bg: patientData.sexo === s ? '#0284c7' : '#3f3f46' }}
-                          onClick={() => setPatientData(p => ({ ...p, sexo: s }))}
-                        >
-                          {s}
-                        </Button>
+                          onClick={() => setPatientData(p => ({ ...p, sexo: s }))}>{s}</Button>
                       ))}
                     </ButtonGroup>
                   </FormControl>
 
                   <FormControl>
                     <FormLabel color="#0ea5e9" fontWeight="900" fontSize="14px">IMPRESIÓN DIAGNÓSTICA</FormLabel>
-                    <Select
-                      h="55px" fontSize="16px" fontWeight="900"
+                    <Select h="55px" fontSize="16px" fontWeight="900"
                       bg="#09090b" color="white" border="2px solid #3f3f46"
                       value={patientData.diagnostico}
-                      onChange={e => setPatientData(p => ({ ...p, diagnostico: e.target.value }))}
-                    >
+                      onChange={e => setPatientData(p => ({ ...p, diagnostico: e.target.value }))}>
                       {DIAGNOSTICOS_RAPIDOS.map(d => (
                         <option key={d} value={d} style={{ background: '#09090b' }}>{d}</option>
                       ))}
@@ -1248,16 +1115,11 @@ const startNavigationEngine = async (targetLoc, mode = 'manual', address = '') =
                         const dist = myLocation ? calcDistance(myLocation.lat, myLocation.lng, h.lat, h.lng) : 0;
                         const camas = h.camasEmergencia ?? h.camasDisponibles ?? 0;
                         return (
-                          <Button
-                            key={h.id}
-                            h="75px" w="100%"
-                            justifyContent="space-between" px={4}
+                          <Button key={h.id} h="75px" w="100%" justifyContent="space-between" px={4}
                             bg={isSelected ? 'rgba(16,185,129,0.15)' : '#27272a'}
-                            border="2px solid"
-                            borderColor={isSelected ? '#10b981' : 'transparent'}
+                            border="2px solid" borderColor={isSelected ? '#10b981' : 'transparent'}
                             _hover={{ bg: isSelected ? 'rgba(16,185,129,0.25)' : '#3f3f46' }}
-                            onClick={() => setSelectedHospitalId(h.id)}
-                          >
+                            onClick={() => setSelectedHospitalId(h.id)}>
                             <VStack align="start" spacing={0}>
                               <Text fontSize="16px" fontWeight="900" color="white" noOfLines={1}>{h.nombre}</Text>
                               <Text fontSize="12px" color="#10b981" fontWeight="900">
@@ -1265,7 +1127,7 @@ const startNavigationEngine = async (targetLoc, mode = 'manual', address = '') =
                               </Text>
                             </VStack>
                             <Text fontSize="16px" fontWeight="900" color="#a1a1aa">
-                              ~{fmtDist(dist)} <span style={{ fontSize: '10px' }}>(Dist. Lineal)</span>
+                              ~{fmtDist(dist)}
                             </Text>
                           </Button>
                         );
@@ -1283,15 +1145,11 @@ const startNavigationEngine = async (targetLoc, mode = 'manual', address = '') =
 
           {drawerMode === 'trasladar' && (
             <DrawerFooter bg="#18181b" borderTop="1px solid #27272a" p={4} position="absolute" bottom={0} w="100%">
-              <Button
-                w="100%" h="60px"
-                bg="#10b981" color="white"
+              <Button w="100%" h="60px" bg="#10b981" color="white"
                 fontSize="18px" fontWeight="900" letterSpacing="1px"
                 _hover={{ bg: '#059669' }}
                 isDisabled={!selectedHospitalId || isSending}
-                isLoading={isSending}
-                onClick={handleSendTransfer}
-              >
+                isLoading={isSending} onClick={handleSendTransfer}>
                 CONFIRMAR RUTA
               </Button>
             </DrawerFooter>
@@ -1299,18 +1157,10 @@ const startNavigationEngine = async (targetLoc, mode = 'manual', address = '') =
         </DrawerContent>
       </Drawer>
 
-      {/* ==================== MODAL DE OFERTA DE EMERGENCIA (HANDSHAKE) ==================== */}
-      <Modal
-        isOpen={!!pendingOffer}
-        onClose={() => {}}
-        size="xl"
-        isCentered
-        closeOnOverlayClick={false}
-        closeOnEsc={false}
-      >
+      {/* MODAL DE OFERTA */}
+      <Modal isOpen={!!pendingOffer} onClose={() => {}} size="xl" isCentered closeOnOverlayClick={false} closeOnEsc={false}>
         <ModalOverlay bg="rgba(0,0,0,0.92)" backdropFilter="blur(8px)" />
         <ModalContent bg="#09090b" border="3px solid #ef4444" borderRadius="2xl" overflow="hidden" mx={4}>
-          {/* ─── CAMBIO 4.4 (a): Título dinámico según standby ─── */}
           <Box bg="#ef4444" py={4} textAlign="center">
             <HStack justify="center" spacing={3}>
               <Icon as={FaAmbulance} boxSize={7} color="white" />
@@ -1321,44 +1171,32 @@ const startNavigationEngine = async (targetLoc, mode = 'manual', address = '') =
           </Box>
 
           <ModalBody p={6}>
-            {/* Cuenta regresiva */}
             <Box mb={5}>
               <HStack justify="space-between" mb={2}>
                 <Text fontSize="12px" fontWeight="900" color="#a1a1aa" letterSpacing="1px">
                   TIEMPO PARA RESPONDER
                 </Text>
-                <Text
-                  fontSize="22px"
-                  fontWeight="900"
-                  color={offerTimeLeft <= 5 ? '#ef4444' : '#f59e0b'}
-                >
+                <Text fontSize="22px" fontWeight="900" color={offerTimeLeft <= 5 ? '#ef4444' : '#f59e0b'}>
                   {offerTimeLeft}s
                 </Text>
               </HStack>
-              <Progress
-                value={(offerTimeLeft / 20) * 100}
-                h="10px"
-                borderRadius="full"
-                bg="#27272a"
+              <Progress value={(offerTimeLeft / 20) * 100} h="10px" borderRadius="full" bg="#27272a"
                 sx={{
                   '& > div': {
                     background: offerTimeLeft <= 5 ? '#ef4444' : '#f59e0b',
                     transition: 'width 1s linear'
                   }
-                }}
-              />
+                }} />
             </Box>
 
-            {/* ─── CAMBIO 4.4 (b): Aviso ámbar cuando el operador está en standby ─── */}
             {pendingOffer?.isStandby && (
               <Box bg="rgba(245,158,11,0.15)" p={3} borderRadius="md" border="1px solid #f59e0b" mb={4}>
                 <Text fontSize="12px" fontWeight="900" color="#f59e0b" letterSpacing="0.5px" textAlign="center">
-                  ⚠️ ESTÁS EN FUERA DE SERVICIO. Si ACEPTAS, tu unidad cambiará a EN RUTA.
+                  ESTÁS EN FUERA DE SERVICIO. Si ACEPTAS, tu unidad cambiará a EN RUTA.
                 </Text>
               </Box>
             )}
 
-            {/* Tipo de emergencia */}
             <Box bg="#18181b" p={5} borderRadius="xl" border="1px solid #3f3f46" mb={4}>
               <Text fontSize="12px" fontWeight="900" color="#a1a1aa" mb={1} letterSpacing="1px">
                 TIPO DE EMERGENCIA
@@ -1368,7 +1206,6 @@ const startNavigationEngine = async (targetLoc, mode = 'manual', address = '') =
               </Text>
             </Box>
 
-            {/* Dirección + distancia */}
             <Box bg="#18181b" p={5} borderRadius="xl" border="1px solid #3f3f46" mb={4}>
               <Text fontSize="12px" fontWeight="900" color="#a1a1aa" mb={1} letterSpacing="1px">
                 DIRECCIÓN
@@ -1377,17 +1214,12 @@ const startNavigationEngine = async (targetLoc, mode = 'manual', address = '') =
                 {pendingOffer?.address || 'Sin dirección'}
               </Text>
               {pendingOffer?.distanceKm != null && (
-                <Badge
-                  bg="#0ea5e9" color="white"
-                  px={3} py={1} borderRadius="md"
-                  fontSize="14px" fontWeight="900"
-                >
+                <Badge bg="#0ea5e9" color="white" px={3} py={1} borderRadius="md" fontSize="14px" fontWeight="900">
                   DISTANCIA: {fmtDist(pendingOffer.distanceKm)}
                 </Badge>
               )}
             </Box>
 
-            {/* Info del paciente si viene */}
             {pendingOffer?.patientInfo && Object.keys(pendingOffer.patientInfo).length > 0 && (
               <Box bg="#18181b" p={5} borderRadius="xl" border="1px solid #3f3f46" mb={4}>
                 <Text fontSize="12px" fontWeight="900" color="#a1a1aa" mb={3} letterSpacing="1px">
@@ -1414,25 +1246,16 @@ const startNavigationEngine = async (targetLoc, mode = 'manual', address = '') =
           <ModalFooter p={6} bg="#09090b" borderTop="1px solid #27272a">
             {!offerRejecting ? (
               <HStack w="100%" spacing={4}>
-                <Button
-                  flex={1} h="80px"
-                  bg="#27272a" color="#ef4444"
-                  border="2px solid #ef4444"
-                  fontSize="18px" fontWeight="900" borderRadius="xl"
-                  _hover={{ bg: '#3f3f46' }}
-                  onClick={() => setOfferRejecting(true)}
-                >
-                  ❌ RECHAZAR
+                <Button flex={1} h="80px" bg="#27272a" color="#ef4444"
+                  border="2px solid #ef4444" fontSize="18px" fontWeight="900" borderRadius="xl"
+                  _hover={{ bg: '#3f3f46' }} onClick={() => setOfferRejecting(true)}>
+                  RECHAZAR
                 </Button>
-                <Button
-                  flex={1.5} h="80px"
-                  bg="#10b981" color="white"
+                <Button flex={1.5} h="80px" bg="#10b981" color="white"
                   fontSize="22px" fontWeight="900" letterSpacing="1px" borderRadius="xl"
                   _hover={{ bg: '#059669', transform: 'scale(1.02)' }}
-                  onClick={acceptOffer}
-                  boxShadow="0 10px 20px rgba(16,185,129,0.3)"
-                >
-                  ✅ ACEPTAR
+                  onClick={acceptOffer} boxShadow="0 10px 20px rgba(16,185,129,0.3)">
+                  ACEPTAR
                 </Button>
               </HStack>
             ) : (
@@ -1441,45 +1264,24 @@ const startNavigationEngine = async (targetLoc, mode = 'manual', address = '') =
                   MOTIVO DE RECHAZO
                 </Text>
                 <SimpleGrid columns={2} spacing={3} w="100%">
-                  <Button
-                    h="60px" bg="#27272a" color="white"
-                    fontSize="14px" fontWeight="900" borderRadius="xl"
-                    _hover={{ bg: '#3f3f46' }}
-                    onClick={() => rejectOffer('Sin combustible')}
-                  >
-                    ⛽ SIN COMBUSTIBLE
+                  <Button h="60px" bg="#27272a" color="white" fontSize="14px" fontWeight="900" borderRadius="xl"
+                    _hover={{ bg: '#3f3f46' }} onClick={() => rejectOffer('Sin combustible')}>
+                    SIN COMBUSTIBLE
                   </Button>
-                  <Button
-                    h="60px" bg="#27272a" color="white"
-                    fontSize="14px" fontWeight="900" borderRadius="xl"
-                    _hover={{ bg: '#3f3f46' }}
-                    onClick={() => rejectOffer('Problema mecánico')}
-                  >
-                    🛠️ PROBLEMA MECÁNICO
+                  <Button h="60px" bg="#27272a" color="white" fontSize="14px" fontWeight="900" borderRadius="xl"
+                    _hover={{ bg: '#3f3f46' }} onClick={() => rejectOffer('Problema mecánico')}>
+                    PROBLEMA MECÁNICO
                   </Button>
-                  <Button
-                    h="60px" bg="#27272a" color="white"
-                    fontSize="14px" fontWeight="900" borderRadius="xl"
-                    _hover={{ bg: '#3f3f46' }}
-                    onClick={() => rejectOffer('Otra asignación')}
-                  >
-                    📋 OTRA ASIGNACIÓN
+                  <Button h="60px" bg="#27272a" color="white" fontSize="14px" fontWeight="900" borderRadius="xl"
+                    _hover={{ bg: '#3f3f46' }} onClick={() => rejectOffer('Otra asignación')}>
+                    OTRA ASIGNACIÓN
                   </Button>
-                  <Button
-                    h="60px" bg="#27272a" color="white"
-                    fontSize="14px" fontWeight="900" borderRadius="xl"
-                    _hover={{ bg: '#3f3f46' }}
-                    onClick={() => rejectOffer('No especificado')}
-                  >
-                    ❓ OTRO
+                  <Button h="60px" bg="#27272a" color="white" fontSize="14px" fontWeight="900" borderRadius="xl"
+                    _hover={{ bg: '#3f3f46' }} onClick={() => rejectOffer('No especificado')}>
+                    OTRO
                   </Button>
                 </SimpleGrid>
-                <Button
-                  variant="ghost"
-                  color="#a1a1aa"
-                  fontSize="14px" fontWeight="900"
-                  onClick={() => setOfferRejecting(false)}
-                >
+                <Button variant="ghost" color="#a1a1aa" fontSize="14px" fontWeight="900" onClick={() => setOfferRejecting(false)}>
                   ← VOLVER
                 </Button>
               </VStack>
@@ -1488,7 +1290,7 @@ const startNavigationEngine = async (targetLoc, mode = 'manual', address = '') =
         </ModalContent>
       </Modal>
 
-      {/* ==================== ALERTA DE LOGOUT ==================== */}
+      {/* ALERTA LOGOUT */}
       <Modal isOpen={isAlertOpen} onClose={onAlertClose} isCentered blockScrollOnMount={false} trapFocus={false}>
         <ModalOverlay bg="rgba(0,0,0,0.7)" backdropFilter="blur(3px)" />
         <ModalContent bg="#09090b" border="2px solid #ef4444" borderRadius="2xl" p={4} mx={4}>
@@ -1512,9 +1314,7 @@ const startNavigationEngine = async (targetLoc, mode = 'manual', address = '') =
   );
 }
 
-// ========================================================================
-// MODAL REGISTRO INICIAL
-// ========================================================================
+// ==================== REGISTRO ====================
 const RegistrationModal = ({ onRegister }) => {
   const [form, setForm] = useState({ id: '', placa: '', nombre: '', tipo: 'UVI Móvil' });
   const [error, setError] = useState('');
@@ -1545,59 +1345,37 @@ const RegistrationModal = ({ onRegister }) => {
           <VStack spacing={4}>
             <FormControl>
               <FormLabel color="#a1a1aa" fontWeight="900" fontSize="11px">ID OPERATIVO *</FormLabel>
-              <Input
-                bg="#18181b" border="2px solid #3f3f46" color="white"
-                h="50px" fontSize="18px" fontWeight="900"
-                textAlign="center" textTransform="uppercase"
-                value={form.id}
-                onChange={e => setForm(p => ({ ...p, id: e.target.value }))}
-              />
+              <Input bg="#18181b" border="2px solid #3f3f46" color="white"
+                h="50px" fontSize="18px" fontWeight="900" textAlign="center" textTransform="uppercase"
+                value={form.id} onChange={e => setForm(p => ({ ...p, id: e.target.value }))} />
             </FormControl>
             <FormControl>
               <FormLabel color="#a1a1aa" fontWeight="900" fontSize="11px">PLACA *</FormLabel>
-              <Input
-                bg="#18181b" border="2px solid #3f3f46" color="white"
-                h="50px" fontSize="18px" fontWeight="900"
-                textAlign="center" textTransform="uppercase"
-                value={form.placa}
-                onChange={e => setForm(p => ({ ...p, placa: e.target.value }))}
-              />
+              <Input bg="#18181b" border="2px solid #3f3f46" color="white"
+                h="50px" fontSize="18px" fontWeight="900" textAlign="center" textTransform="uppercase"
+                value={form.placa} onChange={e => setForm(p => ({ ...p, placa: e.target.value }))} />
             </FormControl>
             <FormControl>
               <FormLabel color="#a1a1aa" fontWeight="900" fontSize="11px">NOMBRE BASE *</FormLabel>
-              <Input
-                bg="#18181b" border="2px solid #3f3f46" color="white"
-                h="50px" fontSize="16px" fontWeight="900"
-                textAlign="center"
-                value={form.nombre}
-                onChange={e => setForm(p => ({ ...p, nombre: e.target.value }))}
-              />
+              <Input bg="#18181b" border="2px solid #3f3f46" color="white"
+                h="50px" fontSize="16px" fontWeight="900" textAlign="center"
+                value={form.nombre} onChange={e => setForm(p => ({ ...p, nombre: e.target.value }))} />
             </FormControl>
             <FormControl>
               <FormLabel color="#a1a1aa" fontWeight="900" fontSize="11px">TIPO DE UNIDAD</FormLabel>
-              <Select
-                bg="#18181b" border="2px solid #3f3f46" color="white"
+              <Select bg="#18181b" border="2px solid #3f3f46" color="white"
                 h="50px" fontSize="14px" fontWeight="900"
-                value={form.tipo}
-                onChange={e => setForm(p => ({ ...p, tipo: e.target.value }))}
-              >
+                value={form.tipo} onChange={e => setForm(p => ({ ...p, tipo: e.target.value }))}>
                 {TIPOS_AMBULANCIA.map(t => (
                   <option key={t} value={t} style={{ background: '#09090b' }}>{t}</option>
                 ))}
               </Select>
             </FormControl>
-            {error && (
-              <Text color="#ef4444" fontWeight="900" fontSize="12px" textAlign="center">{error}</Text>
-            )}
+            {error && <Text color="#ef4444" fontWeight="900" fontSize="12px" textAlign="center">{error}</Text>}
           </VStack>
         </ModalBody>
         <ModalFooter>
-          <Button
-            w="100%" h="60px"
-            bg="#0ea5e9" color="white"
-            fontSize="16px" fontWeight="900"
-            onClick={handleSubmit}
-          >
+          <Button w="100%" h="60px" bg="#0ea5e9" color="white" fontSize="16px" fontWeight="900" onClick={handleSubmit}>
             VINCULAR SISTEMA
           </Button>
         </ModalFooter>
@@ -1605,13 +1383,3 @@ const RegistrationModal = ({ onRegister }) => {
     </Modal>
   );
 };
-
-function calcDistance(lat1, lon1, lat2, lon2) {
-  const R = 6371;
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}

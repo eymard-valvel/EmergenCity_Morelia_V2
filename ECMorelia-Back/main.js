@@ -18,6 +18,8 @@ const doctor = require('./routes/doctor.js')
 const reportePrehospitalario = require('./routes/reportePrehospitalario.js')
 const receptor = require('./routes/receptor.js')
 const nlpRoutes = require('./routes/nlp')
+const FOURSQUARE_KEY = process.env.FOURSQUARE_KEY || '';
+const FOURSQUARE_BASE = 'https://places-api.foursquare.com/places/search';
 
 const { attachV2WebSocket } = require('./ws-core')
 
@@ -62,6 +64,47 @@ app.get('/api/ambulances/active', (req, res) => {
   }))
   res.json({ success: true, data: ambulancesList, total: ambulancesList.length })
 })
+
+app.post('/api/places/search', async (req, res) => {
+  try {
+    const { query, lat, lng, radius = 15000, limit = 10 } = req.body || {};
+
+    if (!query || typeof query !== 'string' || query.trim().length < 2) {
+      return res.status(400).json({ error: 'query requerido' });
+    }
+    if (!FOURSQUARE_KEY) {
+      return res.status(503).json({ error: 'FOURSQUARE_KEY no configurada' });
+    }
+
+    const params = new URLSearchParams({
+      query: query.trim(),
+      ll: `${lat ?? 19.7024},${lng ?? -101.1969}`,
+      radius: String(radius),
+      limit: String(limit),
+      sort: 'RELEVANCE',
+      fields: 'fsq_place_id,name,location,categories,distance,geocodes',
+    });
+
+    const resp = await fetch(`${FOURSQUARE_BASE}?${params.toString()}`, {
+      headers: {
+        'Authorization': `Bearer ${FOURSQUARE_KEY}`,
+        'X-Places-Api-Version': '2025-06-17',
+        'Accept': 'application/json',
+      },
+    });
+
+    if (!resp.ok) {
+      console.warn('[Foursquare proxy] HTTP', resp.status);
+      return res.status(resp.status).json({ error: `Foursquare HTTP ${resp.status}` });
+    }
+
+    const data = await resp.json();
+    res.json({ results: data.results || [] });
+  } catch (e) {
+    console.error('[Foursquare proxy] Error:', e.message);
+    res.status(500).json({ error: 'Error consultando Foursquare' });
+  }
+});
 
 app.get('/api/ambulances/health', (req, res) => {
   if (!wsState) {

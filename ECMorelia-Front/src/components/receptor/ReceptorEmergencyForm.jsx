@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { searchPlaces, getPlaceTypeLabel } from '../../helpers/placeSearch.js';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import {
@@ -14,10 +15,9 @@ import {
 } from 'react-icons/fa';
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN ||
-  'pk.eyJ1IjoiZXltYXJkMjkiLCJhIjoiY21tcDY4YzNpMGw3bjJzb203YmZyNTVnMyJ9.OvZlnCMfUkUYe6Ib83DUVw';
+  'pk.eyJ1IjoiZXltYXJkMjkiLCJhIjoiY21tcDY4YzNpMGw3bjJzb203YmZyNTVnMyI';
 
 const DEFAULT_CENTER = { lat: 19.7024, lng: -101.1969 };
-const MORELIA_CENTER = { lat: 19.7024, lng: -101.1969 };
 const SEARCH_DEBOUNCE_MS = 250;
 const SUCCESS_BANNER_MS = 3500;
 const UI_RESET_MS = 4000;
@@ -55,18 +55,6 @@ const formatResumenPaciente = (p, idx) => {
   return parts.join(' · ');
 };
 
-// Tipos de resultado con etiqueta legible para el dropdown
-const PLACE_TYPE_LABEL = {
-  address: 'DIRECCIÓN',
-  poi: 'LUGAR',
-  place: 'COLONIA / ZONA',
-  locality: 'LOCALIDAD',
-  neighborhood: 'FRACCIONAMIENTO',
-  district: 'DISTRITO',
-  region: 'REGIÓN',
-  country: 'PAÍS',
-};
-
 const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbulances = [] }) => {
   const toast = useToast();
 
@@ -77,8 +65,8 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
   const searchDebounceTimer = useRef(null);
   const skipNextReverseGeocode = useRef(false);
   const ambulanceMarkersRef = useRef({});
+  const searchAbortRef = useRef(null);
 
-  // Estados de Interfaz
   const [activeAccordion, setActiveAccordion] = useState(0);
   const [addressQuery, setAddressQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
@@ -86,7 +74,6 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
   const [isSearching, setIsSearching] = useState(false);
   const [selectedLocation, setSelectedLocation] = useState(DEFAULT_CENTER);
 
-  // Datos del Formulario
   const [referencias, setReferencias] = useState('');
   const [tipoIncidente, setTipoIncidente] = useState('');
   const [otroIncidente, setOtroIncidente] = useState('');
@@ -94,7 +81,6 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
   const [pacientes, setPacientes] = useState([createEmptyPaciente()]);
   const [riesgos, setRiesgos] = useState([]);
 
-  // Estado de completado de secciones
   const [seccion1Completa, setSeccion1Completa] = useState(false);
   const [seccion4Revisada, setSeccion4Revisada] = useState(false);
 
@@ -102,7 +88,6 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
   const [showSuccessBanner, setShowSuccessBanner] = useState(false);
   const [lastAssignedCallId, setLastAssignedCallId] = useState(null);
 
-  // Validación: al menos 1 paciente con datos mínimos (sexo, consciente, respira)
   const firstPacienteOk = pacientes[0] && pacientes[0].sexo !== '' && pacientes[0].consciente !== '';
   const isFormValid =
     addressQuery.trim() !== '' &&
@@ -115,7 +100,6 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
     p.sexo !== '' || p.consciente !== '' || p.edad !== '' || p.respira !== ''
   );
 
-  // ==================== GEOLOCALIZACIÓN INVERSA ====================
   const reverseGeocode = useCallback(async (lng, lat) => {
     const reqId = ++reverseGeocodeRequestId.current;
     try {
@@ -123,15 +107,13 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
       const res = await fetch(url);
       const data = await res.json();
       if (reqId !== reverseGeocodeRequestId.current) return;
-      if (data.features?.length > 0) {
-        setAddressQuery(data.features[0].place_name);
-      }
+      if (data.features?.length > 0) setAddressQuery(data.features[0].place_name);
     } catch (e) {
       console.error('RevGeocode Error:', e);
     }
   }, []);
 
-  // ==================== INICIALIZACIÓN DEL MAPA ====================
+  // ===== Init del mapa =====
   useEffect(() => {
     if (!mapContainer.current) return;
     const mapInstance = new mapboxgl.Map({
@@ -162,24 +144,39 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
     return () => mapInstance.remove();
   }, [reverseGeocode]);
 
-  // ==================== MARCADORES DE AMBULANCIAS EN EL MAPA ====================
+  // ===== FIX: preservar centro del mapa cuando cambia el tamaño del contenedor =====
+  useEffect(() => {
+    if (!mapContainer.current) return;
+    const container = mapContainer.current;
+    let rafId = null;
+    const observer = new ResizeObserver(() => {
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(() => {
+        if (!map.current) return;
+        const center = map.current.getCenter();
+        map.current.resize();
+        // Preservar el centro geográfico: el crosshair queda sobre el mismo punto
+        map.current.setCenter(center);
+      });
+    });
+    observer.observe(container);
+    return () => {
+      if (rafId) cancelAnimationFrame(rafId);
+      observer.disconnect();
+    };
+  }, []);
+
+  // ===== Marcadores de ambulancias =====
   useEffect(() => {
     if (!map.current) return;
-
     const activeIds = new Set();
 
     activeAmbulances.forEach(amb => {
-      // Ocultar las que están en ruta u ocupadas (como se pidió)
       if (amb.status === 'en_ruta' || amb.status === 'ocupado') {
-        // Si existía el marcador, lo quitamos
         const existing = ambulanceMarkersRef.current[amb.id];
-        if (existing) {
-          existing.remove();
-          delete ambulanceMarkersRef.current[amb.id];
-        }
+        if (existing) { existing.remove(); delete ambulanceMarkersRef.current[amb.id]; }
         return;
       }
-
       if (!amb.location?.lat || !amb.location?.lng) return;
 
       activeIds.add(amb.id);
@@ -215,7 +212,6 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
       }
     });
 
-    // Limpiar marcadores de ambulancias que ya no están
     Object.keys(ambulanceMarkersRef.current).forEach(id => {
       if (!activeIds.has(id)) {
         ambulanceMarkersRef.current[id].remove();
@@ -224,62 +220,40 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
     });
   }, [activeAmbulances]);
 
-  // ==================== BÚSQUEDA PANORÁMICA (Google-like) ====================
-  const searchAddresses = useCallback((query) => {
-    if (searchDebounceTimer.current) clearTimeout(searchDebounceTimer.current);
-    if (!query || query.trim().length < 3) {
-      setSearchResults([]);
-      setHighlightedIndex(-1);
-      setIsSearching(false);
-      return;
-    }
-    setIsSearching(true);
-    searchDebounceTimer.current = setTimeout(async () => {
-      const reqId = ++searchRequestId.current;
-      try {
-        const bbox = '-101.35,19.55,-101.00,19.85';
-        const proximity = '-101.1969,19.7024';
-        const q = encodeURIComponent(query.trim());
-        // Sin restricción de types → permite POIs, plazas, fraccionamientos, colonias
-        const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${q}.json?access_token=${mapboxgl.accessToken}&country=mx&bbox=${bbox}&proximity=${proximity}&limit=8&language=es&fuzzyMatch=true`;
-        const res = await fetch(url);
-        const data = await res.json();
-        if (reqId !== searchRequestId.current) return;
-        let results = (data.features || []).map(f => ({
-          id: f.id,
-          place_name: f.place_name,
-          lat: f.center[1],
-          lng: f.center[0],
-          type: f.place_type?.[0] || 'place',
-          relevance: f.relevance || 0,
-        }));
+  // ===== Búsqueda =====
+const searchAddresses = useCallback((query) => {
+  if (searchDebounceTimer.current) clearTimeout(searchDebounceTimer.current);
+  if (!query || query.trim().length < 2) {
+    setSearchResults([]);
+    setHighlightedIndex(-1);
+    setIsSearching(false);
+    return;
+  }
+  setIsSearching(true);
+  searchDebounceTimer.current = setTimeout(async () => {
+    if (searchAbortRef.current) searchAbortRef.current.abort();
+    const controller = new AbortController();
+    searchAbortRef.current = controller;
+    const reqId = ++searchRequestId.current;
 
-        // Fallback: si nada apareció, intentar con "Morelia" pegado
-        if (results.length === 0) {
-          const q2 = encodeURIComponent(`${query.trim()} Morelia`);
-          const url2 = `https://api.mapbox.com/geocoding/v5/mapbox.places/${q2}.json?access_token=${mapboxgl.accessToken}&country=mx&proximity=${proximity}&limit=8&language=es&fuzzyMatch=true`;
-          const res2 = await fetch(url2);
-          const data2 = await res2.json();
-          if (reqId !== searchRequestId.current) return;
-          results = (data2.features || []).map(f => ({
-            id: f.id,
-            place_name: f.place_name,
-            lat: f.center[1],
-            lng: f.center[0],
-            type: f.place_type?.[0] || 'place',
-            relevance: f.relevance || 0,
-          }));
-        }
-        setSearchResults(results);
-        setHighlightedIndex(results.length > 0 ? 0 : -1);
-      } catch (e) {
-        if (reqId === searchRequestId.current) setSearchResults([]);
-      } finally {
-        if (reqId === searchRequestId.current) setIsSearching(false);
+    try {
+      const results = await searchPlaces(query, {
+        proximity: selectedLocation,
+        mapboxToken: mapboxgl.accessToken,
+        signal: controller.signal,
+      });
+      if (reqId !== searchRequestId.current) return;
+      setSearchResults(results);
+      setHighlightedIndex(results.length > 0 ? 0 : -1);
+    } catch (e) {
+      if (e.name !== 'AbortError' && reqId === searchRequestId.current) {
+        setSearchResults([]);
       }
-    }, SEARCH_DEBOUNCE_MS);
-  }, []);
-
+    } finally {
+      if (reqId === searchRequestId.current) setIsSearching(false);
+    }
+  }, SEARCH_DEBOUNCE_MS);
+}, [selectedLocation]);
   const selectSearchResult = useCallback((result) => {
     if (!result) return;
     skipNextReverseGeocode.current = true;
@@ -317,19 +291,14 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
     }
   };
 
-  // ==================== VISTA PANORÁMICA ====================
   const handleCityView = () => {
     if (!map.current) return;
     map.current.flyTo({
-      center: [MORELIA_CENTER.lng, MORELIA_CENTER.lat],
-      zoom: 11.5,
-      pitch: 0,
-      bearing: 0,
-      duration: 1200
+      center: [DEFAULT_CENTER.lng, DEFAULT_CENTER.lat],
+      zoom: 11.5, pitch: 0, bearing: 0, duration: 1200
     });
   };
 
-  // ==================== HANDLERS DE FORMULARIO ====================
   const handleIncidenteSelect = (tipo) => {
     setTipoIncidente(tipo);
     if (tipo !== 'Otro') setActiveAccordion(2);
@@ -374,7 +343,6 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
     setSeccion4Revisada(false);
   };
 
-  // ==================== DESPACHO ====================
   const executeDispatch = () => {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) {
@@ -388,10 +356,7 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
     const requestId = `req_${Date.now()}`;
     const resumenLineas = pacientes.map((p, i) => formatResumenPaciente(p, i));
 
-    // patientInfo compatible: mantiene campos del primer paciente al nivel superior
-    // y añade estructura multi-paciente.
     const patientInfo = {
-      // ---- Compatibilidad con formato anterior ----
       sexo: pacientes[0]?.sexo || '',
       edad: pacientes[0]?.edad || '',
       consciente: pacientes[0]?.consciente || '',
@@ -399,7 +364,6 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
       sangrado: pacientes[0]?.sangrado || '',
       atrapado: pacientes[0]?.atrapado || '',
       lesionados: cantidadPacientes,
-      // ---- Nueva estructura multi-paciente ----
       cantidad: cantidadPacientes,
       pacientes: pacientes.map(p => ({ ...p })),
       resumen: resumenLineas,
@@ -424,7 +388,6 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
     const finalizeOnAck = (data) => {
       if (ackReceived) return;
       ackReceived = true;
-
       if (cleanupTimer) clearTimeout(cleanupTimer);
       try { ws.removeEventListener('message', responseHandler); } catch (_) {}
 
@@ -444,7 +407,6 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
         });
         resetForm();
       }
-
       if (onEmergencySent) onEmergencySent();
     };
 
@@ -454,7 +416,7 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
         if (data.type === 'emergency_assigned_ack' || data.type === 'emergency_assignment_failed') {
           finalizeOnAck(data);
         }
-      } catch (_) { /* ignorar */ }
+      } catch (_) {}
     };
 
     try {
@@ -485,11 +447,10 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
     }
   };
 
-  // ==================== RENDER ====================
   return (
     <Flex h="100%" w="100%" bg="#09090b" direction={{ base: 'column-reverse', xl: 'row' }}>
 
-      {/* ===== PANEL IZQUIERDO: FORMULARIO ACORDEÓN ===== */}
+      {/* PANEL IZQUIERDO */}
       <Flex w={{ base: '100%', xl: '680px' }} flexShrink={0} direction="column" bg="#09090b" borderRight="1px solid #27272a" h="100%" zIndex={2}>
         <Box p={5} borderBottom="1px solid #27272a" bg="#09090b">
           <Heading fontSize="18px" color="#f8fafc" fontWeight="900" letterSpacing="1px">MATRIZ DE CAPTURA</Heading>
@@ -504,7 +465,7 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
               <AccordionButton py={5} bg={activeAccordion === 0 ? '#18181b' : 'transparent'} _hover={{ bg: '#18181b' }}>
                 <Box flex="1" textAlign="left">
                   <HStack>
-                    <Icon as={FaMapMarkerAlt} color={seccion1Completa ? '#10b981' : (referencias ? '#10b981' : '#a1a1aa')} />
+                    <Icon as={FaMapMarkerAlt} color={seccion1Completa || referencias ? '#10b981' : '#a1a1aa'} />
                     <Text fontSize="15px" fontWeight="900" color="#f8fafc">1. REFERENCIAS VISUALES</Text>
                     {seccion1Completa && <Icon as={FaCheck} color="#10b981" boxSize={3} />}
                   </HStack>
@@ -542,7 +503,7 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
                 <AccordionIcon color="#a1a1aa" />
               </AccordionButton>
               <AccordionPanel pb={6} bg="#09090b">
-                <SimpleGrid columns={3} spacing={3} gap={3}>
+                <SimpleGrid columns={3} spacing={3}>
                   {TIPOS_INCIDENTE.map(tipo => (
                     <Button key={tipo} size="md" whiteSpace="normal" height="100%" minH="60px"
                       bg={tipoIncidente === tipo ? '#0284c7' : '#18181b'} color={tipoIncidente === tipo ? 'white' : '#d4d4d8'}
@@ -576,7 +537,7 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
               </AccordionPanel>
             </AccordionItem>
 
-            {/* 3. PERSONAS AFECTADAS (MULTI-PACIENTE) */}
+            {/* 3. PERSONAS AFECTADAS */}
             <AccordionItem border="none" borderBottom="1px solid #27272a">
               <AccordionButton py={5} bg={activeAccordion === 2 ? '#18181b' : 'transparent'} _hover={{ bg: '#18181b' }}>
                 <Box flex="1" textAlign="left">
@@ -588,7 +549,6 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
                 <AccordionIcon color="#a1a1aa" />
               </AccordionButton>
               <AccordionPanel pb={6} bg="#09090b">
-                {/* Cantidad de afectados */}
                 <Box mb={6}>
                   <Text fontSize="12px" color="#a1a1aa" mb={2} fontWeight="800">¿CUÁNTAS PERSONAS ESTÁN AFECTADAS?</Text>
                   <HStack w="100%">
@@ -615,7 +575,6 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
                   )}
                 </Box>
 
-                {/* Fichas: 1 paciente → ficha simple; 2+ → tarjetas colapsables */}
                 {cantidadPacientes === 1 ? (
                   <PacienteFields
                     paciente={pacientes[0]}
@@ -646,7 +605,7 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
               </AccordionPanel>
             </AccordionItem>
 
-            {/* 4. RIESGOS EN LA ESCENA */}
+            {/* 4. RIESGOS */}
             <AccordionItem border="none">
               <AccordionButton
                 py={5}
@@ -685,7 +644,6 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
           </Accordion>
         </Box>
 
-        {/* BOTÓN DE DESPACHO GIGANTE */}
         <Box p={6} bg="#09090b" borderTop="1px solid #27272a" boxShadow="0 -10px 30px rgba(0,0,0,0.5)">
           <Button
             w="100%" h="80px" bg={isFormValid ? '#dc2626' : '#18181b'} color={isFormValid ? 'white' : '#52525b'}
@@ -700,10 +658,8 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
         </Box>
       </Flex>
 
-      {/* ===== PANEL DERECHO: MAPA ===== */}
-      <Box flex={1} position="relative" h={{ base: '50vh', xl: '100%' }}>
-
-        {/* BUSCADOR PANORÁMICO */}
+      {/* PANEL DERECHO: MAPA */}
+      <Box flex={1} position="relative" h={{ base: '50vh', xl: '100%' }} minW={0}>
         <Box position="absolute" top={0} left={0} right={0} zIndex={10} bg="rgba(9,9,11,0.9)" borderBottom="1px solid #27272a" p={4} backdropFilter="blur(10px)">
           <InputGroup size="lg" w="100%" h="60px">
             <Input
@@ -731,7 +687,7 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
             >
               {searchResults.map((res, idx) => {
                 const isHighlighted = idx === highlightedIndex;
-                const typeLabel = PLACE_TYPE_LABEL[res.type] || 'LUGAR';
+const typeLabel = getPlaceTypeLabel(res.type, res.source, res.categories);
                 return (
                   <ListItem
                     key={res.id}
@@ -746,11 +702,9 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
                     <HStack align="start" spacing={3}>
                       <Icon as={FaMapMarkerAlt} color={isHighlighted ? '#38bdf8' : '#ef4444'} boxSize={5} mt={0.5} />
                       <VStack align="start" spacing={1} flex={1}>
-                        <HStack spacing={2}>
-                          <Box px={2} py={0.5} bg="#27272a" borderRadius="sm">
-                            <Text fontSize="9px" fontWeight="900" color="#38bdf8" letterSpacing="0.5px">{typeLabel}</Text>
-                          </Box>
-                        </HStack>
+                        <Box px={2} py={0.5} bg="#27272a" borderRadius="sm">
+                          <Text fontSize="9px" fontWeight="900" color="#38bdf8" letterSpacing="0.5px">{typeLabel}</Text>
+                        </Box>
                         <Text fontSize="15px" fontWeight="700" color="#e4e4e7" noOfLines={2} textAlign="left">
                           {res.place_name}
                         </Text>
@@ -765,14 +719,12 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
 
         <div ref={mapContainer} style={{ width: '100%', height: '100%' }} />
 
-        {/* Mira central estilo GPS */}
         <Box position="absolute" top="50%" left="50%" transform="translate(-50%, -50%)" pointerEvents="none" zIndex={5}>
           <Box w="50px" h="50px" border="2px solid #ef4444" borderRadius="50%" display="flex" alignItems="center" justifyContent="center" bg="rgba(239,68,68,0.15)">
             <Box w="10px" h="10px" bg="#ef4444" borderRadius="50%" />
           </Box>
         </Box>
 
-        {/* Botón vista panorámica (Morelia) */}
         <Box position="absolute" bottom={100} right={16} zIndex={8}>
           <Tooltip label="Ver Morelia completa" placement="left" hasArrow bg="#18181b" color="white" fontWeight="bold">
             <IconButton
@@ -790,7 +742,6 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
         </Box>
       </Box>
 
-      {/* BANNER DE ÉXITO */}
       <Portal>
         {showSuccessBanner && (
           <Box position="fixed" top="100px" left="50%" transform="translateX(-50%)" bg="#10b981" color="white" px={8} py={5} borderRadius="xl" zIndex={20000} display="flex" alignItems="center" gap={5} boxShadow="0 20px 40px rgba(16,185,129,0.4)">
@@ -808,7 +759,6 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
 
 // ==================== SUB-COMPONENTES ====================
 
-/** Ficha de paciente simple (usada cuando hay 1 sola persona afectada). */
 const PacienteFields = ({ paciente, onChange }) => (
   <SimpleGrid columns={2} spacingX={6} spacingY={6}>
     <Box>
@@ -855,7 +805,6 @@ const PacienteFields = ({ paciente, onChange }) => (
   </SimpleGrid>
 );
 
-/** Tarjeta compacta colapsable para el modo multi-paciente. */
 const PacienteCardCompacto = ({ idx, paciente, onChange, defaultOpen }) => {
   const [open, setOpen] = useState(!!defaultOpen);
   const resumen = formatResumenPaciente(paciente, idx);
@@ -864,24 +813,11 @@ const PacienteCardCompacto = ({ idx, paciente, onChange, defaultOpen }) => {
 
   return (
     <Box bg="#18181b" border="1px solid" borderColor={isComplete ? '#10b981' : '#3f3f46'} borderRadius="xl" overflow="hidden">
-      <Flex
-        px={4} py={3}
-        align="center" justify="space-between"
-        cursor="pointer"
-        onClick={() => setOpen(o => !o)}
-        _hover={{ bg: '#27272a' }}
-        transition="all 0.15s"
-      >
+      <Flex px={4} py={3} align="center" justify="space-between" cursor="pointer"
+        onClick={() => setOpen(o => !o)} _hover={{ bg: '#27272a' }} transition="all 0.15s">
         <HStack spacing={3} flex={1} minW={0}>
-          <Box
-            px={3} py={1}
-            bg={isComplete ? '#10b981' : '#3f3f46'}
-            color={isComplete ? 'white' : '#a1a1aa'}
-            borderRadius="md"
-            fontSize="12px" fontWeight="900"
-          >
-            P{idx + 1}
-          </Box>
+          <Box px={3} py={1} bg={isComplete ? '#10b981' : '#3f3f46'} color={isComplete ? 'white' : '#a1a1aa'}
+            borderRadius="md" fontSize="12px" fontWeight="900">P{idx + 1}</Box>
           <Text fontSize="14px" fontWeight="800" color={isEmpty ? '#a1a1aa' : '#f8fafc'} noOfLines={1} flex={1}>
             {isEmpty ? 'Sin datos aún' : resumen.replace(/^P\d+ · /, '')}
           </Text>
