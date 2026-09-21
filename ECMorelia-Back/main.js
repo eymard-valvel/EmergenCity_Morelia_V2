@@ -98,7 +98,7 @@ app.post('/api/places/search', async (req, res) => {
       radius: String(radius),
       limit: String(limit),
       sort: 'RELEVANCE',
-      fields: 'fsq_place_id,name,location,categories,distance,geocodes',
+      fields: 'fsq_place_id,name,location,categories,distance,latitude,longitude',
     });
 
     console.log('[places/search] → Foursquare:', params.toString());

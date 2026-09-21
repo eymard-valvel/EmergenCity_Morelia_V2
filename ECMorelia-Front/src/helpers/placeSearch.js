@@ -144,8 +144,8 @@ async function searchFoursquare(query, { signal }) {
     const data = await res.json();
     return (data.results || [])
       .map(r => {
-        const lat = r.geocodes?.main?.latitude;
-        const lng = r.geocodes?.main?.longitude;
+        const lat = r.latitude ?? r.location?.latitude;
+        const lng = r.longitude ?? r.location?.longitude;
         if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
         const addr = r.location?.formatted_address || r.location?.address || '';
         const shortName = r.name || '';
