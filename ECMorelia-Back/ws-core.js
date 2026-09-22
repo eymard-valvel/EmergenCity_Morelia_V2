@@ -6,7 +6,7 @@ const fetch = require('node-fetch');
 const { PrismaClient } = require('@prisma/client');
 
 const prisma = new PrismaClient();
-
+const crypto = require('crypto');
 const PROTOCOL_VERSION = 2;
 const MAPBOX_TOKEN =
   process.env.MAPBOX_TOKEN ||
@@ -36,13 +36,16 @@ const geocodeCache = new Map();
 const lastLocationBroadcast = new Map();
 
 let currentWss = null;
-let emergencyCounter = 1;
 
+// ID único e irrepetible: fecha + 64 bits de aleatoriedad criptográfica.
+// Probabilidad de colisión: ~1 en 1.8×10^19 — imposible a escala estatal.
 function generateCallId() {
-  const ts = Date.now();
-  const rand = Math.random().toString(36).substr(2, 5).toUpperCase();
-  const seq = String(emergencyCounter++).padStart(4, '0');
-  return `EM-${seq}-${rand}-${ts.toString(36).toUpperCase()}`;
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  const rand = crypto.randomBytes(8).toString('hex').toUpperCase();
+  return `EM-${y}${m}${d}-${rand}`;
 }
 function generateId(prefix = 'id') {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
@@ -650,6 +653,69 @@ async function handleEmergencyCall(ws, data) {
       timestamp: new Date().toISOString()
     });
   }
+  broadcastActiveEmergencies();
+  broadcastActiveAmbulances();
+}
+
+async function handleOperatorInitiatedEmergency(ws, data) {
+  // El operador inicia la emergencia SIN receptor previo.
+  // Crea la emergencia con la ambulancia ya asignada y la notifica al hospital.
+  const { ambulanceId, patientInfo, notes, location } = data;
+  if (!ambulanceId) return sendError(ws, 'ambulanceId requerido', 'BAD_PAYLOAD');
+
+  const amb = activeAmbulances.get(String(ambulanceId));
+  if (!amb) return sendError(ws, 'Ambulancia no registrada', 'NOT_FOUND');
+
+  const callId = generateCallId();
+  const correlationId = generateId('corr');
+  const emLocation = location || amb.location || DEFAULT_LOCATION;
+
+  console.log(`🚨 Emergencia operador ${callId} · unidad ${amb.id}`);
+
+  const emergency = {
+    callId, correlationId,
+    location: emLocation,
+    address: data.address || amb.nombre || 'Iniciada por operador',
+    emergencyType: data.emergencyType || 'Iniciada por operador',
+    patientInfo: patientInfo || {},
+    notes: notes || '',
+    timestamp: new Date().toISOString(),
+    status: 'assigned',
+    assignedAmbulanceId: amb.id,
+    assignedAmbulanceName: amb.nombre || amb.placa,
+    assignedAt: new Date().toISOString(),
+    createdBy: `operator:${amb.id}`,
+    receptorWs: null,
+    hospitalId: null,
+    doctorId: null,
+    initiatedBy: 'operator',
+  };
+  activeEmergencies.set(callId, emergency);
+  rejectedAmbulances.set(callId, new Set());
+  amb.status = 'en_ruta';
+
+  // Avisar al operador con el folio confirmado
+  sendMessage(ws, {
+    type: 'operator_emergency_created',
+    callId,
+    correlationId,
+    message: 'Emergencia creada. Notificando hospital.',
+    timestamp: new Date().toISOString(),
+  });
+
+  // Difundir a todos los receptores (para que vean el folio en su panel)
+  broadcastToReceptors({
+    type: 'emergency_created_by_operator_broadcast',
+    callId,
+    ambulanceId: amb.id,
+    ambulanceName: amb.nombre || amb.placa,
+    emergencyType: emergency.emergencyType,
+    address: emergency.address,
+    patientInfo: emergency.patientInfo,
+    timestamp: new Date().toISOString(),
+    correlationId,
+  });
+
   broadcastActiveEmergencies();
   broadcastActiveAmbulances();
 }
@@ -1323,6 +1389,7 @@ async function handleMessage(ws, data) {
     case 'register_paramedic':          return handleRegisterParamedic(ws, data);
     case 'register_doctor':             return handleRegisterDoctor(ws, data);
     case 'location_update':             return handleLocationUpdate(data);
+    case 'operator_initiated_emergency': return handleOperatorInitiatedEmergency(ws, data);
     case 'ambulance_status_update':     return handleAmbulanceStatusUpdate(ws, data);
     case 'emergency_call':              return handleEmergencyCall(ws, data);
     case 'request_active_emergencies':  return handleRequestActiveEmergencies(ws);

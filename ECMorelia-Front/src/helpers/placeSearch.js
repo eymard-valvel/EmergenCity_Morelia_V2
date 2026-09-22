@@ -1,7 +1,4 @@
 // src/helpers/placeSearch.js
-// Búsqueda unificada: Mapbox (direcciones) + Foursquare (POIs) vía proxy backend.
-// Restringida al área metropolitana de Morelia.
-
 const MAPBOX_GEOCODE_BASE = 'https://api.mapbox.com/geocoding/v5/mapbox.places';
 
 const MORELIA_CENTER = { lat: 19.7024, lng: -101.1969 };
@@ -9,15 +6,9 @@ const MORELIA_RADIUS_M = 15000;
 const MORELIA_BBOX = '-101.35,19.55,-101.00,19.85';
 
 const MAPBOX_TYPE_LABEL = {
-  address: 'DIRECCIÓN',
-  poi: 'LUGAR',
-  place: 'CIUDAD / ZONA',
-  locality: 'LOCALIDAD',
-  neighborhood: 'COLONIA',
-  district: 'DISTRITO',
-  region: 'REGIÓN',
-  postcode: 'CÓDIGO POSTAL',
-  country: 'PAÍS',
+  address: 'DIRECCIÓN', poi: 'LUGAR', place: 'CIUDAD / ZONA',
+  locality: 'LOCALIDAD', neighborhood: 'COLONIA', district: 'DISTRITO',
+  region: 'REGIÓN', postcode: 'CÓDIGO POSTAL', country: 'PAÍS',
 };
 
 const FOURSQUARE_CATEGORY_LABEL = {
@@ -46,26 +37,18 @@ const FOURSQUARE_CATEGORY_LABEL = {
   '63be6904847c3692a84b9b85': 'FRUTERÍA',
 };
 
-// Resolver la base del backend (donde vive el proxy)
 function resolveApiBase() {
-  // 1. Env var explícita
   const explicit = import.meta.env.VITE_API;
   if (explicit) return explicit.replace(/\/+$/, '');
-
-  // 2. Deriva de VITE_WS_URL si existe
   const ws = import.meta.env.VITE_WS_URL;
   if (ws) {
     try {
       const u = new URL(ws);
       u.protocol = u.protocol === 'wss:' ? 'https:' : 'http:';
-      u.pathname = '';
-      u.search = '';
-      u.hash = '';
+      u.pathname = ''; u.search = ''; u.hash = '';
       return u.origin;
     } catch (_) {}
   }
-
-  // 3. Fallback según entorno
   if (typeof window !== 'undefined') {
     const h = window.location.hostname;
     if (h === 'localhost' || h === '127.0.0.1') return 'http://localhost:3000';
@@ -97,23 +80,17 @@ function calcDistanceKm(lat1, lon1, lat2, lon2) {
 
 async function searchMapbox(query, { token, signal }) {
   const url = `${MAPBOX_GEOCODE_BASE}/${encodeURIComponent(query)}.json?` +
-    `access_token=${token}` +
-    `&country=mx` +
-    `&bbox=${MORELIA_BBOX}` +
+    `access_token=${token}&country=mx&bbox=${MORELIA_BBOX}` +
     `&proximity=${MORELIA_CENTER.lng},${MORELIA_CENTER.lat}` +
-    `&limit=8` +
-    `&language=es` +
-    `&fuzzyMatch=true` +
-    `&autocomplete=true`;
-
+    `&limit=8&language=es&fuzzyMatch=true&autocomplete=true`;
   const res = await fetch(url, { signal });
   if (!res.ok) return [];
   const data = await res.json();
   return (data.features || []).map(f => ({
     id: `mb_${f.id}`,
-    place_name: f.place_name,
-    lat: f.center[1],
-    lng: f.center[0],
+    place_name: f.text || f.place_name,
+    subtitle: f.place_name,
+    lat: f.center[1], lng: f.center[0],
     type: f.place_type?.[0] || 'place',
     relevance: f.relevance || 0,
     source: 'mapbox',
@@ -121,7 +98,6 @@ async function searchMapbox(query, { token, signal }) {
   }));
 }
 
-// Ahora llama a nuestro backend, no a Foursquare directamente
 async function searchFoursquare(query, { signal }) {
   const apiBase = resolveApiBase();
   try {
@@ -133,7 +109,7 @@ async function searchFoursquare(query, { signal }) {
         lat: MORELIA_CENTER.lat,
         lng: MORELIA_CENTER.lng,
         radius: MORELIA_RADIUS_M,
-        limit: 10,
+        limit: 12,
       }),
       signal,
     });
@@ -147,11 +123,27 @@ async function searchFoursquare(query, { signal }) {
         const lat = r.latitude ?? r.location?.latitude;
         const lng = r.longitude ?? r.location?.longitude;
         if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-        const addr = r.location?.formatted_address || r.location?.address || '';
+
         const shortName = r.name || '';
+        const neighborhood = r.location?.neighborhood || '';
+        const locality = r.location?.locality || '';
+        const region = r.location?.region || '';
+        const addr = r.location?.formatted_address || r.location?.address || '';
+
+        // Construir subtitle con la ubicación más específica posible
+        const parts = [neighborhood, locality, region].filter(Boolean);
+        const seen = new Set();
+        const subtitleParts = [];
+        for (const p of parts) {
+          if (!seen.has(p) && p.toLowerCase() !== 'morelia') { seen.add(p); subtitleParts.push(p); }
+        }
+        const subtitle = subtitleParts.length > 0 ? subtitleParts.join(' · ') : addr;
+
         return {
           id: `fsq_${r.fsq_place_id}`,
-          place_name: addr ? `${shortName} — ${addr}` : shortName,
+          place_name: shortName,      // ej. "Cinépolis" o "KFC"
+          subtitle,                    // ej. "La Huerta · Morelia" o dirección
+          full_address: addr,
           lat, lng,
           type: r.categories?.[0]?.name || 'lugar',
           relevance: r.distance != null ? 1 - Math.min(r.distance / MORELIA_RADIUS_M, 1) : 0.5,
@@ -172,24 +164,16 @@ export async function searchPlaces(query, { proximity, mapboxToken, signal } = {
   if (q.length < 2) return [];
 
   let mapboxResults = [];
-  try {
-    mapboxResults = await searchMapbox(q, { token: mapboxToken, signal });
-  } catch (e) {
-    if (e.name === 'AbortError') throw e;
-  }
+  try { mapboxResults = await searchMapbox(q, { token: mapboxToken, signal }); }
+  catch (e) { if (e.name === 'AbortError') throw e; }
 
   let foursquareResults = [];
-  try {
-    foursquareResults = await searchFoursquare(q, { signal });
-  } catch (e) {
-    if (e.name === 'AbortError') throw e;
-  }
+  try { foursquareResults = await searchFoursquare(q, { signal }); }
+  catch (e) { if (e.name === 'AbortError') throw e; }
 
   const merged = [...mapboxResults];
   for (const fsq of foursquareResults) {
-    const isDuplicate = merged.some(m =>
-      calcDistanceKm(m.lat, m.lng, fsq.lat, fsq.lng) < 0.05
-    );
+    const isDuplicate = merged.some(m => calcDistanceKm(m.lat, m.lng, fsq.lat, fsq.lng) < 0.05);
     if (!isDuplicate) merged.push(fsq);
   }
 

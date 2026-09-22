@@ -67,11 +67,6 @@ app.get('/api/ambulances/active', (req, res) => {
 
 // ==================== PROXY FOURSQUARE PLACES ====================
 app.post('/api/places/search', async (req, res) => {
-  // --- Logs de diagnóstico (temporal) ---
-  console.log('[places/search] Content-Type:', req.headers['content-type']);
-  console.log('[places/search] body:', JSON.stringify(req.body));
-  console.log('[places/search] key presente:', !!FOURSQUARE_KEY, '· len:', FOURSQUARE_KEY.length);
-
   try {
     const body = req.body || {};
     const query = typeof body.query === 'string' ? body.query.trim() : '';
@@ -81,13 +76,8 @@ app.post('/api/places/search', async (req, res) => {
     const limit = Number.isFinite(body.limit) ? body.limit : 10;
 
     if (query.length < 2) {
-      console.warn('[places/search] 400 · query inválido:', JSON.stringify(query));
-      return res.status(400).json({
-        error: 'query requerido (min 2 caracteres)',
-        received: { query, bodyKeys: Object.keys(body) }
-      });
+      return res.status(400).json({ error: 'query requerido (min 2 caracteres)' });
     }
-
     if (!FOURSQUARE_KEY) {
       return res.status(503).json({ error: 'FOURSQUARE_KEY no configurada' });
     }
@@ -101,8 +91,6 @@ app.post('/api/places/search', async (req, res) => {
       fields: 'fsq_place_id,name,location,categories,distance,latitude,longitude',
     });
 
-    console.log('[places/search] → Foursquare:', params.toString());
-
     const resp = await fetch(`${FOURSQUARE_BASE}?${params.toString()}`, {
       headers: {
         'Authorization': `Bearer ${FOURSQUARE_KEY}`,
@@ -113,18 +101,13 @@ app.post('/api/places/search', async (req, res) => {
 
     if (!resp.ok) {
       const errText = await resp.text().catch(() => '');
-      console.warn('[places/search] Foursquare HTTP', resp.status, '·', errText.slice(0, 200));
-      return res.status(resp.status).json({
-        error: `Foursquare HTTP ${resp.status}`,
-        detail: errText.slice(0, 200),
-      });
+      return res.status(resp.status).json({ error: `Foursquare HTTP ${resp.status}`, detail: errText.slice(0, 200) });
     }
 
     const data = await resp.json();
-    console.log('[places/search] OK · resultados:', (data.results || []).length);
     res.json({ results: data.results || [] });
   } catch (e) {
-    console.error('[places/search] Error:', e.message, e.stack);
+    console.error('[places/search] Error:', e.message);
     res.status(500).json({ error: 'Error consultando Foursquare', detail: e.message });
   }
 });

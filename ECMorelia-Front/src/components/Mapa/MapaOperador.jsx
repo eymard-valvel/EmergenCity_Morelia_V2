@@ -177,6 +177,19 @@ const searchDebounceRef = useRef(null);
   const [searchResults, setSearchResults] = useState([]);
   const [selectedHospitalId, setSelectedHospitalId] = useState(null);
   const [patientData, setPatientData] = useState({ edad: 35, sexo: 'N/S', diagnostico: DIAGNOSTICOS_RAPIDOS[0] });
+  const [operatorPatientData, setOperatorPatientData] = useState(() => {
+  try {
+    const saved = localStorage.getItem('operatorPatientTemplate');
+    if (saved) return JSON.parse(saved);
+  } catch (_) {}
+  return {
+    cantidad: 1,
+    pacientes: [{ sexo: '', edad: '', consciente: '', respira: '', sangrado: '', atrapado: '' }],
+    diagnostico: DIAGNOSTICOS_RAPIDOS[0],
+    notas: '',
+  };
+});
+const [isCreatingEmergency, setIsCreatingEmergency] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [pendingAction, setPendingAction] = useState(null);
 
@@ -249,6 +262,26 @@ const searchDebounceRef = useRef(null);
             case 'active_hospitals_update': setHospitals(data.hospitals || []); break;
             case 'emergency_offer': handleEmergencyOffer(data); break;
             case 'new_emergency_assigned':
+              // Guardar datos del receptor como template local para reutilizar
+if (data.patientInfo && Object.keys(data.patientInfo).length > 0) {
+  try {
+    const template = {
+      cantidad: data.patientInfo.cantidad || 1,
+      pacientes: data.patientInfo.pacientes || [{
+        sexo: data.patientInfo.sexo || '',
+        edad: data.patientInfo.edad || '',
+        consciente: data.patientInfo.consciente || '',
+        respira: data.patientInfo.respira || '',
+        sangrado: data.patientInfo.sangrado || '',
+        atrapado: data.patientInfo.atrapado || '',
+      }],
+      diagnostico: data.emergencyType || DIAGNOSTICOS_RAPIDOS[0],
+      notas: data.notes || '',
+    };
+    localStorage.setItem('operatorPatientTemplate', JSON.stringify(template));
+    setOperatorPatientData(template);
+  } catch (_) {}
+}
               setPendingOffer(null);
               if (offerTimerRef.current) clearInterval(offerTimerRef.current);
               setAssignedEmergency(data);
@@ -732,6 +765,61 @@ const searchAddresses = useCallback((query) => {
     onDrawerClose();
   };
 
+  const handleCreateOperatorEmergency = useCallback(async () => {
+  if (!myLocation) {
+    toast({
+      title: 'Sin ubicación GPS',
+      description: 'Esperando señal para registrar la emergencia.',
+      status: 'warning', duration: 4000, position: 'bottom',
+    });
+    return;
+  }
+  const validPacientes = operatorPatientData.pacientes.filter(p => p.sexo && p.consciente);
+  if (validPacientes.length === 0) {
+    toast({
+      title: 'Datos incompletos',
+      description: 'Registre sexo y estado de conciencia del primer paciente.',
+      status: 'warning', duration: 4000, position: 'bottom',
+    });
+    return;
+  }
+
+  setIsCreatingEmergency(true);
+
+  // Persistir template local
+  try { localStorage.setItem('operatorPatientTemplate', JSON.stringify(operatorPatientData)); } catch (_) {}
+
+  sendWS({
+    type: 'operator_initiated_emergency',
+    ambulanceId: ambulancia.id,
+    location: myLocation,
+    address: 'Emergencia iniciada por operador',
+    emergencyType: operatorPatientData.diagnostico || 'Atención en campo',
+    patientInfo: {
+      cantidad: validPacientes.length,
+      pacientes: validPacientes,
+      // Compatibilidad con formato del receptor
+      sexo: validPacientes[0]?.sexo || '',
+      edad: validPacientes[0]?.edad || '',
+      consciente: validPacientes[0]?.consciente || '',
+      respira: validPacientes[0]?.respira || '',
+      sangrado: validPacientes[0]?.sangrado || '',
+      atrapado: validPacientes[0]?.atrapado || '',
+      lesionados: validPacientes.length,
+    },
+    notes: operatorPatientData.notas || '',
+  });
+
+  toast({
+    title: 'Emergencia registrada',
+    description: 'Notificando al hospital más cercano.',
+    status: 'success', duration: 4000, position: 'bottom',
+  });
+  setIsCreatingEmergency(false);
+  onDrawerClose();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [myLocation, operatorPatientData, ambulancia, sendWS, toast, onDrawerClose]);
+
   const confirmAction = useCallback((action, title, body) => {
     setPendingAction({ fn: action, title, body });
     onAlertOpen();
@@ -931,18 +1019,18 @@ const searchAddresses = useCallback((query) => {
       {/* BARRA INFERIOR */}
       {!isDrawerOpen && !isNavigating && (
         <SlideFade in={true} offsetY="20px" style={{ position: 'absolute', bottom: '20px', left: 0, right: 0, zIndex: 10 }}>
-          <HStack px={4} spacing={3} w="100%" justify="center">
-            <Button flex={0.5} h="65px" bg="#18181b" border="2px solid #3f3f46" color="white"
-              fontSize="16px" fontWeight="900" borderRadius="2xl" shadow="2xl"
-              onClick={() => { setDrawerMode('atender'); onDrawerOpen(); }}>
-              <Icon as={FaSearch} mr={2} color="#0ea5e9" /> NAVEGAR A...
-            </Button>
-            <Button flex={0.5} h="65px" bg="#0ea5e9" color="white"
-              fontSize="16px" fontWeight="900" borderRadius="2xl" shadow="2xl"
-              onClick={() => { setDrawerMode('trasladar'); onDrawerOpen(); }}>
-              <Icon as={FaHospital} mr={2} /> TRASLADO HOSP.
-            </Button>
-          </HStack>
+<HStack px={4} spacing={3} w="100%" justify="center">
+  <Button
+    w="100%" h="75px"
+    bg="#ef4444" color="white"
+    fontSize="20px" fontWeight="900" letterSpacing="1px"
+    borderRadius="2xl" shadow="2xl"
+    _hover={{ bg: '#dc2626', transform: 'scale(1.02)' }}
+    onClick={() => { setDrawerMode('operator-emergency'); onDrawerOpen(); }}
+  >
+    <Icon as={FaAmbulance} mr={3} boxSize={6} /> NUEVA EMERGENCIA
+  </Button>
+</HStack>
         </SlideFade>
       )}
 
@@ -1013,147 +1101,192 @@ const searchAddresses = useCallback((query) => {
           </Flex>
 
           <DrawerHeader bg="#09090b" py={2} px={6} display="flex" justifyContent="space-between" alignItems="center">
-            <Text fontSize="20px" fontWeight="900" color="white">
-              {drawerMode === 'atender' ? 'BUSCAR DIRECCIÓN' : 'PROTOCOLO DE TRASLADO'}
-            </Text>
+<Text fontSize="20px" fontWeight="900" color="white">
+  {drawerMode === 'operator-emergency' ? 'NUEVA EMERGENCIA' : 'PROTOCOLO'}
+</Text>
             <IconButton aria-label="Cerrar" icon={<FaTimes />} variant="ghost" color="#ef4444" fontSize="22px" onClick={onDrawerClose} />
           </DrawerHeader>
 
-          <DrawerBody p={4} bg="#09090b" overflowY="auto">
-            {drawerMode === 'atender' ? (
-              <VStack spacing={4} align="stretch" h="100%">
-                <InputGroup size="lg">
-                  <Input value={searchQuery}
-                    onChange={(e) => { setSearchQuery(e.target.value); searchAddresses(e.target.value); }}
-                    placeholder="Buscar calle, colonia, plaza..." bg="#18181b" width="100%"
-                    border="2px solid #3f3f46" color="white" h="65px" fontSize="18px" fontWeight="800"
-                    _focus={{ borderColor: '#0ea5e9' }} autoComplete="off" />
-                </InputGroup>
-                <Box flex={1} overflowY="auto">
-                  {searchResults.map((r) => (
-                    <Button key={r.id} w="100%" h="auto" py={4} mb={3} justifyContent="flex-start"
-                      bg="#18181b" border="1px solid #27272a" _hover={{ bg: '#27272a' }}
-                      onClick={() => selectSearchResult(r)}>
-                      <HStack w="100%" spacing={4} align="flex-start">
-                      <Icon as={FaMapMarkerAlt} color="#ef4444" boxSize={5} mt={1} />
-                      <VStack align="start" spacing={1} flex={1} minW={0}>
-                        <Box px={2} py={0.5} bg="#27272a" borderRadius="sm">
-                          <Text fontSize="9px" fontWeight="900" color="#38bdf8" letterSpacing="0.5px">
-                            {getPlaceTypeLabel(r.type, r.source, r.categories)}
-                          </Text>
-                        </Box>
-                        <Text color="white" fontSize="16px" fontWeight="800" whiteSpace="normal" textAlign="left" noOfLines={3}>
-                          {r.place_name}
-                        </Text>
-                      </VStack>
-                    </HStack>
-                    </Button>
-                  ))}
-                  {searchQuery.length > 2 && searchResults.length === 0 && (
-                    <Text color="#a1a1aa" textAlign="center" mt={4} fontWeight="800">Buscando en Morelia...</Text>
-                  )}
-                </Box>
-              </VStack>
-            ) : (
-              <VStack spacing={5} align="stretch" pb={24}>
-                <Box bg="#18181b" p={5} borderRadius="2xl" border="1px solid #27272a">
-                  <Text fontSize="12px" fontWeight="900" color="#a1a1aa" mb={4}>1. DATOS DEL PACIENTE</Text>
+<DrawerBody p={4} bg="#09090b" overflowY="auto">
+  {drawerMode === 'operator-emergency' && (
+    <VStack spacing={5} align="stretch" pb={24}>
+      <Box bg="#18181b" p={5} borderRadius="2xl" border="1px solid #27272a">
+        <Text fontSize="12px" fontWeight="900" color="#a1a1aa" mb={4}>1. CANTIDAD DE PACIENTES</Text>
+        <HStack w="100%">
+          <IconButton
+            aria-label="Menos pacientes"
+            icon={<FaMinus />}
+            onClick={() => setOperatorPatientData(prev => {
+              const next = Math.max(1, prev.cantidad - 1);
+              return {
+                ...prev,
+                cantidad: next,
+                pacientes: prev.pacientes.slice(0, next).length < next
+                  ? [...prev.pacientes, ...Array(next - prev.pacientes.length).fill(0).map(() => ({ sexo: '', edad: '', consciente: '', respira: '', sangrado: '', atrapado: '' }))]
+                  : prev.pacientes.slice(0, next)
+              };
+            })}
+            w="60px" h="60px" bg="#27272a" color="white" fontSize="20px"
+            _hover={{ bg: '#3f3f46' }}
+            isDisabled={operatorPatientData.cantidad <= 1}
+          />
+          <Flex flex={1} bg="#09090b" h="60px" border="2px solid #3f3f46" borderRadius="xl" align="center" justify="center">
+            <Text fontSize="28px" fontWeight="900" color="white">{operatorPatientData.cantidad}</Text>
+          </Flex>
+          <IconButton
+            aria-label="Más pacientes"
+            icon={<FaPlus />}
+            onClick={() => setOperatorPatientData(prev => {
+              const next = Math.min(20, prev.cantidad + 1);
+              return {
+                ...prev,
+                cantidad: next,
+                pacientes: prev.pacientes.length < next
+                  ? [...prev.pacientes, ...Array(next - prev.pacientes.length).fill(0).map(() => ({ sexo: '', edad: '', consciente: '', respira: '', sangrado: '', atrapado: '' }))]
+                  : prev.pacientes
+              };
+            })}
+            w="60px" h="60px" bg="#27272a" color="white" fontSize="20px"
+            _hover={{ bg: '#3f3f46' }}
+          />
+        </HStack>
+      </Box>
 
-                  <FormControl mb={4}>
-                    <FormLabel color="#0ea5e9" fontWeight="900" fontSize="14px">EDAD APROXIMADA</FormLabel>
-                    <HStack>
-                      <IconButton aria-label="Menos edad" icon={<FaMinus />}
-                        onClick={() => setPatientData(p => ({ ...p, edad: Math.max(0, p.edad - 1) }))}
-                        w="60px" h="60px" bg="#27272a" color="white" fontSize="20px" _hover={{ bg: '#3f3f46' }} />
-                      <Flex flex={1} bg="#09090b" h="60px" border="2px solid #3f3f46" borderRadius="xl" align="center" justify="center">
-                        <Text fontSize="28px" fontWeight="900" color="white">{patientData.edad}</Text>
-                      </Flex>
-                      <IconButton aria-label="Más edad" icon={<FaPlus />}
-                        onClick={() => setPatientData(p => ({ ...p, edad: p.edad + 1 }))}
-                        w="60px" h="60px" bg="#27272a" color="white" fontSize="20px" _hover={{ bg: '#3f3f46' }} />
-                    </HStack>
-                  </FormControl>
+      <Box bg="#18181b" p={5} borderRadius="2xl" border="1px solid #27272a">
+        <Text fontSize="12px" fontWeight="900" color="#a1a1aa" mb={4}>2. DATOS DE PACIENTES</Text>
+        <VStack spacing={4} align="stretch">
+          {operatorPatientData.pacientes.slice(0, operatorPatientData.cantidad).map((p, idx) => (
+            <Box key={idx} bg="#09090b" p={4} borderRadius="xl" border="1px solid #3f3f46">
+              <Text fontSize="13px" fontWeight="900" color="#38bdf8" mb={3}>PACIENTE {idx + 1}</Text>
+              <SimpleGrid columns={2} spacing={3}>
+                <Select
+                  value={p.sexo}
+                  onChange={(e) => setOperatorPatientData(prev => {
+                    const copy = [...prev.pacientes];
+                    copy[idx] = { ...copy[idx], sexo: e.target.value };
+                    return { ...prev, pacientes: copy };
+                  })}
+                  placeholder="Sexo"
+                  bg="#18181b" borderColor="#3f3f46" color="white" size="lg"
+                >
+                  <option value="Hombre" style={{ background: '#18181b' }}>Hombre</option>
+                  <option value="Mujer" style={{ background: '#18181b' }}>Mujer</option>
+                  <option value="N/S" style={{ background: '#18181b' }}>No se sabe</option>
+                </Select>
+                <Input
+                  type="number"
+                  value={p.edad}
+                  onChange={(e) => setOperatorPatientData(prev => {
+                    const copy = [...prev.pacientes];
+                    copy[idx] = { ...copy[idx], edad: e.target.value };
+                    return { ...prev, pacientes: copy };
+                  })}
+                  placeholder="Edad"
+                  bg="#18181b" border="2px solid #3f3f46" color="white" size="lg"
+                />
+                <Select
+                  value={p.consciente}
+                  onChange={(e) => setOperatorPatientData(prev => {
+                    const copy = [...prev.pacientes];
+                    copy[idx] = { ...copy[idx], consciente: e.target.value };
+                    return { ...prev, pacientes: copy };
+                  })}
+                  placeholder="Conciencia"
+                  bg="#18181b" borderColor="#3f3f46" color="white" size="lg"
+                >
+                  <option value="Sí" style={{ background: '#18181b' }}>Consciente</option>
+                  <option value="No" style={{ background: '#18181b' }}>Inconsciente</option>
+                  <option value="N/S" style={{ background: '#18181b' }}>No se sabe</option>
+                </Select>
+                <Select
+                  value={p.respira}
+                  onChange={(e) => setOperatorPatientData(prev => {
+                    const copy = [...prev.pacientes];
+                    copy[idx] = { ...copy[idx], respira: e.target.value };
+                    return { ...prev, pacientes: copy };
+                  })}
+                  placeholder="Respira"
+                  bg="#18181b" borderColor="#3f3f46" color="white" size="lg"
+                >
+                  <option value="Sí" style={{ background: '#18181b' }}>Respira</option>
+                  <option value="No" style={{ background: '#18181b' }}>No respira</option>
+                  <option value="N/S" style={{ background: '#18181b' }}>No se sabe</option>
+                </Select>
+                <Select
+                  value={p.sangrado}
+                  onChange={(e) => setOperatorPatientData(prev => {
+                    const copy = [...prev.pacientes];
+                    copy[idx] = { ...copy[idx], sangrado: e.target.value };
+                    return { ...prev, pacientes: copy };
+                  })}
+                  placeholder="Sangrado"
+                  bg="#18181b" borderColor="#3f3f46" color="white" size="lg"
+                >
+                  <option value="Sí" style={{ background: '#18181b' }}>Sangrado</option>
+                  <option value="No" style={{ background: '#18181b' }}>Sin sangrado</option>
+                  <option value="N/S" style={{ background: '#18181b' }}>No se sabe</option>
+                </Select>
+                <Select
+                  value={p.atrapado}
+                  onChange={(e) => setOperatorPatientData(prev => {
+                    const copy = [...prev.pacientes];
+                    copy[idx] = { ...copy[idx], atrapado: e.target.value };
+                    return { ...prev, pacientes: copy };
+                  })}
+                  placeholder="Atrapado"
+                  bg="#18181b" borderColor="#3f3f46" color="white" size="lg"
+                >
+                  <option value="Sí" style={{ background: '#18181b' }}>Atrapado</option>
+                  <option value="No" style={{ background: '#18181b' }}>No atrapado</option>
+                </Select>
+              </SimpleGrid>
+            </Box>
+          ))}
+        </VStack>
+      </Box>
 
-                  <FormControl mb={4}>
-                    <FormLabel color="#0ea5e9" fontWeight="900" fontSize="14px">SEXO</FormLabel>
-                    <ButtonGroup w="100%" isAttached>
-                      {['Hombre', 'Mujer', 'N/S'].map(s => (
-                        <Button key={s} flex={1} h="50px" fontSize="16px" fontWeight="900"
-                          bg={patientData.sexo === s ? '#0ea5e9' : '#27272a'}
-                          color={patientData.sexo === s ? 'white' : '#a1a1aa'}
-                          _hover={{ bg: patientData.sexo === s ? '#0284c7' : '#3f3f46' }}
-                          onClick={() => setPatientData(p => ({ ...p, sexo: s }))}>{s}</Button>
-                      ))}
-                    </ButtonGroup>
-                  </FormControl>
+      <Box bg="#18181b" p={5} borderRadius="2xl" border="1px solid #27272a">
+        <Text fontSize="12px" fontWeight="900" color="#a1a1aa" mb={4}>3. IMPRESIÓN DIAGNÓSTICA</Text>
+        <Select
+          value={operatorPatientData.diagnostico}
+          onChange={(e) => setOperatorPatientData(prev => ({ ...prev, diagnostico: e.target.value }))}
+          h="60px" fontSize="16px" fontWeight="900"
+          bg="#09090b" color="white" border="2px solid #3f3f46"
+        >
+          {DIAGNOSTICOS_RAPIDOS.map(d => (
+            <option key={d} value={d} style={{ background: '#09090b' }}>{d}</option>
+          ))}
+        </Select>
+      </Box>
 
-                  <FormControl>
-                    <FormLabel color="#0ea5e9" fontWeight="900" fontSize="14px">IMPRESIÓN DIAGNÓSTICA</FormLabel>
-                    <Select h="55px" fontSize="16px" fontWeight="900"
-                      bg="#09090b" color="white" border="2px solid #3f3f46"
-                      value={patientData.diagnostico}
-                      onChange={e => setPatientData(p => ({ ...p, diagnostico: e.target.value }))}>
-                      {DIAGNOSTICOS_RAPIDOS.map(d => (
-                        <option key={d} value={d} style={{ background: '#09090b' }}>{d}</option>
-                      ))}
-                    </Select>
-                  </FormControl>
-                </Box>
+      <Box bg="#18181b" p={5} borderRadius="2xl" border="1px solid #27272a">
+        <Text fontSize="12px" fontWeight="900" color="#a1a1aa" mb={4}>4. NOTAS ADICIONALES</Text>
+        <Input
+          value={operatorPatientData.notas}
+          onChange={(e) => setOperatorPatientData(prev => ({ ...prev, notas: e.target.value }))}
+          placeholder="Observaciones breves..."
+          bg="#09090b" border="2px solid #3f3f46" color="white" h="60px" fontSize="15px"
+        />
+      </Box>
+    </VStack>
+  )}
+</DrawerBody>
 
-                <Box bg="#18181b" p={5} borderRadius="2xl" border="1px solid #27272a">
-                  <Text fontSize="12px" fontWeight="900" color="#a1a1aa" mb={4}>2. CENTRO RECEPTOR CERCANO</Text>
-                  <VStack spacing={3} align="stretch">
-                    {hospitals
-                      .filter(h => h.connected)
-                      .sort((a, b) => {
-                        if (!myLocation) return 0;
-                        return calcDistance(myLocation.lat, myLocation.lng, a.lat, a.lng) -
-                               calcDistance(myLocation.lat, myLocation.lng, b.lat, b.lng);
-                      })
-                      .map(h => {
-                        const isSelected = selectedHospitalId === h.id;
-                        const dist = myLocation ? calcDistance(myLocation.lat, myLocation.lng, h.lat, h.lng) : 0;
-                        const camas = h.camasEmergencia ?? h.camasDisponibles ?? 0;
-                        return (
-                          <Button key={h.id} h="75px" w="100%" justifyContent="space-between" px={4}
-                            bg={isSelected ? 'rgba(16,185,129,0.15)' : '#27272a'}
-                            border="2px solid" borderColor={isSelected ? '#10b981' : 'transparent'}
-                            _hover={{ bg: isSelected ? 'rgba(16,185,129,0.25)' : '#3f3f46' }}
-                            onClick={() => setSelectedHospitalId(h.id)}>
-                            <VStack align="start" spacing={0}>
-                              <Text fontSize="16px" fontWeight="900" color="white" noOfLines={1}>{h.nombre}</Text>
-                              <Text fontSize="12px" color="#10b981" fontWeight="900">
-                                {camas} CAMAS DISP.
-                              </Text>
-                            </VStack>
-                            <Text fontSize="16px" fontWeight="900" color="#a1a1aa">
-                              ~{fmtDist(dist)}
-                            </Text>
-                          </Button>
-                        );
-                      })}
-                    {hospitals.filter(h => h.connected).length === 0 && (
-                      <Text color="#ef4444" fontWeight="900" textAlign="center">
-                        NO HAY HOSPITALES ACTIVOS
-                      </Text>
-                    )}
-                  </VStack>
-                </Box>
-              </VStack>
-            )}
-          </DrawerBody>
-
-          {drawerMode === 'trasladar' && (
-            <DrawerFooter bg="#18181b" borderTop="1px solid #27272a" p={4} position="absolute" bottom={0} w="100%">
-              <Button w="100%" h="60px" bg="#10b981" color="white"
-                fontSize="18px" fontWeight="900" letterSpacing="1px"
-                _hover={{ bg: '#059669' }}
-                isDisabled={!selectedHospitalId || isSending}
-                isLoading={isSending} onClick={handleSendTransfer}>
-                CONFIRMAR RUTA
-              </Button>
-            </DrawerFooter>
-          )}
+          {drawerMode === 'operator-emergency' && (
+  <DrawerFooter bg="#18181b" borderTop="1px solid #27272a" p={4} position="absolute" bottom={0} w="100%">
+    <Button
+      w="100%" h="70px"
+      bg="#ef4444" color="white"
+      fontSize="18px" fontWeight="900" letterSpacing="1px"
+      _hover={{ bg: '#dc2626' }}
+      isLoading={isCreatingEmergency}
+      loadingText="REGISTRANDO..."
+      onClick={handleCreateOperatorEmergency}
+    >
+      NOTIFICAR HOSPITAL
+    </Button>
+  </DrawerFooter>
+)}
         </DrawerContent>
       </Drawer>
 
