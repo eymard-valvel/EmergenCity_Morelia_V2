@@ -6,96 +6,61 @@ import html2canvas from "html2canvas";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../auth/useAuth.js";
 import { deleteCookie } from "../../helpers/cookies.js";
+import { resolveWsUrl } from "../../helpers/wsUrl.js";
 import {
   ChakraProvider, Box, Button, VStack, Text, HStack, Badge, Modal, ModalOverlay, ModalContent,
-  ModalHeader, ModalBody, ModalFooter, useDisclosure, Alert, AlertIcon, AlertTitle, AlertDescription, 
-  useToast, Card, CardBody, Progress, Input, Select, Spinner, SimpleGrid, Divider, Tag, 
-  useMediaQuery, IconButton, Flex, ButtonGroup, Tooltip, Icon, Drawer, DrawerBody, DrawerHeader, DrawerOverlay, DrawerContent, DrawerCloseButton
+  ModalHeader, ModalBody, ModalFooter, useDisclosure, useToast, Spinner, SimpleGrid, Divider,
+  useMediaQuery, IconButton, Flex, ButtonGroup, Tooltip, Icon, Drawer, DrawerBody, DrawerHeader,
+  DrawerOverlay, DrawerContent, DrawerCloseButton, Select
 } from "@chakra-ui/react";
-import { 
-  FaUserMd, FaBed, FaAmbulance, FaMapMarkerAlt, FaVideo, FaExclamationTriangle, 
-  FaCheckCircle, FaTimes, FaFolderOpen, FaBolt, FaStethoscope, FaHeartbeat, FaRoute, FaPlus, FaMinus, FaSignOutAlt, FaFilePdf, FaHistory
+import {
+  FaUserMd, FaBed, FaAmbulance, FaMapMarkerAlt, FaVideo, FaExclamationTriangle,
+  FaCheckCircle, FaTimes, FaFolderOpen, FaBolt, FaStethoscope, FaHeartbeat, FaRoute,
+  FaPlus, FaMinus, FaSignOutAlt, FaFilePdf, FaHistory, FaSyncAlt
 } from "react-icons/fa";
 import { FiActivity, FiWifiOff } from "react-icons/fi";
 
-mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN || 'pk.eyJ1IjoiZXltYXJkMjkiLCJhIjoiY21tcDY4YzNpMGw3bjJzb203YmZyNTVnMyJ9.OvZlnCMfUkUYe6Ib83DUVw';
+mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN ||
+  'pk.eyJ1IjoiZXltYXJkMjkiLCJhIjoiY21tcDY4YzNpMGw3bjJzb203YmZyNTVnMyJ9.OvZlnCMfUkUYe6Ib83DUVw';
 
-// ---------- ESTILOS GLOBALES (MODO OSCURO Y ANIMACIONES) ----------
+const WS_URL = resolveWsUrl();
+
 const styleInject = document.createElement('style');
 styleInject.textContent = `
-  @keyframes pulseGreen { 
-    0%, 100% { transform: scale(1); opacity: 1; box-shadow: 0 0 15px rgba(16,185,129,0.4); } 
-    50% { transform: scale(1.05); opacity: 0.8; box-shadow: 0 0 30px rgba(16,185,129,0.8); } 
-  }
-  @keyframes pulseRed { 
-    0%, 100% { transform: scale(1); box-shadow: 0 0 15px rgba(220,38,38,0.4); } 
-    50% { transform: scale(1.05); box-shadow: 0 0 30px rgba(220,38,38,0.8); } 
-  }
-  .glass-dark { 
-    background: rgba(9, 9, 11, 0.85) !important; 
-    backdrop-filter: blur(12px) !important; 
-    -webkit-backdrop-filter: blur(12px) !important;
-    border: 1px solid rgba(63, 63, 70, 0.5) !important; 
-    border-radius: 12px !important; 
-  }
-  .mapboxgl-popup-content { 
-    background-color: #18181b !important; 
-    color: #f8fafc !important; 
-    border: 1px solid #3f3f46 !important; 
-    border-radius: 8px !important; 
-    box-shadow: 0 10px 25px rgba(0,0,0,0.5) !important; 
-    padding: 15px !important;
-  }
+  @keyframes pulseRed { 0%,100% { transform: scale(1); box-shadow: 0 0 15px rgba(220,38,38,0.4); } 50% { transform: scale(1.05); box-shadow: 0 0 30px rgba(220,38,38,0.8); } }
+  .mapboxgl-popup-content { background-color: #18181b !important; color: #f8fafc !important; border: 1px solid #3f3f46 !important; border-radius: 8px !important; padding: 15px !important; }
   .mapboxgl-popup-anchor-bottom .mapboxgl-popup-tip { border-top-color: #3f3f46 !important; }
-  
   ::-webkit-scrollbar { width: 8px; }
   ::-webkit-scrollbar-track { background: #09090b; }
   ::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
-  ::-webkit-scrollbar-thumb:hover { background: #52525b; }
 `;
 document.head.appendChild(styleInject);
 
-const getApiBaseUrl = () => {
-  if (import.meta.env.VITE_API) {
-    return import.meta.env.VITE_API.replace(/\/+$/, "");
-  }
-  const wsUrl = import.meta.env.VITE_WS_URL || 'wss://emergencity-morelia-v2.onrender.com';
-  try {
-    const url = new URL(wsUrl);
-    url.protocol = url.protocol === 'wss:' ? 'https:' : 'http:';
-    url.pathname = url.pathname.replace('/ws', '');
-    return url.origin;
-  } catch (e) {
-    return 'https://emergencity-morelia-v2.onrender.com';
-  }
-};
-
 const clasificarEspecialidad = (motivo) => {
-  const str = (motivo || '').toLowerCase();
-  if (str.includes('torácico') || str.includes('infarto') || str.includes('cardio') || str.includes('paro') || str.includes('taquicardia')) return 'Cardiología';
-  if (str.includes('fractura') || str.includes('caída') || str.includes('trauma') || str.includes('accidente') || str.includes('choque')) return 'Traumatología';
-  if (str.includes('convulsiones') || str.includes('acv') || str.includes('cerebral') || str.includes('derrame')) return 'Neurología';
-  if (str.includes('quemaduras')) return 'Cirugía Plástica';
-  if (str.includes('intoxicación') || str.includes('veneno')) return 'Toxicología';
-  if (str.includes('respiratoria') || str.includes('asfixia') || str.includes('epoc')) return 'Neumología';
-  if (str.includes('parto') || str.includes('embarazo') || str.includes('sangrado transvaginal')) return 'Ginecología';
+  const s = (motivo || '').toLowerCase();
+  if (/torácic|infart|cardio|paro|taquicard/.test(s)) return 'Cardiología';
+  if (/fractur|caíd|trauma|accident|choqu/.test(s)) return 'Traumatología';
+  if (/convulsion|acv|cerebral|derrame/.test(s)) return 'Neurología';
+  if (/quemadura/.test(s)) return 'Cirugía Plástica';
+  if (/intoxic|veneno/.test(s)) return 'Toxicología';
+  if (/respirator|asfixia|epoc/.test(s)) return 'Neumología';
+  if (/parto|embaraz|sangrado transvaginal/.test(s)) return 'Ginecología';
   return 'Urgencias Médicas';
 };
 
 const RESPUESTAS_RAPIDAS = [
-  "✅ QUIRÓFANO PREPARADO", 
-  "🚑 RAMPA DE URGENCIAS DESPEJADA", 
-  "🩺 EQUIPO DE TRAUMA LISTO", 
-  "⚡ PASAR DIRECTO A SALA DE CHOQUE", 
-  "📁 TRAER EXPEDIENTE CLÍNICO PREVIO", 
-  "🚪 ESPERANDO EN PUERTA PRINCIPAL"
+  "QUIRÓFANO PREPARADO",
+  "RAMPA DE URGENCIAS DESPEJADA",
+  "EQUIPO DE TRAUMA LISTO",
+  "PASAR DIRECTO A SALA DE CHOQUE",
+  "TRAER EXPEDIENTE CLÍNICO PREVIO",
+  "ESPERANDO EN PUERTA PRINCIPAL"
 ];
 
 export default function MapaHospitalOptimizado() {
   const navigate = useNavigate();
   const { setAuth } = useAuth();
 
-  // Función de cierre de sesión basada en la estructura del Header provisto
   const closeSession = () => {
     deleteCookie("role");
     setAuth(false);
@@ -111,9 +76,9 @@ export default function MapaHospitalOptimizado() {
   const routeSourcesByAmbulance = useRef({});
   const reconnectTimeout = useRef(null);
   const connectionAttempts = useRef(0);
-  const maxConnectionAttempts = 5;
   const isMounted = useRef(true);
   const reportRef = useRef(null);
+  const isConnectingRef = useRef(false);
 
   const [isMobile] = useMediaQuery("(max-width: 768px)");
   const [isTablet] = useMediaQuery("(max-width: 1024px) and (min-width: 769px)");
@@ -122,19 +87,18 @@ export default function MapaHospitalOptimizado() {
   const [hospitalInfo, setHospitalInfo] = useState(null);
   const [ambulances, setAmbulances] = useState([]);
   const [wsConnected, setWsConnected] = useState(false);
-  const [activeRoutes, setActiveRoutes] = useState([]); 
+  const [activeRoutes, setActiveRoutes] = useState([]);
   const [trafficEnabled, setTrafficEnabled] = useState(true);
-  const [isConnecting, setIsConnecting] = useState(false);
-  const [isGeocoding, setIsGeocoding] = useState(false);
   const [camasDisponibles, setCamasDisponibles] = useState(0);
+  const [camasEmergencia, setCamasEmergencia] = useState(0);
 
-  // Estados de expedientes guardados en historial local de sesión
   const [historialExpedientes, setHistorialExpedientes] = useState([]);
-
   const [patientNotifications, setPatientNotifications] = useState([]);
   const [selectedNotification, setSelectedNotification] = useState(null);
   const [selectedAmbulance, setSelectedAmbulance] = useState(null);
   const [selectedReport, setSelectedReport] = useState(null);
+  const [reportHistory, setReportHistory] = useState([]);
+  const [selectedReportVersion, setSelectedReportVersion] = useState(null);
   const [doctorSeleccionado, setDoctorSeleccionado] = useState("");
   const [listaDoctores, setListaDoctores] = useState([]);
   const [confirmReject, setConfirmReject] = useState(false);
@@ -142,161 +106,140 @@ export default function MapaHospitalOptimizado() {
   const { isOpen: isNoteOpen, onOpen: onNoteOpen, onClose: onNoteClose } = useDisclosure();
   const { isOpen: isNotificationOpen, onOpen: onNotificationOpen, onClose: onNotificationClose } = useDisclosure();
   const { isOpen: isReportModalOpen, onOpen: onReportModalOpen, onClose: onReportModalClose } = useDisclosure();
-  
-  // Drawer de Expedientes
   const { isOpen: isExpedientesOpen, onOpen: onExpedientesOpen, onClose: onExpedientesClose } = useDisclosure();
 
   const toast = useToast();
-  const apiBaseUrl = getApiBaseUrl();
 
-  const geocodeAddressDirect = async (address) => {
-    if (!address || address.trim() === '') return null;
-    setIsGeocoding(true);
-    const cleanAddress = address.trim();
+  const showToast = useCallback((status, title, description) => {
+    toast({ title, description, status, duration: 4000, isClosable: true, position: 'top-right' });
+  }, [toast]);
 
-    try {
-      const query = `${cleanAddress}, Morelia, Michoacán, México`;
-      const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?access_token=${mapboxgl.accessToken}&country=mx&types=address&limit=1&language=es`;
-      const response = await fetch(url);
-      if (response.ok) {
-        const data = await response.json();
-        if (data.features && data.features.length > 0) {
-          const feature = data.features[0];
-          return { lat: feature.center[1], lng: feature.center[0], place_name: feature.place_name };
-        }
-      }
-    } catch (error) { console.warn('⚠️ Falló Mapbox Geocoding:', error); }
-
-    try {
-      const nominatimQuery = `${cleanAddress}, Morelia, Michoacán, México`;
-      const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(nominatimQuery)}&limit=1&countrycodes=mx`;
-      const response = await fetch(url, { headers: { 'User-Agent': 'EmergenCity/1.0' } });
-      if (response.ok) {
-        const data = await response.json();
-        if (data && data.length > 0) {
-          return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon), place_name: data[0].display_name };
-        }
-      }
-    } catch (error) { console.warn('⚠️ Falló Nominatim Geocoding:', error); }
-
-    setIsGeocoding(false);
-    return null;
-  };
-
+  // ==================== CARGA INICIAL ====================
   useEffect(() => {
     isMounted.current = true;
-    const loadHospitalData = async () => {
-      try {
-        const stored = JSON.parse(localStorage.getItem("hospitalInfo") || "null");
-        if (!stored || !stored.id) {
-          showToast('error', 'Configuración Requerida', 'Complete la información del hospital en el sistema');
-          return;
-        }
-
-        let hospitalData = {
-          id: stored.id,
-          nombre: stored.nombre || "Hospital Base",
-          direccion: stored.direccion || "",
-          lat: stored.lat,
-          lng: stored.lng,
-          especialidades: stored.especialidades || ['General'],
-          camasDisponibles: stored.camasDisponibles || 10,
-          telefono: stored.telefono || ''
-        };
-
-        if (hospitalData.direccion && (!hospitalData.lat || !hospitalData.lng)) {
-          showToast('info', 'Geocodificando', 'Buscando coordenadas exactas del hospital...');
-          const geoResult = await geocodeAddressDirect(hospitalData.direccion);
-          setIsGeocoding(false);
-          if (geoResult) {
-            hospitalData.lat = geoResult.lat;
-            hospitalData.lng = geoResult.lng;
-            localStorage.setItem("hospitalInfo", JSON.stringify({ ...stored, lat: geoResult.lat, lng: geoResult.lng }));
-          } else {
-            hospitalData.lat = 19.7024;
-            hospitalData.lng = -101.1969;
-          }
-        }
-
-        if (isMounted.current) {
-          setHospitalInfo(hospitalData);
-          setCamasDisponibles(hospitalData.camasDisponibles);
-          showToast('success', 'Hospital Configurado', hospitalData.nombre);
-        }
-      } catch (error) {
-        console.error('❌ Error cargando datos del hospital:', error);
-        showToast('error', 'Error de Configuración', 'No se pudieron cargar los datos del hospital');
+    try {
+      const stored = JSON.parse(localStorage.getItem("hospitalInfo") || "null");
+      if (!stored || !stored.id) {
+        showToast('error', 'Configuración Requerida', 'Complete la información del hospital');
+        return;
       }
-    };
-    loadHospitalData();
+      const h = {
+        id: stored.id,
+        nombre: stored.nombre || "Hospital Base",
+        direccion: stored.direccion || "",
+        lat: stored.lat ?? 19.7024,
+        lng: stored.lng ?? -101.1969,
+        especialidades: stored.especialidades || ['General'],
+        camasDisponibles: stored.camasDisponibles ?? 10,
+        camasEmergencia: stored.camasEmergencia ?? stored.camasDisponibles ?? 10,
+        telefono: stored.telefono || ''
+      };
+      setHospitalInfo(h);
+      setCamasDisponibles(h.camasDisponibles);
+      setCamasEmergencia(h.camasEmergencia);
+    } catch (e) {
+      showToast('error', 'Error de Configuración', 'No se pudieron cargar los datos del hospital');
+    }
     return () => { isMounted.current = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     const cargarDoctores = async () => {
       try {
-        const response = await fetch(`${apiBaseUrl}/api/doctor`);
-        if (response.ok) {
-          const data = await response.json();
+        const apiBase = (import.meta.env.VITE_API || 'https://emergencity-morelia-v2.onrender.com').replace(/\/+$/, '');
+        const r = await fetch(`${apiBase}/api/doctores`);
+        if (r.ok) {
+          const data = await r.json();
           if (Array.isArray(data)) setListaDoctores(data);
         }
-      } catch (error) { console.warn("Aviso: No se pudo conectar al endpoint de doctores, usando respaldo vacío.", error); }
+      } catch (_) {}
     };
     cargarDoctores();
-  }, [apiBaseUrl]);
+  }, []);
+
+  // ==================== WEBSOCKET ====================
+  const registerHospital = useCallback(() => {
+    if (!hospitalInfo || !ws.current || ws.current.readyState !== WebSocket.OPEN) return;
+    ws.current.send(JSON.stringify({
+      type: 'register_hospital',
+      hospital: {
+        ...hospitalInfo,
+        camasDisponibles,
+        camasEmergencia
+      }
+    }));
+  }, [hospitalInfo, camasDisponibles, camasEmergencia]);
+
+  const sendWS = useCallback((payload) => {
+    if (ws.current?.readyState === WebSocket.OPEN) {
+      ws.current.send(JSON.stringify(payload));
+      return true;
+    }
+    return false;
+  }, []);
 
   const connectWebSocket = useCallback(() => {
-    if (!isMounted.current || isConnecting || connectionAttempts.current >= maxConnectionAttempts) return;
+    if (!isMounted.current || isConnectingRef.current) return;
+    if (ws.current && (ws.current.readyState === WebSocket.OPEN || ws.current.readyState === WebSocket.CONNECTING)) return;
+
+    isConnectingRef.current = true;
+    connectionAttempts.current += 1;
+
     try {
-      if (ws.current && (ws.current.readyState === WebSocket.OPEN || ws.current.readyState === WebSocket.CONNECTING)) return;
+      const socket = new WebSocket(WS_URL);
+      ws.current = socket;
 
-      setIsConnecting(true);
-      connectionAttempts.current += 1;
-      ws.current = new WebSocket(import.meta.env.VITE_WS_URL || 'ws://localhost:3002/ws');
-
-      ws.current.onopen = () => {
+      socket.onopen = () => {
         if (!isMounted.current) return;
         setWsConnected(true);
-        setIsConnecting(false);
+        isConnectingRef.current = false;
         connectionAttempts.current = 0;
-        if (hospitalInfo) registerHospital();
+        registerHospital();
         showToast('success', 'Sistema Conectado', 'Hospital conectado al servidor central');
       };
 
-      ws.current.onmessage = (event) => {
+      socket.onmessage = (event) => {
         if (!isMounted.current) return;
         try {
           const data = JSON.parse(event.data);
           switch (data.type) {
-            case 'connection_established': break;
+            case 'connection_established':
+              break;
+
+            case 'hospital_registered':
+              break;
+
+            case 'hospital_beds_update':
+              // Sincronización autoritativa del server
+              if (data.hospitalId === hospitalInfo?.id) {
+                setCamasEmergencia(data.camasEmergencia ?? 0);
+                setCamasDisponibles(data.camasDisponibles ?? 0);
+              }
+              break;
+
             case 'active_ambulances_update':
               setAmbulances(data.ambulances || []);
               updateAmbulanceMarkers(data.ambulances || []);
               break;
+
+            case 'ambulance_location_broadcast':
             case 'location_update':
               handleAmbulanceLocationUpdate(data);
               break;
+
             case 'patient_transfer_notification':
               handlePatientTransferNotification(data);
               break;
-            case 'route_updated':
-              handleRouteUpdated(data);
-              break;
-            case 'active_routes_update':
-              if (data.routes && data.routes.length > 0) data.routes.forEach(route => handleRouteUpdated(route));
-              break;
-            case 'recepcion_reporte_paciente':
-              procesarReporteMedico(data.reporte);
-              break;
-            case 'navigation_cancelled':
-              handleNavigationCancelled(data);
-              break;
+
+            case 'patient_accepted_with_route':
             case 'patient_accepted':
               if (data.hospitalId === hospitalInfo?.id) {
                 setPatientNotifications(prev => prev.filter(n => n.notificationId !== data.notificationId));
-                showToast('success', 'Paciente Aceptado', 'Traslado confirmado - Preparar recepción');
+                showToast('success', 'Paciente Aceptado', 'Traslado confirmado — preparar recepción');
               }
               break;
+
             case 'patient_rejected':
               if (data.hospitalId === hospitalInfo?.id) {
                 setPatientNotifications(prev => prev.filter(n => n.notificationId !== data.notificationId));
@@ -304,50 +247,100 @@ export default function MapaHospitalOptimizado() {
                 showToast('warning', 'Paciente Rechazado', 'Se ha notificado a la ambulancia');
               }
               break;
+
+            case 'route_updated':
+              handleRouteUpdated(data);
+              break;
+
+            case 'active_routes_update':
+              (data.routes || []).forEach(handleRouteUpdated);
+              break;
+
+            case 'navigation_cancelled':
+              handleNavigationCancelled(data);
+              break;
+
+            case 'prehospital_report_update':
+              handlePrehospitalReportUpdate(data);
+              break;
+
+            case 'prehospital_report_history':
+              if (data.callId === selectedReport?.callId) {
+                setReportHistory(data.versions || []);
+                setSelectedReportVersion(data.currentVersion || null);
+              }
+              break;
+
+            case 'emergency_created_by_operator_broadcast':
+              showToast('info', 'Emergencia iniciada por operador',
+                `Unidad ${data.ambulanceName || data.ambulanceId} · ${data.emergencyType || ''}`);
+              break;
+
+            case 'doctor_connected':
+              if (data.doctor) {
+                setListaDoctores(prev => {
+                  const exists = prev.some(d => d.id === data.doctor.doctorId);
+                  return exists ? prev : [...prev, {
+                    id: data.doctor.doctorId,
+                    nombre: data.doctor.nombre,
+                    especialidad: data.doctor.especialidad
+                  }];
+                });
+              }
+              break;
+
+            case 'doctor_disconnected':
+              setListaDoctores(prev => prev.filter(d => d.id !== data.doctorId));
+              break;
+
             case 'error':
-              showToast('error', 'Error del Sistema', data.message);
+              // Silencioso — puede ser un mensaje transitorio
+              break;
+
+            default:
               break;
           }
-        } catch (error) { console.error('❌ Error procesando mensaje:', error); }
-      };
-
-      ws.current.onclose = (event) => {
-        if (!isMounted.current) return;
-        setWsConnected(false);
-        setIsConnecting(false);
-        if (event.code !== 1000 && connectionAttempts.current < maxConnectionAttempts) {
-          showToast('warning', 'Conexión Perdida', 'Reconectando automáticamente...');
-          reconnectTimeout.current = setTimeout(() => connectWebSocket(), 5000);
-        } else if (connectionAttempts.current >= maxConnectionAttempts) {
-          showToast('error', 'Error Crítico', 'No se pudo reconectar al servidor');
+        } catch (e) {
+          console.error('WS message error:', e);
         }
       };
 
-      ws.current.onerror = () => {
+      socket.onclose = (event) => {
         if (!isMounted.current) return;
         setWsConnected(false);
-        setIsConnecting(false);
+        isConnectingRef.current = false;
+        if (event.code !== 1000 && connectionAttempts.current < 5) {
+          reconnectTimeout.current = setTimeout(() => connectWebSocket(), 5000);
+        }
       };
 
-    } catch (error) { setIsConnecting(false); }
-  }, [hospitalInfo, isConnecting]);
-
-  const registerHospital = useCallback(() => {
-    if (!hospitalInfo || !ws.current || ws.current.readyState !== WebSocket.OPEN) return;
-    if (hospitalInfo.lat && hospitalInfo.lng) {
-      ws.current.send(JSON.stringify({
-        type: 'register_hospital',
-        hospital: { ...hospitalInfo, camasDisponibles: camasDisponibles }
-      }));
+      socket.onerror = () => {
+        if (!isMounted.current) return;
+        setWsConnected(false);
+        isConnectingRef.current = false;
+      };
+    } catch (e) {
+      isConnectingRef.current = false;
     }
-  }, [hospitalInfo, camasDisponibles]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [registerHospital, showToast, hospitalInfo?.id]);
 
   useEffect(() => {
-    if (wsConnected && hospitalInfo) {
-      registerHospital();
+    if (hospitalInfo) {
+      const t = setTimeout(() => connectWebSocket(), 800);
+      return () => clearTimeout(t);
     }
-  }, [camasDisponibles, wsConnected, hospitalInfo, registerHospital]);
+  }, [hospitalInfo, connectWebSocket]);
 
+  // Cuando cambian las camas manualmente, actualizar al server
+  useEffect(() => {
+    if (wsConnected && hospitalInfo) {
+      const t = setTimeout(() => registerHospital(), 400);
+      return () => clearTimeout(t);
+    }
+  }, [camasDisponibles, camasEmergencia, wsConnected, hospitalInfo, registerHospital]);
+
+  // ==================== MAPA ====================
   useEffect(() => {
     if (!hospitalInfo || !mapContainer.current) return;
 
@@ -370,24 +363,10 @@ export default function MapaHospitalOptimizado() {
 
     return () => {
       cleanupMarkers();
-      if (mapInstance) mapInstance.remove();
+      try { mapInstance.remove(); } catch (_) {}
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hospitalInfo]);
-
-  useEffect(() => {
-    if (hospitalInfo) {
-      const timeoutId = setTimeout(() => connectWebSocket(), 1000);
-      return () => clearTimeout(timeoutId);
-    }
-  }, [hospitalInfo, connectWebSocket]);
-
-  useEffect(() => {
-    return () => {
-      isMounted.current = false;
-      if (reconnectTimeout.current) clearTimeout(reconnectTimeout.current);
-      if (ws.current) try { ws.current.close(1000); } catch (e) {}
-    };
-  }, []);
 
   const addTrafficLayer = () => {
     if (!map.current) return;
@@ -402,21 +381,25 @@ export default function MapaHospitalOptimizado() {
           source: 'mapbox-traffic',
           'source-layer': 'traffic',
           paint: {
-            'line-color': ['case', ['==', ['get', 'congestion'], 'low'], '#10b981', ['==', ['get', 'congestion'], 'moderate'], '#f59e0b', ['==', ['get', 'congestion'], 'heavy'], '#ef4444', '#10b981'],
+            'line-color': ['case',
+              ['==', ['get', 'congestion'], 'low'], '#10b981',
+              ['==', ['get', 'congestion'], 'moderate'], '#f59e0b',
+              ['==', ['get', 'congestion'], 'heavy'], '#ef4444',
+              '#10b981'],
             'line-width': isMobile ? 3 : 4,
             'line-opacity': 0.8
           }
         }, 'waterway-label');
       }
-    } catch (error) { console.warn('Error capa tráfico:', error); }
+    } catch (_) {}
   };
 
   const add3DBuildings = () => {
     if (!map.current) return;
     try {
       const layers = map.current.getStyle().layers;
-      const labelLayerId = layers.find(layer => layer.type === 'symbol' && layer.layout['text-field'])?.id;
-      if (map.current.getSource('composite')) {
+      const labelLayerId = layers.find(l => l.type === 'symbol' && l.layout?.['text-field'])?.id;
+      if (map.current.getSource('composite') && !map.current.getLayer('3d-buildings-hospital')) {
         map.current.addLayer({
           id: '3d-buildings-hospital',
           source: 'composite',
@@ -432,7 +415,7 @@ export default function MapaHospitalOptimizado() {
           }
         }, labelLayerId);
       }
-    } catch (error) { console.warn('Error edificios 3D:', error); }
+    } catch (_) {}
   };
 
   const toggleTraffic = () => {
@@ -440,11 +423,9 @@ export default function MapaHospitalOptimizado() {
     if (trafficEnabled) {
       if (map.current.getLayer('traffic-layer-hospital')) map.current.removeLayer('traffic-layer-hospital');
       setTrafficEnabled(false);
-      showToast('info', 'Tráfico', 'Capa de tráfico desactivada');
     } else {
       addTrafficLayer();
       setTrafficEnabled(true);
-      showToast('info', 'Tráfico', 'Capa de tráfico activada');
     }
   };
 
@@ -454,53 +435,54 @@ export default function MapaHospitalOptimizado() {
       if (hospitalMarker.current) hospitalMarker.current.remove();
       const el = document.createElement('div');
       el.innerHTML = `
-        <div style="width: 70px; height: 70px; background: #09090b; border: 4px solid #38bdf8; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 32px; box-shadow: 0 0 25px rgba(56,189,248,0.6); cursor: pointer; z-index: 10;">
-          🏥
-        </div>
-      `;
-      
+        <div style="width:70px;height:70px;background:#09090b;border:4px solid #38bdf8;border-radius:50%;
+          display:flex;align-items:center;justify-content:center;font-size:32px;
+          box-shadow:0 0 25px rgba(56,189,248,0.6);cursor:pointer;">
+          <span style="color:#38bdf8;font-weight:900;font-size:28px;">H</span>
+        </div>`;
       const popup = new mapboxgl.Popup({ offset: 35 }).setHTML(`
-        <div style="text-align: center;">
-          <h3 style="font-size: 18px; font-weight: 900; color: #38bdf8; margin-bottom: 5px;">${hospitalInfo.nombre}</h3>
-          <p style="font-size: 13px; color: #a1a1aa;">${hospitalInfo.direccion}</p>
-        </div>
-      `);
-
-      hospitalMarker.current = new mapboxgl.Marker({ element: el }).setLngLat([hospitalInfo.lng, hospitalInfo.lat]).setPopup(popup).addTo(map.current);
-    } catch (error) { console.error('Error hospital marker:', error); }
+        <div style="text-align:center;">
+          <h3 style="font-size:18px;font-weight:900;color:#38bdf8;margin-bottom:5px;">${hospitalInfo.nombre}</h3>
+          <p style="font-size:13px;color:#a1a1aa;">${hospitalInfo.direccion}</p>
+        </div>`);
+      hospitalMarker.current = new mapboxgl.Marker({ element: el })
+        .setLngLat([hospitalInfo.lng, hospitalInfo.lat])
+        .setPopup(popup)
+        .addTo(map.current);
+    } catch (_) {}
   };
 
-  const updateAmbulanceMarkers = (ambulancesList) => {
+  const updateAmbulanceMarkers = (list) => {
     if (!map.current) return;
-    Object.values(ambulanceMarkers.current).forEach(marker => marker.remove());
+    Object.values(ambulanceMarkers.current).forEach(m => m.remove());
     ambulanceMarkers.current = {};
 
-    ambulancesList.forEach(ambulance => {
-      if (!ambulance.location || !ambulance.location.lat || !ambulance.location.lng) return;
-      const isRoute = ambulance.status === 'en_ruta';
+    list.forEach(amb => {
+      if (!amb.location?.lat || !amb.location?.lng) return;
+      const isRoute = amb.status === 'en_ruta';
       const el = document.createElement('div');
       el.innerHTML = `
-        <div style="width: 60px; height: 60px; background: ${isRoute ? '#10b981' : '#f59e0b'}; border: 4px solid #18181b; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 26px; box-shadow: 0 0 20px ${isRoute ? 'rgba(16,185,129,0.7)' : 'rgba(245,158,11,0.7)'}; cursor: pointer; transition: transform 0.2s;">
-          🚑
-        </div>
-      `;
-
-      const popup = new mapboxgl.Popup({ offset: 35 }).setHTML(`
-        <div style="text-align: center;">
-          <strong style="font-size: 18px; color: ${isRoute ? '#10b981' : '#f59e0b'};">UNIDAD ${ambulance.id}</strong>
-          <div style="margin-top: 10px; font-size: 14px; font-weight: 700; color: #d4d4d8;">
-            <p>ESTADO: ${ambulance.status.replace('_', ' ').toUpperCase()}</p>
-            <p>VELOCIDAD: ${ambulance.speed || 0} km/h</p>
+        <div style="width:50px;height:50px;background:${isRoute ? '#10b981' : '#f59e0b'};border:4px solid #18181b;
+          border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:22px;
+          box-shadow:0 0 20px ${isRoute ? 'rgba(16,185,129,0.7)' : 'rgba(245,158,11,0.7)'};cursor:pointer;">
+          <span style="color:#fff;font-weight:900;">A</span>
+        </div>`;
+      const popup = new mapboxgl.Popup({ offset: 30 }).setHTML(`
+        <div style="text-align:center;">
+          <strong style="font-size:16px;color:${isRoute ? '#10b981' : '#f59e0b'};">UNIDAD ${amb.id}</strong>
+          <div style="margin-top:8px;font-size:13px;color:#d4d4d8;">
+            <p>ESTADO: ${(amb.status || '').replace('_', ' ').toUpperCase()}</p>
+            <p>VELOCIDAD: ${amb.speed || 0} km/h</p>
           </div>
-        </div>
-      `);
-
-      const marker = new mapboxgl.Marker({ element: el }).setLngLat([ambulance.location.lng, ambulance.location.lat]).setPopup(popup).addTo(map.current);
-      ambulanceMarkers.current[ambulance.id] = marker;
-
+        </div>`);
+      const marker = new mapboxgl.Marker({ element: el })
+        .setLngLat([amb.location.lng, amb.location.lat])
+        .setPopup(popup)
+        .addTo(map.current);
+      ambulanceMarkers.current[amb.id] = marker;
       el.addEventListener('click', () => {
-        setSelectedAmbulance(ambulance);
-        map.current.flyTo({ center: [ambulance.location.lng, ambulance.location.lat], zoom: 16, duration: 800 });
+        setSelectedAmbulance(amb);
+        map.current.flyTo({ center: [amb.location.lng, amb.location.lat], zoom: 16, duration: 800 });
       });
     });
   };
@@ -510,15 +492,19 @@ export default function MapaHospitalOptimizado() {
     const marker = ambulanceMarkers.current[data.ambulanceId];
     if (marker) {
       marker.setLngLat([data.location.lng, data.location.lat]);
-      setAmbulances(prev => prev.map(amb => amb.id === data.ambulanceId ? { ...amb, location: data.location, speed: data.speed, heading: data.heading } : amb));
     }
+    setAmbulances(prev => prev.map(a =>
+      a.id === data.ambulanceId
+        ? { ...a, location: data.location, speed: data.speed, heading: data.heading, status: data.status || a.status }
+        : a
+    ));
   };
 
   const cleanupMarkers = () => {
     if (hospitalMarker.current) hospitalMarker.current.remove();
-    Object.values(ambulanceMarkers.current).forEach(marker => marker.remove());
+    Object.values(ambulanceMarkers.current).forEach(m => m.remove());
     ambulanceMarkers.current = {};
-    Object.keys(routeLayersByAmbulance.current).forEach(ambId => clearAmbulanceRoute(ambId));
+    Object.keys(routeLayersByAmbulance.current).forEach(id => clearAmbulanceRoute(id));
   };
 
   const clearAmbulanceRoute = (ambulanceId) => {
@@ -532,126 +518,101 @@ export default function MapaHospitalOptimizado() {
     setActiveRoutes(prev => prev.filter(r => r.ambulanceId !== ambulanceId));
   };
 
-  const drawAmbulanceRoute = (ambulanceId, routeGeometry, distance, duration) => {
+  const drawAmbulanceRoute = (ambulanceId, routeGeometry) => {
     if (!map.current || !routeGeometry) return;
     clearAmbulanceRoute(ambulanceId);
 
     const sourceId = `route-${ambulanceId}-${Date.now()}`;
-    const layerId = sourceId;
-    const glowLayerId = `${sourceId}-glow`;
+    const glowId = `${sourceId}-glow`;
 
     try {
       map.current.addSource(sourceId, {
         type: 'geojson',
         data: { type: 'Feature', geometry: { type: 'LineString', coordinates: routeGeometry }, properties: {} }
       });
-
       map.current.addLayer({
-        id: layerId, type: 'line', source: sourceId,
+        id: glowId, type: 'line', source: sourceId,
+        paint: { 'line-color': '#38bdf8', 'line-width': 16, 'line-opacity': 0.3, 'line-blur': 3 }
+      });
+      map.current.addLayer({
+        id: sourceId, type: 'line', source: sourceId,
         layout: { 'line-join': 'round', 'line-cap': 'round' },
         paint: { 'line-color': '#38bdf8', 'line-width': 8, 'line-opacity': 0.9 }
       });
-
-      map.current.addLayer({
-        id: glowLayerId, type: 'line', source: sourceId,
-        layout: { 'line-join': 'round', 'line-cap': 'round' },
-        paint: { 'line-color': '#38bdf8', 'line-width': 16, 'line-opacity': 0.3, 'line-blur': 3 }
-      }, layerId);
-
-      routeLayersByAmbulance.current[ambulanceId] = [layerId, glowLayerId];
+      routeLayersByAmbulance.current[ambulanceId] = [sourceId, glowId];
       routeSourcesByAmbulance.current[ambulanceId] = [sourceId];
 
-      const bounds = new mapboxgl.LngLatBounds();
-      bounds.extend([hospitalInfo.lng, hospitalInfo.lat]);
-      routeGeometry.forEach(coord => bounds.extend([coord[0], coord[1]]));
-      map.current.fitBounds(bounds, { padding: 80, duration: 1500, pitch: 45 });
-    } catch (error) { console.error('Error dibujando ruta:', error); }
+      if (hospitalInfo) {
+        const bounds = new mapboxgl.LngLatBounds();
+        bounds.extend([hospitalInfo.lng, hospitalInfo.lat]);
+        routeGeometry.forEach(c => bounds.extend([c[0], c[1]]));
+        map.current.fitBounds(bounds, { padding: 80, duration: 1200 });
+      }
+    } catch (_) {}
   };
 
   const handleRouteUpdated = (data) => {
     const { ambulanceId, hospitalId, routeGeometry, distance, duration } = data;
     if (hospitalId && hospitalId !== hospitalInfo?.id) return;
-    if (routeGeometry) drawAmbulanceRoute(ambulanceId, routeGeometry, distance, duration);
+    if (routeGeometry) drawAmbulanceRoute(ambulanceId, routeGeometry);
     else { clearAmbulanceRoute(ambulanceId); return; }
 
     setActiveRoutes(prev => {
-      const existing = prev.findIndex(r => r.ambulanceId === ambulanceId);
+      const idx = prev.findIndex(r => r.ambulanceId === ambulanceId);
       const newRoute = { ambulanceId, hospitalId: hospitalId || hospitalInfo?.id, distance, duration, geometry: routeGeometry };
-      if (existing >= 0) { const updated = [...prev]; updated[existing] = newRoute; return updated; }
+      if (idx >= 0) {
+        const copy = [...prev]; copy[idx] = newRoute; return copy;
+      }
       return [...prev, newRoute];
     });
   };
 
   const handleNavigationCancelled = (data) => {
-    clearAmbulanceRoute(data.ambulanceId);
+    if (data.ambulanceId) clearAmbulanceRoute(data.ambulanceId);
   };
 
+  // ==================== NOTIFICACIONES ====================
   const handlePatientTransferNotification = (data) => {
-    const notification = { ...data, id: data.notificationId || `notif_${Date.now()}`, timestamp: new Date().toLocaleTimeString(), status: 'pending' };
+    const notification = {
+      ...data,
+      id: data.notificationId || `notif_${Date.now()}`,
+      timestamp: new Date().toLocaleTimeString(),
+      status: 'pending'
+    };
     setPatientNotifications(prev => [...prev, notification]);
     setSelectedNotification(notification);
     setConfirmReject(false);
 
-    if (data.routeGeometry) drawAmbulanceRoute(data.ambulanceId, data.routeGeometry, data.distance, data.duration);
+    if (data.routeGeometry) drawAmbulanceRoute(data.ambulanceId, data.routeGeometry);
     onNotificationOpen();
-  };
-
-  const procesarReporteMedico = (reporte) => {
-    setSelectedReport(reporte);
-    
-    // Almacenar en el historial local de expedientes
-    setHistorialExpedientes(prev => [
-      { id: reporte?.id || `exp_${Date.now()}`, fecha: new Date().toLocaleString(), ...reporte },
-      ...prev
-    ]);
-
-    const urgencia = reporte?.paciente?.motivo_urgencia || '';
-    const especialidadRequerida = clasificarEspecialidad(urgencia);
-    
-    const doctorIdeal = listaDoctores.find(d => d.especialidad && d.especialidad.toLowerCase() === especialidadRequerida.toLowerCase());
-    
-    if (doctorIdeal) {
-      setDoctorSeleccionado(doctorIdeal.id);
-      showToast('info', 'Especialista Pre-seleccionado', `Dr. ${doctorIdeal.nombre} (${especialidadRequerida}) asignado por protocolo automatizado.`);
-    } else {
-      setDoctorSeleccionado("");
-    }
-    
-    const notif = {
-      notificationId: `report_${Date.now()}`,
-      type: 'reporte_medico',
-      ambulanceId: reporte?.id_ambulancia || 'Externo',
-      status: 'pending',
-      fullReport: reporte
-    };
-    setPatientNotifications(prev => [...prev, notif]);
-    onReportModalOpen();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   };
 
   const acceptPatient = () => {
-    if (!ws.current || ws.current.readyState !== WebSocket.OPEN) return showToast('error', 'Error', 'Sin conexión');
-    ws.current.send(JSON.stringify({
+    if (!sendWS({
       type: 'hospital_accept_patient',
       notificationId: selectedNotification.notificationId,
       hospitalId: hospitalInfo.id,
-      hospitalInfo: hospitalInfo
-    }));
+      hospitalInfo
+    })) {
+      showToast('error', 'Error', 'Sin conexión');
+      return;
+    }
     setPatientNotifications(prev => prev.filter(n => n.notificationId !== selectedNotification.notificationId));
     onNotificationClose();
   };
 
   const rejectPatient = () => {
-    if (!confirmReject) {
-      setConfirmReject(true);
-      return;
-    }
-    if (!ws.current || ws.current.readyState !== WebSocket.OPEN) return showToast('error', 'Error', 'Sin conexión');
-    ws.current.send(JSON.stringify({
+    if (!confirmReject) { setConfirmReject(true); return; }
+    if (!sendWS({
       type: 'hospital_reject_patient',
       notificationId: selectedNotification.notificationId,
       hospitalId: hospitalInfo.id,
       reason: 'Falta de camas / Capacidad superada'
-    }));
+    })) {
+      showToast('error', 'Error', 'Sin conexión');
+      return;
+    }
     setPatientNotifications(prev => prev.filter(n => n.notificationId !== selectedNotification.notificationId));
     clearAmbulanceRoute(selectedNotification.ambulanceId);
     onNotificationClose();
@@ -659,44 +620,100 @@ export default function MapaHospitalOptimizado() {
 
   const enviarRespuestaRapida = (mensaje) => {
     if (!selectedAmbulance) return;
-    if (!ws.current || ws.current.readyState !== WebSocket.OPEN) return showToast('error', 'Error', 'Sin conexión');
-    ws.current.send(JSON.stringify({
+    if (!sendWS({
       type: 'hospital_note',
       ambulanceId: selectedAmbulance.id,
       hospitalId: hospitalInfo.id,
-      note: {
-        id: Date.now(),
-        message: mensaje,
-        timestamp: new Date().toLocaleTimeString()
-      }
-    }));
+      note: { id: Date.now(), message: mensaje, timestamp: new Date().toLocaleTimeString() }
+    })) {
+      showToast('error', 'Error', 'Sin conexión');
+      return;
+    }
     showToast('success', 'Aviso Enviado', `Comunicación enviada a la unidad ${selectedAmbulance.id}`);
     onNoteClose();
   };
 
+  // ==================== REPORTES PREHOSPITALARIOS ====================
+  const handlePrehospitalReportUpdate = (data) => {
+    const { callId, version, report, patientInfo, urgentOnly } = data;
+
+    // Guardar versión en historial local de expedientes
+    setHistorialExpedientes(prev => {
+      const existingIdx = prev.findIndex(e => e.callId === callId);
+      const entry = {
+        callId,
+        version,
+        urgentOnly,
+        report,
+        patientInfo,
+        fecha: new Date().toLocaleString(),
+        paciente: report?.seccionD ? {
+          nombre: report.seccionD.nombre || 'Paciente',
+          edad: report.seccionD.edad,
+          sexo: report.seccionD.sexo,
+          motivo_urgencia: report.seccionF?.motivo_principal,
+          descripcion_lesion: report.seccionH?.lesiones_exposicion,
+          observaciones: report.seccionN?.diagnostico_presuntivo
+        } : null,
+        signos_vitales: report?.seccionI ? {
+          frecuencia_cardiaca: report.seccionI.fc,
+          saturacion_oxigeno: report.seccionI.spo2,
+          tension_arterial: report.seccionI.ta,
+          nivel_glucosa: report.seccionI.glucemia
+        } : null,
+        intervenciones: report?.intervenciones || []
+      };
+      if (existingIdx >= 0) {
+        const copy = [...prev];
+        copy[existingIdx] = { ...copy[existingIdx], ...entry };
+        return copy;
+      }
+      return [entry, ...prev];
+    });
+
+    // Si hay un expediente abierto para ese callId, actualizar
+    if (selectedReport?.callId === callId) {
+      setReportHistory(prev => [...prev, { version, report, timestamp: new Date().toISOString() }]);
+      setSelectedReportVersion(version);
+      setSelectedReport(prev => ({ ...prev, ...report }));
+    }
+
+    // Pre-seleccionar especialista
+    const motivo = report?.seccionF?.motivo_principal || '';
+    const espReq = clasificarEspecialidad(motivo);
+    const docIdeal = listaDoctores.find(d => d.especialidad?.toLowerCase() === espReq.toLowerCase());
+    if (docIdeal) setDoctorSeleccionado(docIdeal.id);
+
+    showToast('info', `Reporte v${version} recibido`, urgentOnly ? 'Datos urgentes — preparar recursos' : 'Actualización de expediente');
+  };
+
+  // ==================== PDF ====================
   const generarPDFConDatos = async (reporteMeta) => {
     try {
-      showToast('info', 'Procesando PDF', 'Generando documento oficial de expediente...');
-      // Generación programática simple o utilizando el ref actual
       const pdf = new jsPDF('p', 'mm', 'a4');
       pdf.setFont("helvetica", "bold");
-      pdf.setFontSize(20);
+      pdf.setFontSize(18);
       pdf.text("EXPEDIENTE CLÍNICO DE URGENCIAS", 20, 20);
-      
-      pdf.setFontSize(12);
-      pdf.setFont("helvetica", "normal");
-      pdf.text(`Paciente: ${reporteMeta?.paciente?.nombre || 'Desconocido'}`, 20, 35);
-      pdf.text(`Edad: ${reporteMeta?.paciente?.edad || '--'} | Sexo: ${reporteMeta?.paciente?.sexo || '--'}`, 20, 45);
-      pdf.text(`Motivo de Urgencia: ${reporteMeta?.paciente?.motivo_urgencia || 'No especificado'}`, 20, 55);
-      
-      pdf.text("Signos Vitales:", 20, 70);
-      pdf.text(`- Frecuencia Cardíaca: ${reporteMeta?.signos_vitales?.frecuencia_cardiaca || '--'} bpm`, 25, 80);
-      pdf.text(`- Saturación Oxígeno: ${reporteMeta?.signos_vitales?.saturacion_oxigeno || '--'} %`, 25, 90);
-      pdf.text(`- Tensión Arterial: ${reporteMeta?.signos_vitales?.tension_arterial || '--'}`, 25, 100);
 
-      pdf.save(`Expediente_${reporteMeta?.paciente?.nombre || 'Paciente'}_${Date.now()}.pdf`);
-      showToast('success', 'Descarga Completa', 'Archivo PDF guardado con éxito.');
-    } catch (e) {
+      pdf.setFontSize(11);
+      pdf.setFont("helvetica", "normal");
+      pdf.text(`Folio: ${reporteMeta?.callId || '--'}`, 20, 32);
+      pdf.text(`Fecha: ${reporteMeta?.fecha || '--'}`, 20, 40);
+      pdf.text(`Paciente: ${reporteMeta?.paciente?.nombre || 'Desconocido'}`, 20, 52);
+      pdf.text(`Edad: ${reporteMeta?.paciente?.edad || '--'}  Sexo: ${reporteMeta?.paciente?.sexo || '--'}`, 20, 60);
+      pdf.text(`Motivo: ${reporteMeta?.paciente?.motivo_urgencia || 'No especificado'}`, 20, 68);
+
+      pdf.setFont("helvetica", "bold");
+      pdf.text("Signos Vitales:", 20, 82);
+      pdf.setFont("helvetica", "normal");
+      pdf.text(`FC: ${reporteMeta?.signos_vitales?.frecuencia_cardiaca || '--'} bpm`, 25, 92);
+      pdf.text(`SpO2: ${reporteMeta?.signos_vitales?.saturacion_oxigeno || '--'} %`, 25, 100);
+      pdf.text(`TA: ${reporteMeta?.signos_vitales?.tension_arterial || '--'}`, 25, 108);
+      pdf.text(`Glucosa: ${reporteMeta?.signos_vitales?.nivel_glucosa || '--'}`, 25, 116);
+
+      pdf.save(`Expediente_${reporteMeta?.callId || Date.now()}.pdf`);
+      showToast('success', 'PDF Generado', 'Documento descargado');
+    } catch (_) {
       showToast('error', 'Error', 'No se pudo exportar el PDF');
     }
   };
@@ -705,54 +722,32 @@ export default function MapaHospitalOptimizado() {
     const input = reportRef.current;
     if (!input) return;
     try {
-      showToast('info', 'Procesando Expediente', 'Generando documento oficial...');
-      
-      const originalBg = input.style.backgroundColor;
-      const originalColor = input.style.color;
-      input.style.backgroundColor = '#ffffff';
-      input.style.color = '#000000';
-      
       const canvas = await html2canvas(input, { scale: 2, useCORS: true, backgroundColor: '#ffffff' });
-      
-      input.style.backgroundColor = originalBg;
-      input.style.color = originalColor;
-
       const imgData = canvas.toDataURL('image/png');
       const pdf = new jsPDF('p', 'mm', 'a4');
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const imgHeight = (canvas.height * pdfWidth) / canvas.width;
-      let heightLeft = imgHeight;
-      let position = 0;
-      pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, imgHeight);
-      heightLeft -= pdf.internal.pageSize.getHeight();
-      while (heightLeft >= 0) {
-        position = heightLeft - imgHeight;
-        pdf.addPage();
-        pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, imgHeight);
-        heightLeft -= pdf.internal.pageSize.getHeight();
-      }
-      pdf.save(`Expediente_${selectedReport?.paciente?.nombre || 'Urgencia'}_${Date.now()}.pdf`);
-    } catch (error) { showToast('error', 'Error', 'Fallo al generar documento'); }
+      const pdfW = pdf.internal.pageSize.getWidth();
+      const imgH = (canvas.height * pdfW) / canvas.width;
+      pdf.addImage(imgData, 'PNG', 0, 0, pdfW, imgH);
+      pdf.save(`Reporte_${selectedReport?.callId || Date.now()}.pdf`);
+    } catch (_) {
+      showToast('error', 'Error', 'Fallo al generar documento');
+    }
   };
 
   const confirmarReporteYAsignar = () => {
-    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-      ws.current.send(JSON.stringify({
-        type: 'asignar_paciente_doctor',
-        targetDoctorId: doctorSeleccionado,
-        hospitalId: hospitalInfo.id,
-        reporte: selectedReport
-      }));
+    if (selectedReport?.callId && doctorSeleccionado) {
+      sendWS({
+        type: 'assign_doctor',
+        callId: selectedReport.callId,
+        doctorId: doctorSeleccionado,
+        reason: 'Asignación desde hospital'
+      });
     }
     generarPDF();
     setTimeout(() => {
-      showToast('success', 'Recepción Confirmada', 'Paciente ingresado, doctor notificado y expediente abierto.');
+      showToast('success', 'Recepción Confirmada', 'Paciente ingresado y doctor notificado');
       onReportModalClose();
-    }, 1500);
-  };
-
-  const showToast = (status, title, description) => {
-    toast({ title, description, status, duration: 4000, isClosable: true, position: 'top-right' });
+    }, 1200);
   };
 
   const centerOnHospital = () => {
@@ -760,13 +755,14 @@ export default function MapaHospitalOptimizado() {
     map.current.flyTo({ center: [hospitalInfo.lng, hospitalInfo.lat], zoom: 16, pitch: 45, duration: 1000 });
   };
 
+  // ==================== RENDER ====================
   if (!hospitalInfo) {
     return (
       <ChakraProvider>
         <Box h="100vh" bg="#09090b" display="flex" alignItems="center" justifyContent="center">
           <VStack spacing={6}>
             <Spinner size="xl" color="#38bdf8" thickness="4px" />
-            <Text fontSize="20px" fontWeight="900" color="white" letterSpacing="2px">INICIALIZANDO SISTEMA TÁCTICO...</Text>
+            <Text fontSize="20px" fontWeight="900" color="white" letterSpacing="2px">INICIALIZANDO SISTEMA...</Text>
           </VStack>
         </Box>
       </ChakraProvider>
@@ -776,8 +772,7 @@ export default function MapaHospitalOptimizado() {
   return (
     <ChakraProvider>
       <Box h="100vh" w="100vw" bg="#09090b" display="flex" flexDirection="column" overflow="hidden">
-        
-        {/* ==================== HEADER CON BOTÓN DE EXPEDIENTES Y CERRAR SESIÓN DISCRETO ==================== */}
+        {/* HEADER */}
         <Flex as="nav" h="85px" bg="#09090b" borderBottom="1px solid #27272a" px={6} align="center" justify="space-between" zIndex="10">
           <HStack spacing={4}>
             <Box p={3} bg="#18181b" borderRadius="xl" border="1px solid #27272a">
@@ -790,103 +785,98 @@ export default function MapaHospitalOptimizado() {
           </HStack>
 
           <HStack spacing={5}>
-            {/* CAMAS DE URGENCIAS CON BOTONES DE MÁS Y MENOS */}
+            {/* Camas de emergencia */}
             <HStack bg="#18181b" px={4} py={2} borderRadius="xl" border="2px solid #27272a">
-              <Icon as={FaBed} color={camasDisponibles > 2 ? "#10b981" : "#ef4444"} boxSize={6} />
+              <Icon as={FaBed} color={camasEmergencia > 2 ? "#10b981" : camasEmergencia > 0 ? "#f59e0b" : "#ef4444"} boxSize={6} />
               <VStack align="start" spacing={0} ml={2} mr={3}>
-                <Text fontSize="10px" fontWeight="900" color="#a1a1aa" letterSpacing="1px">CAMAS LIBRES</Text>
-                <Text fontSize="24px" fontWeight="900" color="#f8fafc" lineHeight="1">{camasDisponibles}</Text>
+                <Text fontSize="10px" fontWeight="900" color="#a1a1aa" letterSpacing="1px">CAMAS URG.</Text>
+                <Text fontSize="24px" fontWeight="900" color="#f8fafc" lineHeight="1">{camasEmergencia}</Text>
               </VStack>
               <ButtonGroup size="sm" isAttached>
-                <IconButton 
-                  icon={<FaMinus />} 
-                  aria-label="Restar cama" 
-                  onClick={() => setCamasDisponibles(Math.max(0, camasDisponibles - 1))} 
-                  bg="#27272a" 
-                  color="white" 
-                  _hover={{ bg: '#3f3f46' }}
+                <IconButton
+                  icon={<FaMinus />} aria-label="Restar cama"
+                  onClick={() => setCamasEmergencia(v => Math.max(0, v - 1))}
+                  bg="#27272a" color="white" _hover={{ bg: '#3f3f46' }}
                 />
-                <IconButton 
-                  icon={<FaPlus />} 
-                  aria-label="Sumar cama" 
-                  onClick={() => setCamasDisponibles(camasDisponibles + 1)} 
-                  bg="#27272a" 
-                  color="white" 
-                  _hover={{ bg: '#3f3f46' }}
+                <IconButton
+                  icon={<FaPlus />} aria-label="Sumar cama"
+                  onClick={() => setCamasEmergencia(v => v + 1)}
+                  bg="#27272a" color="white" _hover={{ bg: '#3f3f46' }}
                 />
               </ButtonGroup>
             </HStack>
 
-            {/* BOTÓN PARA ABRIR EXPEDIENTES (PANEL ABATIBLE) */}
-            <Button 
-              h="55px" 
-              px={4} 
-              bg="#18181b" 
-              color="#38bdf8" 
-              border="1px solid #3f3f46"
-              _hover={{ bg: '#27272a', borderColor: '#38bdf8' }} 
-              fontWeight="900" 
-              fontSize="14px" 
-              onClick={onExpedientesOpen} 
-              leftIcon={<FaHistory />}
+            <Button
+              h="55px" px={4} bg="#18181b" color="#38bdf8" border="1px solid #3f3f46"
+              _hover={{ bg: '#27272a', borderColor: '#38bdf8' }}
+              fontWeight="900" fontSize="14px" onClick={onExpedientesOpen} leftIcon={<FaHistory />}
             >
               EXPEDIENTES ({historialExpedientes.length})
             </Button>
 
             {patientNotifications.length > 0 && (
-              <Button h="55px" px={5} colorScheme="red" bg="#ef4444" color="white" fontWeight="900" fontSize="15px" animation="pulseRed 2s infinite" onClick={onNotificationOpen} leftIcon={<FaExclamationTriangle />}>
+              <Button
+                h="55px" px={5} bg="#ef4444" color="white" fontWeight="900" fontSize="15px"
+                animation="pulseRed 2s infinite" onClick={onNotificationOpen}
+                leftIcon={<FaExclamationTriangle />}
+              >
                 ALERTA ({patientNotifications.length})
               </Button>
             )}
 
-            <Badge display="flex" alignItems="center" gap={2} px={4} py={3} borderRadius="xl" bg={wsConnected ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)'} border="1px solid" borderColor={wsConnected ? '#10b981' : '#ef4444'} color={wsConnected ? '#10b981' : '#ef4444'} fontSize="13px" fontWeight="900">
+            <Badge
+              display="flex" alignItems="center" gap={2} px={4} py={3} borderRadius="xl"
+              bg={wsConnected ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)'}
+              border="1px solid" borderColor={wsConnected ? '#10b981' : '#ef4444'}
+              color={wsConnected ? '#10b981' : '#ef4444'} fontSize="13px" fontWeight="900"
+            >
               <Icon as={wsConnected ? FiActivity : FiWifiOff} boxSize={4} />
               {wsConnected ? 'ACTIVO' : 'DESCONECTADO'}
             </Badge>
 
-            {/* BOTÓN CERRAR SESIÓN DISCRETO CON TOOLTIP */}
             <Tooltip label="Cerrar Sesión" placement="bottom" hasArrow bg="#18181b" color="#ef4444" fontWeight="bold">
               <IconButton
-                icon={<FaSignOutAlt />}
-                aria-label="Cerrar Sesión"
-                onClick={closeSession}
-                bg="#18181b"
-                color="#a1a1aa"
-                border="1px solid #27272a"
-                borderRadius="xl"
-                w="50px"
-                h="50px"
+                icon={<FaSignOutAlt />} aria-label="Cerrar Sesión" onClick={closeSession}
+                bg="#18181b" color="#a1a1aa" border="1px solid #27272a" borderRadius="xl"
+                w="50px" h="50px"
                 _hover={{ bg: 'rgba(239,68,68,0.2)', color: '#ef4444', borderColor: '#ef4444' }}
-                transition="all 0.2s"
               />
             </Tooltip>
           </HStack>
         </Flex>
 
+        {/* BODY */}
         <Flex flex={1} overflow="hidden">
-          {/* ==================== PANEL LATERAL ==================== */}
           <Box w={sidebarWidth} bg="#09090b" borderRight="1px solid #27272a" display="flex" flexDirection="column" zIndex={5}>
-            <Box p={5} borderBottom="1px solid #27272a" bg="#09090b">
+            <Box p={5} borderBottom="1px solid #27272a">
               <Text fontSize="16px" fontWeight="900" color="#f8fafc" letterSpacing="1px">MONITOREO DE UNIDADES</Text>
               <Text fontSize="12px" color="#a1a1aa" mt={1}>Gestión y seguimiento de ambulancias en campo</Text>
             </Box>
 
             <Box flex={1} overflowY="auto" p={5} sx={{ '&::-webkit-scrollbar': { width: '8px' }, '&::-webkit-scrollbar-thumb': { bg: '#3f3f46', borderRadius: '4px' } }}>
-              
               {activeRoutes.length > 0 && (
                 <Box mb={8}>
-                  <HStack mb={4}><Icon as={FaRoute} color="#38bdf8" boxSize={5} /><Text fontSize="15px" fontWeight="900" color="#e4e4e7">RUTAS HACIA HOSPITAL ({activeRoutes.length})</Text></HStack>
+                  <HStack mb={4}><Icon as={FaRoute} color="#38bdf8" boxSize={5} /><Text fontSize="15px" fontWeight="900" color="#e4e4e7">RUTAS EN CURSO ({activeRoutes.length})</Text></HStack>
                   <VStack spacing={3} align="stretch">
                     {activeRoutes.map(route => (
-                      <Box key={route.ambulanceId} p={4} bg="#18181b" borderRadius="xl" border="1px solid #38bdf8" boxShadow="0 0 15px rgba(56,189,248,0.15)">
+                      <Box key={route.ambulanceId} p={4} bg="#18181b" borderRadius="xl" border="1px solid #38bdf8">
                         <Flex justify="space-between" align="center" mb={2}>
                           <Text fontSize="18px" fontWeight="900" color="#f8fafc">{route.ambulanceId}</Text>
-                          <Badge colorScheme="blue" fontSize="14px" px={3} py={1} borderRadius="md" fontWeight="900">{Math.round(route.duration / 60)} MIN</Badge>
+                          <Badge bg="#0ea5e9" color="white" fontSize="13px" px={3} py={1} fontWeight="900">
+                            {Math.round((route.duration || 0) / 60)} MIN
+                          </Badge>
                         </Flex>
-                        <Text fontSize="13px" fontWeight="700" color="#a1a1aa" mb={3}>DISTANCIA: {(route.distance / 1000).toFixed(1)} km</Text>
+                        <Text fontSize="13px" fontWeight="700" color="#a1a1aa" mb={3}>
+                          DISTANCIA: {((route.distance || 0) / 1000).toFixed(1)} km
+                        </Text>
                         <HStack spacing={2}>
-                          <Button flex={1} size="md" bg="#27272a" color="white" _hover={{ bg: '#3f3f46' }} fontSize="12px" fontWeight="800" onClick={() => { if(route.geometry) { const bounds = new mapboxgl.LngLatBounds(); route.geometry.forEach(c => bounds.extend([c[0], c[1]])); map.current.fitBounds(bounds, { padding: 80 }); } }}>ENFOCAR RUTA</Button>
-                          <Button size="md" bg="#27272a" color="#ef4444" _hover={{ bg: '#dc2626', color: 'white' }} onClick={() => clearAmbulanceRoute(route.ambulanceId)}><Icon as={FaTimes} /></Button>
+                          <Button flex={1} size="md" bg="#27272a" color="white" _hover={{ bg: '#3f3f46' }} fontSize="12px" fontWeight="800"
+                            onClick={() => { if (route.geometry && map.current) { const b = new mapboxgl.LngLatBounds(); route.geometry.forEach(c => b.extend([c[0], c[1]])); map.current.fitBounds(b, { padding: 80 }); } }}>
+                            ENFOCAR RUTA
+                          </Button>
+                          <Button size="md" bg="#27272a" color="#ef4444" _hover={{ bg: '#dc2626', color: 'white' }} onClick={() => clearAmbulanceRoute(route.ambulanceId)}>
+                            <Icon as={FaTimes} />
+                          </Button>
                         </HStack>
                       </Box>
                     ))}
@@ -898,21 +888,27 @@ export default function MapaHospitalOptimizado() {
               {ambulances.length === 0 ? (
                 <Box p={8} bg="#18181b" borderRadius="xl" border="1px dashed #3f3f46" textAlign="center">
                   <Icon as={FaCheckCircle} boxSize={8} color="#52525b" mb={3} />
-                  <Text fontSize="14px" fontWeight="800" color="#a1a1aa">Sin unidades activas en la red</Text>
+                  <Text fontSize="14px" fontWeight="800" color="#a1a1aa">Sin unidades activas</Text>
                 </Box>
               ) : (
                 <VStack spacing={4} align="stretch">
                   {ambulances.map(amb => (
-                    <Box key={amb.id} p={4} bg="#18181b" borderRadius="xl" border="1px solid #27272a" borderLeft="6px solid" borderLeftColor={amb.status === 'en_ruta' ? '#10b981' : '#f59e0b'} _hover={{ borderColor: '#3f3f46' }} transition="all 0.2s">
+                    <Box key={amb.id} p={4} bg="#18181b" borderRadius="xl" border="1px solid #27272a" borderLeft="6px solid"
+                      borderLeftColor={amb.status === 'en_ruta' ? '#10b981' : amb.status === 'fuera_de_servicio' ? '#64748b' : '#f59e0b'}>
                       <Flex justify="space-between" align="center" mb={3}>
                         <Text fontSize="18px" fontWeight="900" color="#f8fafc">{amb.id}</Text>
-                        <Badge colorScheme={amb.status === 'en_ruta' ? 'green' : 'orange'} px={3} py={1} fontSize="11px" fontWeight="900">{amb.status.replace('_', ' ').toUpperCase()}</Badge>
+                        <Badge bg={amb.status === 'en_ruta' ? '#10b981' : amb.status === 'fuera_de_servicio' ? '#64748b' : '#f59e0b'}
+                          color="white" px={3} py={1} fontSize="11px" fontWeight="900">
+                          {(amb.status || '').replace('_', ' ').toUpperCase()}
+                        </Badge>
                       </Flex>
                       <HStack justify="space-between" spacing={3}>
-                        <Button flex={1} h="50px" bg="#27272a" color="white" _hover={{ bg: '#3f3f46' }} fontSize="12px" fontWeight="900" onClick={() => { if(amb.location) map.current.flyTo({ center: [amb.location.lng, amb.location.lat], zoom: 16 }) }}>
+                        <Button flex={1} h="50px" bg="#27272a" color="white" _hover={{ bg: '#3f3f46' }} fontSize="12px" fontWeight="900"
+                          onClick={() => { if (amb.location && map.current) map.current.flyTo({ center: [amb.location.lng, amb.location.lat], zoom: 16 }); }}>
                           UBICAR MAPA
                         </Button>
-                        <Button flex={1} h="50px" bg="#0284c7" color="white" _hover={{ bg: '#0369a1' }} fontSize="12px" fontWeight="900" onClick={() => { setSelectedAmbulance(amb); onNoteOpen(); }}>
+                        <Button flex={1} h="50px" bg="#0284c7" color="white" _hover={{ bg: '#0369a1' }} fontSize="12px" fontWeight="900"
+                          onClick={() => { setSelectedAmbulance(amb); onNoteOpen(); }}>
                           COMUNICAR
                         </Button>
                       </HStack>
@@ -922,12 +918,14 @@ export default function MapaHospitalOptimizado() {
               )}
             </Box>
 
-            <Box p={5} borderTop="1px solid #27272a" bg="#09090b">
+            <Box p={5} borderTop="1px solid #27272a">
               <VStack spacing={3}>
-                <Button w="100%" h="55px" bg="#27272a" color="white" _hover={{ bg: '#3f3f46' }} fontSize="14px" fontWeight="900" leftIcon={<Icon as={FaMapMarkerAlt} />} onClick={centerOnHospital}>
+                <Button w="100%" h="55px" bg="#27272a" color="white" _hover={{ bg: '#3f3f46' }} fontSize="14px" fontWeight="900"
+                  leftIcon={<Icon as={FaMapMarkerAlt} />} onClick={centerOnHospital}>
                   CENTRAR EN HOSPITAL
                 </Button>
-                <Button w="100%" h="55px" bg={trafficEnabled ? "#f59e0b" : "#27272a"} color={trafficEnabled ? "black" : "white"} _hover={{ bg: trafficEnabled ? '#d97706' : '#3f3f46' }} fontSize="14px" fontWeight="900" onClick={toggleTraffic}>
+                <Button w="100%" h="55px" bg={trafficEnabled ? "#f59e0b" : "#27272a"} color={trafficEnabled ? "black" : "white"}
+                  _hover={{ bg: trafficEnabled ? '#d97706' : '#3f3f46' }} fontSize="14px" fontWeight="900" onClick={toggleTraffic}>
                   {trafficEnabled ? 'OCULTAR TRÁFICO' : 'MOSTRAR TRÁFICO'}
                 </Button>
               </VStack>
@@ -939,39 +937,32 @@ export default function MapaHospitalOptimizado() {
           </Box>
         </Flex>
 
-        {/* ==================== PANEL ABATIBLE (DRAWER) DE EXPEDIENTES ==================== */}
+        {/* DRAWER EXPEDIENTES */}
         <Drawer isOpen={isExpedientesOpen} placement="right" onClose={onExpedientesClose} size="md">
           <DrawerOverlay backdropFilter="blur(10px)" />
           <DrawerContent bg="#09090b" color="white" borderLeft="1px solid #27272a">
             <DrawerCloseButton color="white" />
             <DrawerHeader borderBottom="1px solid #27272a" fontSize="20px" fontWeight="900">
-              📁 HISTORIAL DE EXPEDIENTES
+              HISTORIAL DE EXPEDIENTES
             </DrawerHeader>
             <DrawerBody p={6}>
               {historialExpedientes.length === 0 ? (
                 <VStack spacing={4} mt={10} textAlign="center">
                   <Icon as={FaFolderOpen} boxSize={12} color="#52525b" />
-                  <Text color="#a1a1aa" fontWeight="800">No hay expedientes registrados en esta sesión.</Text>
+                  <Text color="#a1a1aa" fontWeight="800">No hay expedientes registrados.</Text>
                 </VStack>
               ) : (
                 <VStack spacing={4} align="stretch">
-                  {historialExpedientes.map((exp, index) => (
-                    <Box key={index} p={4} bg="#18181b" borderRadius="xl" border="1px solid #3f3f46">
+                  {historialExpedientes.map((exp, i) => (
+                    <Box key={i} p={4} bg="#18181b" borderRadius="xl" border="1px solid #3f3f46">
                       <HStack justify="space-between" mb={2}>
-                        <Text fontSize="16px" fontWeight="900" color="white">{exp?.paciente?.nombre || 'Paciente'}</Text>
-                        <Badge colorScheme="blue">{exp.fecha}</Badge>
+                        <Text fontSize="15px" fontWeight="900" color="white">{exp.callId || 'Sin folio'}</Text>
+                        <Badge colorScheme="blue" fontSize="10px">v{exp.version || 1}</Badge>
                       </HStack>
-                      <Text fontSize="13px" color="#a1a1aa" mb={3}>Motivo: {exp?.paciente?.motivo_urgencia || 'General'}</Text>
-                      <Button 
-                        w="100%" 
-                        h="45px" 
-                        bg="#0284c7" 
-                        color="white" 
-                        _hover={{ bg: '#0369a1' }} 
-                        fontWeight="900" 
-                        leftIcon={<FaFilePdf />}
-                        onClick={() => generarPDFConDatos(exp)}
-                      >
+                      <Text fontSize="13px" color="#a1a1aa" mb={1}>Paciente: {exp.paciente?.nombre || '--'}</Text>
+                      <Text fontSize="12px" color="#71717a" mb={3}>{exp.fecha}</Text>
+                      <Button w="100%" h="45px" bg="#0284c7" color="white" _hover={{ bg: '#0369a1' }} fontWeight="900"
+                        leftIcon={<FaFilePdf />} onClick={() => generarPDFConDatos(exp)}>
                         DESCARGAR PDF
                       </Button>
                     </Box>
@@ -982,170 +973,147 @@ export default function MapaHospitalOptimizado() {
           </DrawerContent>
         </Drawer>
 
-        {/* ==================== MODAL 1: ALERTA DE ARRIBO (FRICCIÓN) ==================== */}
+        {/* MODAL NOTIFICACIÓN */}
         <Modal isOpen={isNotificationOpen} onClose={() => {}} size="2xl" isCentered closeOnOverlayClick={false}>
           <ModalOverlay backdropFilter="blur(20px)" bg="rgba(0,0,0,0.85)" />
-          <ModalContent bg="#09090b" border="2px solid #3f3f46" borderRadius="2xl" overflow="hidden" boxShadow="0 0 50px rgba(0,0,0,0.9)">
+          <ModalContent bg="#09090b" border="2px solid #3f3f46" borderRadius="2xl" overflow="hidden">
             <Box bg="#eab308" p={5} textAlign="center">
-              <Text fontSize="26px" fontWeight="900" color="black" letterSpacing="2px">⚠️ ALERTA DE TRASLADO EN CAMINO</Text>
+              <Text fontSize="22px" fontWeight="900" color="black" letterSpacing="2px">ALERTA DE TRASLADO</Text>
             </Box>
             <ModalBody p={8}>
-              <SimpleGrid columns={2} spacing={8} mb={8}>
-                <Box bg="#18181b" p={6} borderRadius="xl" border="1px solid #3f3f46" textAlign="center">
-                  <Text fontSize="13px" color="#a1a1aa" fontWeight="900" mb={2} letterSpacing="1px">UNIDAD ASIGNADA</Text>
-                  <Text fontSize="36px" fontWeight="900" color="#f8fafc">{selectedNotification?.ambulanceId}</Text>
-                  <Text fontSize="16px" fontWeight="700" color="#38bdf8" mt={2}>ETA: {selectedNotification?.eta || 'Calculando'}</Text>
+              <SimpleGrid columns={2} spacing={6} mb={6}>
+                <Box bg="#18181b" p={5} borderRadius="xl" border="1px solid #3f3f46" textAlign="center">
+                  <Text fontSize="12px" color="#a1a1aa" fontWeight="900" mb={2}>UNIDAD</Text>
+                  <Text fontSize="32px" fontWeight="900" color="#f8fafc">{selectedNotification?.ambulanceId}</Text>
                 </Box>
-                <Box bg="#18181b" p={6} borderRadius="xl" border="1px solid #3f3f46" textAlign="center">
-                  <Text fontSize="13px" color="#a1a1aa" fontWeight="900" mb={2} letterSpacing="1px">CÓDIGO DE EMERGENCIA</Text>
-                  <Text fontSize="28px" fontWeight="900" color="#ef4444" lineHeight="1.2">{selectedNotification?.patientInfo?.condition || selectedNotification?.patientInfo?.type || 'TRAUMA GRAVE'}</Text>
+                <Box bg="#18181b" p={5} borderRadius="xl" border="1px solid #3f3f46" textAlign="center">
+                  <Text fontSize="12px" color="#a1a1aa" fontWeight="900" mb={2}>TIPO</Text>
+                  <Text fontSize="20px" fontWeight="900" color="#ef4444" lineHeight="1.2">
+                    {selectedNotification?.patientInfo?.condition || selectedNotification?.emergencyType || 'URGENCIA'}
+                  </Text>
                 </Box>
               </SimpleGrid>
-              
+
+              {selectedNotification?.patientInfo?.cantidad > 1 && (
+                <Box bg="rgba(245,158,11,0.15)" p={4} borderRadius="md" border="1px solid #f59e0b" mb={5}>
+                  <Text fontSize="14px" fontWeight="900" color="#f59e0b" textAlign="center">
+                    INCIDENTE MÚLTIPLE — {selectedNotification.patientInfo.cantidad} PACIENTES
+                  </Text>
+                  {(selectedNotification.patientInfo.resumen || []).map((r, i) => (
+                    <Text key={i} fontSize="12px" color="white" mt={1}>{r}</Text>
+                  ))}
+                </Box>
+              )}
+
               <VStack spacing={4}>
                 <HStack w="100%" spacing={4}>
-                  <Button flex={1} h="90px" fontSize="20px" fontWeight="900" bg="#10b981" color="white" _hover={{ bg: '#059669', transform: 'scale(1.02)' }} onClick={acceptPatient} transition="all 0.2s" boxShadow="0 10px 20px rgba(16,185,129,0.3)">
-                    ✅ ACEPTAR RECEPCIÓN
+                  <Button flex={1} h="80px" fontSize="18px" fontWeight="900" bg="#10b981" color="white"
+                    _hover={{ bg: '#059669' }} onClick={acceptPatient}>
+                    ACEPTAR RECEPCIÓN
                   </Button>
-                  
-                  <Button flex={1} h="90px" fontSize="18px" fontWeight="900" bg={confirmReject ? "#dc2626" : "#18181b"} color={confirmReject ? "white" : "#ef4444"} border={confirmReject ? "none" : "2px solid #ef4444"} _hover={{ bg: '#b91c1c', color: 'white' }} onClick={rejectPatient} transition="all 0.2s">
-                    {confirmReject ? "⛔ CONFIRMAR RECHAZO (PELIGRO)" : "❌ RECHAZAR PACIENTE"}
+                  <Button flex={1} h="80px" fontSize="16px" fontWeight="900"
+                    bg={confirmReject ? "#dc2626" : "#18181b"} color={confirmReject ? "white" : "#ef4444"}
+                    border={confirmReject ? "none" : "2px solid #ef4444"} _hover={{ bg: '#b91c1c', color: 'white' }}
+                    onClick={rejectPatient}>
+                    {confirmReject ? "CONFIRMAR RECHAZO" : "RECHAZAR"}
                   </Button>
                 </HStack>
-                
-                {selectedNotification?.callId && (
-                  <Button w="100%" h="70px" bg="#0284c7" color="white" fontSize="18px" fontWeight="900" leftIcon={<Icon as={FaVideo} />} onClick={() => window.open(`/videocall?room=${selectedNotification.callId}`, '_blank')} _hover={{ bg: '#0369a1' }}>
-                    ENTRAR A SALA DE VIDEOLLAMADA MÉDICA
-                  </Button>
-                )}
               </VStack>
             </ModalBody>
           </ModalContent>
         </Modal>
 
-        {/* ==================== MODAL 2: REPORTE MÉDICO ==================== */}
+        {/* MODAL REPORTE CLÍNICO */}
         <Modal isOpen={isReportModalOpen} onClose={onReportModalClose} size="5xl" scrollBehavior="inside" closeOnOverlayClick={false}>
           <ModalOverlay backdropFilter="blur(15px)" bg="rgba(0,0,0,0.85)" />
           <ModalContent bg="#09090b" border="1px solid #3f3f46" borderRadius="2xl">
             <Box p={6} bg="#18181b" borderBottom="1px solid #27272a">
               <HStack justify="space-between">
-                <HStack><Icon as={FaFolderOpen} color="#38bdf8" boxSize={6} /><Text fontSize="24px" fontWeight="900" color="white" letterSpacing="1px">REPORTE CLÍNICO PREHOSPITALARIO</Text></HStack>
-                <Badge bg={selectedReport?.codigo_prioridad_color || '#ef4444'} color="white" px={5} py={2} fontSize="16px" fontWeight="900" borderRadius="md">TRIAGE ASIGNADO</Badge>
+                <HStack>
+                  <Icon as={FaFolderOpen} color="#38bdf8" boxSize={6} />
+                  <Text fontSize="22px" fontWeight="900" color="white">REPORTE PREHOSPITALARIO</Text>
+                </HStack>
+                <Badge bg="#ef4444" color="white" px={4} py={2} fontSize="14px" fontWeight="900" borderRadius="md">
+                  TRIAGE
+                </Badge>
               </HStack>
             </Box>
-            
+
             <ModalBody p={0} bg="#09090b">
               <Box ref={reportRef} p={8} bg="#09090b">
-                <SimpleGrid columns={2} spacing={8} mb={8}>
-                  <Box bg="#18181b" p={6} borderRadius="xl" border="1px solid #27272a">
-                    <HStack mb={4}><Icon as={FaUserMd} color="#38bdf8"/><Text fontSize="15px" color="#a1a1aa" fontWeight="900" letterSpacing="1px">DATOS DEL PACIENTE</Text></HStack>
-                    <Text fontSize="28px" fontWeight="900" color="white" mb={1}>{selectedReport?.paciente?.nombre || 'Paciente Desconocido'}</Text>
-                    <Text fontSize="18px" fontWeight="700" color="#a1a1aa">{selectedReport?.paciente?.edad} Años • Sexo: {selectedReport?.paciente?.sexo}</Text>
-                    
-                    <Divider my={5} borderColor="#3f3f46" />
-                    
-                    <Text fontSize="13px" color="#a1a1aa" fontWeight="900" mb={2} letterSpacing="1px">MOTIVO DE URGENCIA / DIAGNÓSTICO INICIAL</Text>
-                    <Text fontSize="22px" fontWeight="900" color="#f59e0b">{selectedReport?.paciente?.motivo_urgencia}</Text>
-                    <Text fontSize="15px" color="#d4d4d8" mt={2} p={3} bg="#27272a" borderRadius="md">{selectedReport?.paciente?.descripcion_lesion || 'Sin descripción detallada del evento.'}</Text>
+                <SimpleGrid columns={2} spacing={6} mb={6}>
+                  <Box bg="#18181b" p={5} borderRadius="xl" border="1px solid #27272a">
+                    <HStack mb={3}><Icon as={FaUserMd} color="#38bdf8"/><Text fontSize="13px" color="#a1a1aa" fontWeight="900">PACIENTE</Text></HStack>
+                    <Text fontSize="24px" fontWeight="900" color="white" mb={1}>{selectedReport?.seccionD?.nombre || 'Desconocido'}</Text>
+                    <Text fontSize="16px" fontWeight="700" color="#a1a1aa">{selectedReport?.seccionD?.edad || '--'} años · {selectedReport?.seccionD?.sexo || '--'}</Text>
                   </Box>
-
-                  <Box>
-                    <HStack mb={4}><Icon as={FaHeartbeat} color="#ef4444"/><Text fontSize="15px" color="#a1a1aa" fontWeight="900" letterSpacing="1px">SIGNOS VITALES TOMADOS EN CAMPO</Text></HStack>
-                    <SimpleGrid columns={2} spacing={4}>
-                      <Box bg="#18181b" p={5} borderRadius="xl" border="1px solid #27272a" textAlign="center">
-                        <Text fontSize="12px" color="#a1a1aa" fontWeight="900" letterSpacing="1px">FREQ. CARDÍACA</Text>
-                        <Text fontSize="36px" fontWeight="900" color="#ef4444">{selectedReport?.signos_vitales?.frecuencia_cardiaca || '--'} <Text as="span" fontSize="16px" color="#a1a1aa">bpm</Text></Text>
-                      </Box>
-                      <Box bg="#18181b" p={5} borderRadius="xl" border="1px solid #27272a" textAlign="center">
-                        <Text fontSize="12px" color="#a1a1aa" fontWeight="900" letterSpacing="1px">SPO2 (OXÍGENO)</Text>
-                        <Text fontSize="36px" fontWeight="900" color="#38bdf8">{selectedReport?.signos_vitales?.saturacion_oxigeno || '--'} <Text as="span" fontSize="16px" color="#a1a1aa">%</Text></Text>
-                      </Box>
-                      <Box bg="#18181b" p={5} borderRadius="xl" border="1px solid #27272a" textAlign="center">
-                        <Text fontSize="12px" color="#a1a1aa" fontWeight="900" letterSpacing="1px">TENS. ARTERIAL</Text>
-                        <Text fontSize="28px" fontWeight="900" color="white">{selectedReport?.signos_vitales?.tension_arterial || '--'}</Text>
-                      </Box>
-                      <Box bg="#18181b" p={5} borderRadius="xl" border="1px solid #27272a" textAlign="center">
-                        <Text fontSize="12px" color="#a1a1aa" fontWeight="900" letterSpacing="1px">GLUCOSA</Text>
-                        <Text fontSize="28px" fontWeight="900" color="white">{selectedReport?.signos_vitales?.nivel_glucosa || '--'}</Text>
-                      </Box>
+                  <Box bg="#18181b" p={5} borderRadius="xl" border="1px solid #27272a">
+                    <HStack mb={3}><Icon as={FaHeartbeat} color="#ef4444"/><Text fontSize="13px" color="#a1a1aa" fontWeight="900">SIGNOS VITALES</Text></HStack>
+                    <SimpleGrid columns={2} spacing={3}>
+                      <Box textAlign="center"><Text fontSize="10px" color="#a1a1aa" fontWeight="900">FC</Text><Text fontSize="22px" fontWeight="900" color="#ef4444">{selectedReport?.seccionI?.fc || '--'}</Text></Box>
+                      <Box textAlign="center"><Text fontSize="10px" color="#a1a1aa" fontWeight="900">SpO2</Text><Text fontSize="22px" fontWeight="900" color="#38bdf8">{selectedReport?.seccionI?.spo2 || '--'}</Text></Box>
+                      <Box textAlign="center"><Text fontSize="10px" color="#a1a1aa" fontWeight="900">TA</Text><Text fontSize="18px" fontWeight="900" color="white">{selectedReport?.seccionI?.ta || '--'}</Text></Box>
+                      <Box textAlign="center"><Text fontSize="10px" color="#a1a1aa" fontWeight="900">GLUC</Text><Text fontSize="18px" fontWeight="900" color="white">{selectedReport?.seccionI?.glucemia || '--'}</Text></Box>
                     </SimpleGrid>
                   </Box>
                 </SimpleGrid>
 
-                <Box bg="#18181b" p={6} borderRadius="xl" border="1px solid #27272a" mb={8}>
-                  <HStack mb={4}><Icon as={FaStethoscope} color="#10b981"/><Text fontSize="15px" color="#a1a1aa" fontWeight="900" letterSpacing="1px">INTERVENCIONES Y HALLAZGOS EN RUTA</Text></HStack>
-                  {selectedReport?.intervenciones?.length > 0 ? (
-                    <SimpleGrid columns={2} spacing={4} mb={4}>
-                      {selectedReport.intervenciones.map((iv, idx) => (
-                        <Box key={idx} p={4} bg="#27272a" borderRadius="lg" borderLeft="4px solid #10b981">
-                          <Text fontWeight="900" color="white" fontSize="16px">{iv.tipo_intervencion}</Text>
-                          <Text fontSize="14px" color="#d4d4d8" mt={1}>{iv.descripcion}</Text>
-                        </Box>
-                      ))}
-                    </SimpleGrid>
-                  ) : <Text color="#a1a1aa" mb={4}>No se registraron procedimientos médicos durante el traslado.</Text>}
-                  
-                  <Divider borderColor="#3f3f46" my={4} />
-                  
-                  <Text fontSize="13px" color="#a1a1aa" fontWeight="900" mb={2}>OBSERVACIONES DE LA ESCENA / EXTRA</Text>
-                  <Text fontSize="15px" color="white">{selectedReport?.descripcion_escena || selectedReport?.otros_hallazgos || selectedReport?.paciente?.observaciones || 'Sin observaciones adicionales registradas.'}</Text>
-                </Box>
-
-                <Box bg="rgba(14, 165, 233, 0.1)" p={6} borderRadius="xl" border="2px solid #0ea5e9">
-                  <HStack mb={3}><Icon as={FaBolt} color="#0ea5e9" boxSize={5} /><Text fontSize="16px" color="#0ea5e9" fontWeight="900" letterSpacing="1px">ALGORITMO DE ASIGNACIÓN MÉDICA AUTOMATIZADA</Text></HStack>
-                  <Text fontSize="14px" color="#a1a1aa" mb={4}>Basado en el motivo de urgencia, el sistema ha pre-seleccionado al especialista de guardia óptimo.</Text>
-                  
-                  <Select size="lg" bg="#09090b" border="1px solid #3f3f46" color="white" fontWeight="900" h="60px" fontSize="18px" value={doctorSeleccionado} onChange={(e) => setDoctorSeleccionado(e.target.value)}>
-                    <option value="" style={{background: '#09090b'}}>-- SELECCIONAR MÉDICO MANUALMENTE --</option>
+                <Box bg="rgba(14,165,233,0.1)" p={5} borderRadius="xl" border="2px solid #0ea5e9" mb={6}>
+                  <Text fontSize="14px" color="#0ea5e9" fontWeight="900" mb={3}>ASIGNACIÓN MÉDICA</Text>
+                  <Select size="lg" bg="#09090b" border="1px solid #3f3f46" color="white" fontWeight="900"
+                    h="55px" value={doctorSeleccionado} onChange={(e) => setDoctorSeleccionado(e.target.value)}>
+                    <option value="" style={{ background: '#09090b' }}>-- SELECCIONAR MÉDICO --</option>
                     {listaDoctores.map(doc => (
-                      <option key={doc.id} value={doc.id} style={{background: '#09090b'}}>Dr(a). {doc.nombre} — Especialidad: {doc.especialidad}</option>
+                      <option key={doc.id} value={doc.id} style={{ background: '#09090b' }}>
+                        {doc.nombre} — {doc.especialidad}
+                      </option>
                     ))}
                   </Select>
                 </Box>
               </Box>
             </ModalBody>
+
             <ModalFooter bg="#09090b" borderTop="1px solid #27272a" p={6}>
               <HStack w="100%" spacing={4}>
-                <Button flex={0.3} h="75px" variant="ghost" color="#a1a1aa" fontSize="16px" fontWeight="900" _hover={{ bg: '#27272a', color: 'white' }} onClick={onReportModalClose}>
-                  CERRAR VISTA
+                <Button flex={0.3} h="65px" variant="ghost" color="#a1a1aa" fontSize="15px" fontWeight="900"
+                  _hover={{ bg: '#27272a', color: 'white' }} onClick={onReportModalClose}>
+                  CERRAR
                 </Button>
-                <Button flex={0.7} h="75px" bg="#10b981" color="white" fontSize="18px" fontWeight="900" letterSpacing="1px" _hover={{bg: '#059669', transform: 'scale(1.01)'}} onClick={confirmarReporteYAsignar} leftIcon={<Icon as={FaFolderOpen} boxSize={5}/>}>
-                  GENERAR PDF Y ABRIR EXPEDIENTE CLÍNICO
+                <Button flex={0.7} h="65px" bg="#10b981" color="white" fontSize="16px" fontWeight="900"
+                  _hover={{ bg: '#059669' }} onClick={confirmarReporteYAsignar} leftIcon={<FaFolderOpen />}>
+                  GENERAR PDF Y ASIGNAR
                 </Button>
               </HStack>
             </ModalFooter>
           </ModalContent>
         </Modal>
 
-        {/* ==================== MODAL 3: COMUNICACIÓN RÁPIDA (CERO TIPEO) ==================== */}
+        {/* MODAL COMUNICACIÓN RÁPIDA */}
         <Modal isOpen={isNoteOpen} onClose={onNoteClose} size="3xl" isCentered>
           <ModalOverlay backdropFilter="blur(10px)" bg="rgba(0,0,0,0.8)" />
           <ModalContent bg="#09090b" border="1px solid #3f3f46" borderRadius="2xl" overflow="hidden">
             <Box p={6} bg="#18181b" borderBottom="1px solid #27272a">
-              <Text fontSize="22px" fontWeight="900" color="white" letterSpacing="1px">ENVIAR AVISO A UNIDAD: {selectedAmbulance?.id}</Text>
+              <Text fontSize="20px" fontWeight="900" color="white">AVISO A UNIDAD: {selectedAmbulance?.id}</Text>
             </Box>
             <ModalBody p={8}>
-              <Text fontSize="14px" color="#a1a1aa" fontWeight="900" mb={5} letterSpacing="1px">SELECCIONE UNA RESPUESTA PREDEFINIDA (1 CLIC):</Text>
+              <Text fontSize="13px" color="#a1a1aa" fontWeight="900" mb={5}>SELECCIONE UNA RESPUESTA:</Text>
               <SimpleGrid columns={2} spacing={5}>
                 {RESPUESTAS_RAPIDAS.map((msg, i) => (
-                  <Button 
-                    key={i} h="90px" whiteSpace="normal" bg="#27272a" color="white" fontSize="18px" fontWeight="900" lineHeight="1.2"
-                    _hover={{ bg: '#0284c7', transform: 'scale(1.02)' }} onClick={() => enviarRespuestaRapida(msg)}
-                    boxShadow="0 4px 10px rgba(0,0,0,0.3)" transition="all 0.2s"
-                  >
+                  <Button key={i} h="85px" whiteSpace="normal" bg="#27272a" color="white" fontSize="16px" fontWeight="900"
+                    _hover={{ bg: '#0284c7' }} onClick={() => enviarRespuestaRapida(msg)}>
                     {msg}
                   </Button>
                 ))}
               </SimpleGrid>
             </ModalBody>
             <ModalFooter p={6} bg="#18181b" borderTop="1px solid #27272a">
-              <Button w="100%" h="65px" bg="#3f3f46" color="white" fontSize="16px" fontWeight="900" _hover={{ bg: '#52525b' }} onClick={onNoteClose}>
-                CANCELAR COMUNICACIÓN
+              <Button w="100%" h="60px" bg="#3f3f46" color="white" fontSize="16px" fontWeight="900"
+                _hover={{ bg: '#52525b' }} onClick={onNoteClose}>
+                CANCELAR
               </Button>
             </ModalFooter>
           </ModalContent>
         </Modal>
-
       </Box>
     </ChakraProvider>
   );

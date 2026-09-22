@@ -508,6 +508,16 @@ function handleRegisterParamedic(ws, data) {
     message: operator ? 'Emparejado con unidad activa' : 'Sin unidad activa emparejada',
     timestamp: new Date().toISOString()
   });
+    // Enviar lista de ambulancias activas para que el paramédico se vincule
+  sendMessage(ws, {
+    type: 'active_ambulances_update',
+    ambulances: Array.from(activeAmbulances.values()).map(a => ({
+      id: a.id, placa: a.placa, nombre: a.nombre, tipo: a.tipo,
+      status: a.status, location: a.location, speed: a.speed,
+      heading: a.heading, lastUpdate: a.lastUpdate
+    })),
+    timestamp: new Date().toISOString()
+  });
   if (operator) {
     sendMessage(operator.ws, {
       type: 'paramedic_paired',
@@ -515,13 +525,14 @@ function handleRegisterParamedic(ws, data) {
       timestamp: new Date().toISOString()
     });
   }
+
 }
 
 function handleRegisterDoctor(ws, data) {
   const doctorId = data.doctorId || generateId('doctor');
   const record = {
     ws, doctorId,
-    nombre: data.nombre || doctorId,
+    nombre: data.nombre || `EC-Doctor-${doctorId.slice(-4)}`,
     especialidad: data.especialidad || 'Urgenciólogo',
     hospitalId: data.hospitalId ? String(data.hospitalId) : null,
     disponibilidad: data.disponibilidad || 'disponible',
@@ -532,21 +543,40 @@ function handleRegisterDoctor(ws, data) {
   ws._doctorId = doctorId;
   console.log(`👨‍⚕️ Doctor ${doctorId} (${record.especialidad})`);
 
-  sendMessage(ws, {
-    type: 'doctor_registered',
-    doctorId, nombre: record.nombre, especialidad: record.especialidad,
-    hospitalId: record.hospitalId,
-    timestamp: new Date().toISOString()
-  });
-  if (record.hospitalId) {
-    const h = activeHospitals.get(record.hospitalId);
-    if (h) {
-      sendMessage(h.ws, {
-        type: 'doctor_connected',
-        doctor: { doctorId, nombre: record.nombre, especialidad: record.especialidad },
-        timestamp: new Date().toISOString()
+  // Enviar reportes prehospitalarios recientes al doctor que se conecta
+  const recentReports = [];
+  prehospitalReports.forEach((record, callId) => {
+    const last = record.versions[record.versions.length - 1];
+    if (last) {
+      recentReports.push({
+        callId,
+        version: record.currentVersion,
+        report: last.report,
+        patientInfo: record.patientInfo,
+        hospitalId: record.hospitalId,
+        ambulanceId: record.ambulanceId,
+        timestamp: last.timestamp
       });
     }
+  });
+
+  sendMessage(ws, {
+    type: 'doctor_registered',
+    doctorId,
+    nombre: record.nombre,
+    especialidad: record.especialidad,
+    hospitalId: record.hospitalId,
+    totalReports: recentReports.length,
+    timestamp: new Date().toISOString()
+  });
+
+  // Enviar historial de reportes para previsualización
+  if (recentReports.length > 0) {
+    sendMessage(ws, {
+      type: 'doctor_reports_history',
+      reports: recentReports,
+      timestamp: new Date().toISOString()
+    });
   }
 }
 
@@ -822,6 +852,67 @@ function handleRequestActiveEmergencies(ws) {
   });
 }
 
+function handleRequestActiveAmbulances(ws) {
+  sendMessage(ws, {
+    type: 'active_ambulances_update',
+    ambulances: Array.from(activeAmbulances.values()).map(a => ({
+      id: a.id, placa: a.placa, nombre: a.nombre, tipo: a.tipo,
+      status: a.status, location: a.location, speed: a.speed,
+      heading: a.heading, lastUpdate: a.lastUpdate
+    })),
+    timestamp: new Date().toISOString()
+  });
+}
+
+// Ranking de hospitales por cercanía + capacidad. Excluye rechazados y sin camas.
+async function handleRequestRankedHospitals(ws, data) {
+  const { location, excludeIds = [], ambulanceId } = data || {};
+  if (!location?.lat || !location?.lng) {
+    return sendError(ws, 'location requerida', 'BAD_PAYLOAD');
+  }
+
+  const excludeSet = new Set([
+    ...excludeIds.map(String),
+    ...(rejectedHospitals.get(String(ambulanceId)) ? [...rejectedHospitals.get(String(ambulanceId))] : [])
+  ]);
+
+  const candidates = Array.from(activeHospitals.values())
+    .filter(h =>
+      h.ws?.readyState === WebSocket.OPEN &&
+      h.info.activo !== false &&
+      !excludeSet.has(h.info.id) &&
+      (h.info.camasEmergencia ?? h.info.camasDisponibles ?? 0) > 0
+    )
+    .map(h => {
+      const dist = calculateDistance(location.lat, location.lng, h.info.lat, h.info.lng);
+      const camas = h.info.camasEmergencia ?? h.info.camasDisponibles ?? 0;
+      // Score: menor es mejor. Distancia penaliza, camas premian.
+      const score = dist / (1 + Math.min(camas, 20));
+      return {
+        id: h.info.id,
+        nombre: h.info.nombre,
+        direccion: h.info.direccion,
+        lat: h.info.lat,
+        lng: h.info.lng,
+        camasEmergencia: camas,
+        camasDisponibles: h.info.camasDisponibles ?? camas,
+        especialidades: h.info.especialidades || ['General'],
+        telefono: h.info.telefono || '',
+        distanciaKm: parseFloat(dist.toFixed(2)),
+        score: parseFloat(score.toFixed(3))
+      };
+    })
+    .sort((a, b) => a.score - b.score);
+
+  sendMessage(ws, {
+    type: 'ranked_hospitals_update',
+    hospitals: candidates,
+    total: candidates.length,
+    excluded: [...excludeSet],
+    timestamp: new Date().toISOString()
+  });
+}
+
 async function handleRequestHospitalsList(ws) {
   const hospitalsList = await getHospitalsList();
   sendMessage(ws, {
@@ -940,16 +1031,51 @@ async function handleHospitalAcceptPatient(data) {
     rejectedHospitals.delete(amb.id);
   }
 
-  const callId = notification.callId;
+    const callId = notification.callId;
   if (callId && activeEmergencies.has(callId)) {
     const em = activeEmergencies.get(callId);
-    em.hospitalId = data.hospitalId;
+    em.hospitalId = String(data.hospitalId);
     activeEmergencies.set(callId, em);
     broadcastActiveEmergencies();
   }
+
+  // Vincular hospital al reporte prehospitalario del caso (si existe)
+  if (callId) {
+    let reportRecord = prehospitalReports.get(callId);
+    if (!reportRecord) {
+      reportRecord = {
+        callId,
+        versions: [],
+        currentVersion: 0,
+        hospitalId: String(data.hospitalId),
+        ambulanceId: String(notification.ambulanceId),
+        patientInfo: notification.patientInfo || {},
+        createdAt: new Date().toISOString()
+      };
+    } else {
+      reportRecord.hospitalId = String(data.hospitalId);
+    }
+    prehospitalReports.set(callId, reportRecord);
+
+    // Avisar al paramédico emparejado con esa ambulancia
+    const paired = Array.from(activeParamedics.values())
+      .find(p => p.ambulanceId === String(notification.ambulanceId));
+    if (paired?.ws) {
+      sendMessage(paired.ws, {
+        type: 'hospital_accepted_for_call',
+        callId,
+        hospitalId: String(data.hospitalId),
+        hospitalInfo: data.hospitalInfo || h?.info,
+        message: 'Hospital aceptó. Puede enviar reporte prehospitalario.',
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+
   pendingEmergencyRoutes.delete(data.notificationId);
   pendingNotifications.delete(data.notificationId);
   broadcastActiveAmbulances();
+  
 }
 
 async function handleHospitalRejectPatient(data) {
@@ -1166,17 +1292,40 @@ function handlePrehospitalReportUpdate(data) {
       });
     }
   }
+
+    // Notificar a TODOS los doctores conectados (broadcast) además del asignado
   const em = activeEmergencies.get(callId);
   if (em?.doctorId) {
     const doc = activeDoctors.get(em.doctorId);
     if (doc?.ws?.readyState === WebSocket.OPEN) {
       sendMessage(doc.ws, {
         type: 'prehospital_report_update',
-        callId, version: record.currentVersion, report, patientInfo: record.patientInfo,
+        callId,
+        version: record.currentVersion,
+        urgentOnly: !!urgentOnly,
+        report,
+        patientInfo: record.patientInfo,
+        hospitalId: record.hospitalId,
+        ambulanceId: record.ambulanceId,
+        triage: report?.triaje,
         timestamp: new Date().toISOString()
       });
     }
   }
+
+  // Broadcast general a todos los doctores (para que vean el caso aunque no estén asignados)
+  broadcastToDoctors({
+    type: 'prehospital_report_broadcast',
+    callId,
+    version: record.currentVersion,
+    urgentOnly: !!urgentOnly,
+    patientInfo: record.patientInfo,
+    hospitalId: record.hospitalId,
+    ambulanceId: record.ambulanceId,
+    triage: report?.triaje,
+    timestamp: new Date().toISOString()
+  });
+
   broadcastToParamedics({
     type: 'prehospital_report_ack',
     callId, version: record.currentVersion, urgentOnly: !!urgentOnly,
@@ -1388,7 +1537,14 @@ async function handleMessage(ws, data) {
     case 'register_receptor':           return handleRegisterReceptor(ws, data);
     case 'register_paramedic':          return handleRegisterParamedic(ws, data);
     case 'register_doctor':             return handleRegisterDoctor(ws, data);
+    case 'request_active_ambulances': return handleRequestActiveAmbulances(ws);
     case 'location_update':             return handleLocationUpdate(data);
+    case 'video_call_request': return handleVideoCallRequest(ws, data);
+case 'video_call_accept':  return handleVideoCallAccept(ws, data);
+case 'video_call_reject':  return handleVideoCallReject(ws, data);
+case 'video_call_signal':  return handleVideoCallSignal(ws, data);
+case 'video_call_end':     return handleVideoCallEnd(ws, data);
+    case 'request_ranked_hospitals': return handleRequestRankedHospitals(ws, data);
     case 'operator_initiated_emergency': return handleOperatorInitiatedEmergency(ws, data);
     case 'ambulance_status_update':     return handleAmbulanceStatusUpdate(ws, data);
     case 'emergency_call':              return handleEmergencyCall(ws, data);

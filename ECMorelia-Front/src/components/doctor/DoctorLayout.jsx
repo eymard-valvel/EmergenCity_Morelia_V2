@@ -1,168 +1,210 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-// 1. Importamos ChakraProvider y componentes de UI necesarios
-import { ChakraProvider, useToast, Button, Box, Text, Flex } from "@chakra-ui/react";
-
+import { ChakraProvider, useToast, Button, Box, Text, Flex, Badge, HStack, VStack, Icon, Tooltip } from "@chakra-ui/react";
+import { FaUserMd, FaPhone, FaSignOutAlt, FaFileMedical, FaVideo } from "react-icons/fa";
+import { FiActivity, FiWifiOff } from "react-icons/fi";
 import logo from "../img/Logo.png";
 import { useAuth } from "../../auth/useAuth";
 import { deleteCookie } from "../../helpers/cookies";
+import { resolveWsUrl } from "../../helpers/wsUrl.js";
 
-// 2. Componente interno con la lógica (separado para estar dentro del Provider)
+const WS_URL = resolveWsUrl();
+
 function DoctorLayoutContent() {
-	const navigate = useNavigate();
-	const { setAuth } = useAuth();
+  const navigate = useNavigate();
+  const { setAuth } = useAuth();
+  const toast = useToast();
+  const ws = useRef(null);
+  const [wsConnected, setWsConnected] = useState(false);
+  const [incomingCall, setIncomingCall] = useState(null);
+  const [unreadReports, setUnreadReports] = useState(0);
 
-	// Hooks que requieren estar dentro de ChakraProvider
-	const toast = useToast();
-	const ws = useRef(null);
+  useEffect(() => {
+    const socket = new WebSocket(WS_URL);
+    ws.current = socket;
 
-	// ---------------------------------------------------------
-	// 🔌 Conexión WebSocket para Alertas de Emergencia
-	// ---------------------------------------------------------
-	useEffect(() => {
-		// Conectar al puerto 8081 (donde está el servidor de alertas)
-		ws.current = new WebSocket(import.meta.env.VITE_WS_URL || 'ws://localhost:3002/ws');
+    socket.onopen = () => {
+      setWsConnected(true);
+      socket.send(JSON.stringify({
+        type: 'register_doctor',
+        doctorId: `doc_${Date.now()}`,
+        nombre: 'EC-Doctor',
+        especialidad: 'Urgenciólogo'
+      }));
+    };
 
-		ws.current.onopen = () => {
-			console.log("👨‍⚕️ Médico conectado al sistema de urgencias");
-		};
+    socket.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
 
-		ws.current.onmessage = (event) => {
-			try {
-				const data = JSON.parse(event.data);
+        if (data.type === 'video_call_incoming') {
+          setIncomingCall(data);
+          toast({
+            position: "top-right",
+            duration: null,
+            isClosable: true,
+            render: ({ onClose }) => (
+              <Box color="white" p={4} bg="#0ea5e9" borderRadius="lg" boxShadow="dark-lg" border="2px solid white" maxWidth="380px">
+                <Flex align="center" mb={3}>
+                  <Icon as={FaVideo} boxSize={8} mr={3} />
+                  <Box>
+                    <Text fontWeight="900" fontSize="lg">SOLICITUD DE VIDEOLLAMADA</Text>
+                    <Text fontSize="sm">Paramédico: {data.from?.id || 'EC-Paramedico'}</Text>
+                    {data.callId && <Text fontSize="xs" opacity={0.9}>Folio: {data.callId}</Text>}
+                  </Box>
+                </Flex>
+                <HStack spacing={2}>
+                  <Button
+                    flex={1} h="50px" bg="white" color="#0ea5e9" fontWeight="900"
+                    _hover={{ bg: "gray.100" }}
+                    onClick={() => {
+                      onClose();
+                      socket.send(JSON.stringify({ type: 'video_call_accept', sessionId: data.sessionId }));
+                      window.open(`/videollamada?room=${data.sessionId}&role=doctor`, '_blank');
+                    }}
+                  >
+                    ACEPTAR
+                  </Button>
+                  <Button
+                    flex={0.6} h="50px" bg="transparent" color="white"
+                    border="2px solid white" fontWeight="900"
+                    _hover={{ bg: "rgba(255,255,255,0.2)" }}
+                    onClick={() => {
+                      onClose();
+                      socket.send(JSON.stringify({ type: 'video_call_reject', sessionId: data.sessionId, reason: 'No disponible' }));
+                    }}
+                  >
+                    RECHAZAR
+                  </Button>
+                </HStack>
+              </Box>
+            ),
+          });
+        }
 
-				// Escuchar la alerta de traslado
-				if (data.type === 'patient_transfer_notification') {
+        if (data.type === 'prehospital_report_broadcast') {
+          setUnreadReports(prev => prev + 1);
+          toast({
+            title: `Reporte v${data.version} recibido`,
+            description: `Folio ${data.callId}`,
+            status: 'info',
+            duration: 4000,
+            position: 'top-right'
+          });
+        }
 
-					// Mostrar Toast Interactivo (Notificación Flotante)
-					toast({
-						position: "top-right",
-						duration: null, // No se cierra sola, requiere acción
-						isClosable: true,
-						render: ({ onClose }) => (
-							<Box
-								color="white"
-								p={4}
-								bg="red.600"
-								borderRadius="md"
-								boxShadow="dark-lg"
-								border="2px solid white"
-								maxWidth="350px"
-							>
-								<Flex align="center" mb={3}>
-									<Text fontSize="3xl" mr={3}>🚨</Text>
-									<Box>
-										<Text fontWeight="bold" fontSize="lg" lineHeight="1.2">¡URGENCIA ENTRANTE!</Text>
-										<Text fontSize="sm">Ambulancia: {data.ambulanceId || 'UVI'}</Text>
-										{data.eta && <Text fontSize="xs">ETA: {data.eta}</Text>}
-									</Box>
-								</Flex>
+        if (data.type === 'doctor_assigned') {
+          toast({
+            title: 'Paciente asignado',
+            description: `Folio ${data.callId}`,
+            status: 'success',
+            duration: 5000,
+            position: 'top-right'
+          });
+        }
+      } catch (e) { console.error('WS error:', e); }
+    };
 
-								<Button
-									size="sm"
-									width="100%"
-									bg="white"
-									color="red.600"
-									fontWeight="bold"
-									_hover={{ bg: "gray.100", transform: "scale(1.02)" }}
-									onClick={() => {
-										onClose(); // Cierra la notificación
-										// Abre la sala en una pestaña nueva usando el ID recibido
-										window.open(`/videocall?room=${data.callId}`, '_blank');
-									}}
-								>
-									🎥 CONTESTAR VIDEOLLAMADA
-								</Button>
-							</Box>
-						),
-					});
-				}
-			} catch (error) {
-				console.error("Error socket médico:", error);
-			}
-		};
+    socket.onclose = () => setWsConnected(false);
 
-		// Limpiar conexión al desmontar
-		return () => {
-			if (ws.current) ws.current.close();
-		};
-	}, [toast]);
-	// ---------------------------------------------------------
+    return () => { try { socket.close(); } catch (_) {} };
+  }, [toast]);
 
-	const handleLogout = () => {
-		setAuth(false);
-		deleteCookie("role");
-		navigate("/login");
-	};
+  const handleLogout = () => {
+    setAuth(false);
+    deleteCookie("role");
+    if (ws.current) try { ws.current.close(); } catch (_) {}
+    navigate("/login");
+  };
 
-	const activeTab = "text-sky-blue bg-sky-blue/10 dark:bg-sky-blue/20 font-semibold";
+  const activeTab = "text-sky-400 bg-sky-400/10 font-semibold";
 
-	return (
-		<div className="flex w-full min-h-screen font-sans text-gray-900">
+  return (
+    <Box display="flex" w="100%" minH="100vh" bg="#09090b" color="#f8fafc">
+      {/* SIDEBAR */}
+      <Box as="nav" w="260px" bg="#18181b" borderRight="1px solid #27272a" display="flex" flexDirection="column" py={4} flexShrink={0}>
+        <Flex justify="center" p={4} mb={6} borderBottom="1px solid #27272a">
+          <img src={logo} alt="EmergenCity" style={{ maxWidth: '100px', maxHeight: '100px' }} />
+        </Flex>
 
-			{/* Barra de Navegación Lateral (Sidebar) */}
-			<nav className="flex flex-col w-full max-w-[250px] py-3 min-h-full gap-3 bg-smoke-white text-bluish-gray dark:bg-bluish-gray dark:text-smoke-white shadow-lg shrink-0">
-				<ul className="flex flex-col pt-0 m-0 h-full">
-					{/* Sección del Logo */}
-					<li className="flex justify-center p-4 mb-4 border-b border-gray-200 dark:border-gray-700">
-						<img className="max-w-24 max-h-24 w-auto h-auto" src={logo} alt="Emergencity" />
-					</li>
+        <VStack spacing={2} align="stretch" px={3} flex={1}>
+          {/* Estado WS */}
+          <Badge
+            display="flex" alignItems="center" gap={2} px={3} py={2} borderRadius="lg"
+            bg={wsConnected ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)'}
+            color={wsConnected ? '#10b981' : '#ef4444'}
+            fontSize="11px" fontWeight="900" letterSpacing="0.5px"
+          >
+            <Icon as={wsConnected ? FiActivity : FiWifiOff} boxSize={3} />
+            {wsConnected ? 'EN LÍNEA' : 'DESCONECTADO'}
+          </Badge>
 
-					{/* Botón Llamada Manual */}
-					<li className="px-4 mb-4">
-						<button
-							id="botonLlamada"
-							className="w-full relative inline-flex items-center justify-center p-0.5 overflow-hidden text-sm font-medium text-bluish-gray dark:text-smoke-white rounded-lg group bg-gradient-to-br from-coral-red to-red-400 group-hover:from-coral-red group-hover:to-red-400 hover:text-white focus:ring-4 focus:outline-none focus:ring-red-300 dark:focus:ring-red-800"
-							onClick={() => navigate("/videocall")}
-						>
-              				<span className="w-full relative px-5 py-2.5 transition-all ease-in duration-75 bg-smoke-white dark:bg-bluish-gray rounded-md group-hover:bg-opacity-0 text-lg">
-								Videollamada
-              				</span>
-						</button>
-					</li>
+          {/* Botón videollamada manual */}
+          <Button
+            id="botonLlamada"
+            w="100%" h="55px"
+            bg="#0ea5e9" color="white"
+            fontSize="15px" fontWeight="900"
+            leftIcon={<FaVideo />}
+            _hover={{ bg: '#0284c7' }}
+            onClick={() => navigate('/videocall')}
+          >
+            VIDEOLLAMADA
+          </Button>
 
-					{/* NavLink Reportes */}
-					<li>
-						<NavLink
-							to="/doctor/records"
-							className={({ isActive }) =>
-								`block py-2 px-4 text-base md:text-lg capitalize hover:bg-sky-blue/10 dark:hover:bg-sky-blue/20 rounded-md mx-2 transition-colors duration-150 ${
-									isActive ? activeTab : "text-bluish-gray dark:text-smoke-white"
-								}`
-							}
-						>
-							Reportes
-						</NavLink>
-					</li>
+          {/* NavLink Reportes */}
+          <NavLink
+            to="/doctor/records"
+            style={({ isActive }) => ({
+              display: 'block',
+              padding: '14px 16px',
+              fontSize: '15px',
+              fontWeight: 900,
+              borderRadius: '8px',
+              textDecoration: 'none',
+              color: isActive ? '#38bdf8' : '#a1a1aa',
+              background: isActive ? 'rgba(56,189,248,0.1)' : 'transparent',
+              transition: 'all 0.15s'
+            })}
+          >
+            <Flex align="center" gap={3}>
+              <Icon as={FaFileMedical} />
+              <Text>REPORTES</Text>
+              {unreadReports > 0 && (
+                <Badge bg="#ef4444" color="white" borderRadius="full" px={2}>{unreadReports}</Badge>
+              )}
+            </Flex>
+          </NavLink>
+        </VStack>
 
-					{/* Espaciador */}
-					<li className="flex-grow"></li>
+        {/* Logout */}
+        <Box px={3} mt="auto">
+          <Button
+            w="100%" h="50px"
+            bg="transparent" color="#ef4444"
+            border="1px solid #ef4444"
+            fontSize="14px" fontWeight="900"
+            leftIcon={<FaSignOutAlt />}
+            _hover={{ bg: 'rgba(239,68,68,0.15)' }}
+            onClick={handleLogout}
+          >
+            CERRAR SESIÓN
+          </Button>
+        </Box>
+      </Box>
 
-					{/* Botón Cerrar sesión */}
-					<li className="mt-auto mb-2 mx-2">
-						<p
-							className={`block py-2 px-4 text-base md:text-lg capitalize text-coral-red dark:text-red-400 hover:bg-red-100/50 dark:hover:bg-red-500/20 hover:font-semibold rounded-md cursor-pointer transition-colors duration-150`}
-							onClick={handleLogout}
-						>
-							Cerrar sesión
-						</p>
-					</li>
-				</ul>
-			</nav>
-
-			{/* Área de Contenido Principal */}
-			<main className="flex-grow p-4 sm:p-6 lg:p-8 bg-gray-100 dark:bg-gray-900 overflow-y-auto">
-				<Outlet />
-			</main>
-		</div>
-	);
+      {/* CONTENIDO */}
+      <Box flex={1} p={6} overflowY="auto" bg="#09090b">
+        <Outlet />
+      </Box>
+    </Box>
+  );
 }
 
-// 3. Exportamos el Wrapper que contiene el Provider para asegurar que useToast funcione
 export default function DoctorLayout() {
-	return (
-		<ChakraProvider>
-			<DoctorLayoutContent />
-		</ChakraProvider>
-	);
+  return (
+    <ChakraProvider>
+      <DoctorLayoutContent />
+    </ChakraProvider>
+  );
 }

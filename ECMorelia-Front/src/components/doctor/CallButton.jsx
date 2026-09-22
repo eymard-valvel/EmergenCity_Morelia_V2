@@ -1,20 +1,32 @@
 import { useNavigate } from "react-router-dom";
+import { Button, Icon } from "@chakra-ui/react";
+import { FaVideo } from "react-icons/fa";
 
-const CallButton = () => {
-	const navigate = useNavigate();
+const CallButton = ({ callId, role = 'paramedico' }) => {
+  const navigate = useNavigate();
 
-	return (
-		<button
-			id="botonMedico"
-			className="relative inline-flex items-center justify-center p-0.5 mb-2 me-4 overflow-hidden text-sm font-medium text-gray-900 rounded-lg group bg-gradient-to-br from-orange-400 to-orange-600 group-hover:from-orange-400 group-hover:to-orange-600 hover:text-white focus:ring-4 focus:outline-none focus:ring-orange-200"
-			onClick={() => navigate("/")} // Cambia la ruta a la videollamada
-		>
-			<span className="relative px-5 py-2.5 transition-all ease-in duration-75 bg-white rounded-md group-hover:bg-opacity-0 text-xl">
-				Llamada
-			</span>
-		</button>
-	);
+  const handleClick = () => {
+    const room = callId || `EC-${Date.now()}`;
+    navigate(`/videocall?room=${room}&role=${role}`);
+  };
+
+  return (
+    <Button
+      w="100%"
+      h="60px"
+      bg="#0ea5e9"
+      color="white"
+      fontSize="16px"
+      fontWeight="900"
+      letterSpacing="1px"
+      borderRadius="xl"
+      leftIcon={<Icon as={FaVideo} boxSize={5} />}
+      _hover={{ bg: '#0284c7' }}
+      onClick={handleClick}
+    >
+      SOLICITAR MÉDICO
+    </Button>
+  );
 };
 
 export default CallButton;
-

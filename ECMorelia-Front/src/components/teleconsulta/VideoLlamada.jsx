@@ -2,72 +2,93 @@ import React, { useState, useEffect } from 'react';
 import { JitsiMeeting } from '@jitsi/react-sdk';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
+// App ID de JaaS (Jitsi as a Service) — reemplaza con tu App ID
+// Si no tienes JaaS, dejarlo vacío y funcionará con el servidor público (5 min)
+const JAAS_APP_ID = import.meta.env.VITE_JAAS_APP_ID || '';
+
 export default function VideoLlamada() {
-	const navigate = useNavigate();
-	const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const roomCode = searchParams.get('room');
+  const userFromUrl = searchParams.get('user');
+  const [displayName, setDisplayName] = useState('EC-Usuario');
 
-	// 1. Recuperar datos de la URL y LocalStorage
-	const roomCode = searchParams.get('room');
-	const [userData, setUserData] = useState(null);
+  useEffect(() => {
+    if (userFromUrl) {
+      setDisplayName(decodeURIComponent(userFromUrl));
+      return;
+    }
+    try {
+      const stored = localStorage.getItem('videoCallData');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed.userName) setDisplayName(parsed.userName);
+      }
+    } catch (_) {}
+  }, [userFromUrl]);
 
-	useEffect(() => {
-		// Intentar recuperar el nombre del usuario desde el localStorage
-		// (Lo guardamos en VideoCall.jsx antes de navegar)
-		const storedData = localStorage.getItem('videoCallData');
-		if (storedData) {
-			setUserData(JSON.parse(storedData));
-		}
-	}, []);
+  if (!roomCode) {
+    return (
+      <div style={{ minHeight: '100vh', background: '#0f172a', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '16px' }}>
+        <p style={{ fontSize: '1.2rem', fontWeight: 900 }}>Error: No se especificó una sala.</p>
+        <button
+          onClick={() => navigate('/')}
+          style={{ padding: '12px 24px', background: '#0284c7', color: 'white', border: 'none', borderRadius: '8px', fontWeight: 900, cursor: 'pointer' }}
+        >
+          VOLVER
+        </button>
+      </div>
+    );
+  }
 
-	// Si no hay código de sala, regresar
-	if (!roomCode) {
-		return (
-			<div className="flex items-center justify-center h-screen">
-				<p>Error: No se especificó una sala.</p>
-				<button onClick={() => navigate('/')}>Volver</button>
-			</div>
-		);
-	}
-
-	// Nombre del usuario (Fallback por si acaso)
-	const displayName = userData?.userName || `Usuario-${Math.floor(Math.random()*1000)}`;
-
-	return (
-		<div style={{ height: '100vh', width: '100%' }}>
-			<JitsiMeeting
-				// 2. Configuración de la Sala
-				// El 'roomName' es la clave: si todos tienen el mismo ID, entran a la misma sala.
-				roomName={`EmergenCity-${roomCode}`}
-
-				configOverwrite={{
-					startWithAudioMuted: false,
-					disableThirdPartyRequests: true,
-					prejoinPageEnabled: false, // Entrar directo sin pre-sala de Jitsi
-				}}
-				interfaceConfigOverwrite={{
-					TOOLBAR_BUTTONS: [
-						'microphone', 'camera', 'closedcaptions', 'desktop', 'fullscreen',
-						'fodeviceselection', 'hangup', 'profile', 'chat', 'recording',
-						'livestreaming', 'etherpad', 'sharedvideo', 'settings', 'raisehand',
-						'videoquality', 'filmstrip', 'invite', 'feedback', 'stats', 'shortcuts',
-						'tileview', 'videobackgroundblur', 'download', 'help', 'mute-everyone',
-						'security'
-					],
-				}}
-				userInfo={{
-					displayName: displayName
-				}}
-				onApiReady={(externalApi) => {
-					// Aquí puedes controlar la API de Jitsi si necesitas
-				}}
-				onReadyToClose={() => {
-					// Cuando cuelgan la llamada
-					navigate('/'); // O redirigir al dashboard correspondiente
-				}}
-				getIFrameRef={(iframeRef) => {
-					iframeRef.style.height = '100%';
-				}}
-			/>
-		</div>
-	);
+  return (
+    <div style={{ height: '100vh', width: '100%' }}>
+      <JitsiMeeting
+        domain={JAAS_APP_ID ? '8x8.vc' : 'meet.jit.si'}
+        roomName={JAAS_APP_ID ? `${JAAS_APP_ID}/${roomCode}` : `EmergenCity-${roomCode}`}
+        configOverwrite={{
+          startWithAudioMuted: false,
+          startWithVideoMuted: false,
+          disableThirdPartyRequests: true,
+          prejoinPageEnabled: false,
+          enableWelcomePage: false,
+          disableDeepLinking: true,
+          requireDisplayName: false,
+          defaultLanguage: 'es',
+          toolbarButtons: [
+            'microphone', 'camera', 'closedcaptions', 'desktop', 'fullscreen',
+            'fodeviceselection', 'hangup', 'profile', 'chat', 'raisehand',
+            'videoquality', 'filmstrip', 'tileview', 'videobackgroundblur', 'settings'
+          ]
+        }}
+        interfaceConfigOverwrite={{
+          TOOLBAR_BUTTONS: [
+            'microphone', 'camera', 'closedcaptions', 'desktop', 'fullscreen',
+            'fodeviceselection', 'hangup', 'profile', 'chat', 'raisehand',
+            'videoquality', 'filmstrip', 'tileview', 'videobackgroundblur', 'settings'
+          ],
+          SHOW_JITSI_WATERMARK: false,
+          SHOW_WATERMARK_FOR_GUESTS: false,
+          DEFAULT_BACKGROUND: '#09090b',
+          DISABLE_JOIN_LEAVE_NOTIFICATIONS: true,
+          MOBILE_APP_PROMO: false
+        }}
+        userInfo={{
+          displayName: displayName,
+          email: ''
+        }}
+        onApiReady={(externalApi) => {
+          externalApi.addListener('videoConferenceLeft', () => {
+            navigate('/');
+          });
+        }}
+        onReadyToClose={() => navigate('/')}
+        getIFrameRef={(iframeRef) => {
+          iframeRef.style.height = '100%';
+          iframeRef.style.width = '100%';
+          iframeRef.style.border = 'none';
+        }}
+      />
+    </div>
+  );
 }
