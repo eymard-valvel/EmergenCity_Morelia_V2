@@ -200,6 +200,30 @@ function findNearestAvailableAmbulance(location, excludeIds = new Set()) {
   return best ? { ambulance: best, distanceKm: bestDist } : null;
 }
 
+/** Encuentra el hospital conectado más cercano con camas disponibles. */
+function findNearestConnectedHospital(location, excludeIds = new Set()) {
+  if (!location?.lat || !location?.lng) return null;
+  let best = null;
+  let bestDist = Infinity;
+
+  for (const [, h] of activeHospitals) {
+    // SOLO hospitales conectados y activos
+    if (h.ws?.readyState !== WebSocket.OPEN) continue;
+    if (h.info.activo === false) continue;
+    if (excludeIds.has(h.info.id)) continue;
+    const camas = h.info.camasEmergencia ?? h.info.camasDisponibles ?? 0;
+    if (camas <= 0) continue;
+    if (!h.info.lat || !h.info.lng) continue;
+
+    const d = calculateDistance(location.lat, location.lng, h.info.lat, h.info.lng);
+    if (d < bestDist) {
+      bestDist = d;
+      best = h;
+    }
+  }
+  return best ? { hospital: best, distanceKm: bestDist } : null;
+}
+
 function emitEmergencyOffer(emergency, ambulance, excludedIds = new Set()) {
   const offerId = generateId('offer');
   const isStandby = ambulance.status === 'fuera_de_servicio';
@@ -688,9 +712,7 @@ async function handleEmergencyCall(ws, data) {
 }
 
 async function handleOperatorInitiatedEmergency(ws, data) {
-  // El operador inicia la emergencia SIN receptor previo.
-  // Crea la emergencia con la ambulancia ya asignada y la notifica al hospital.
-  const { ambulanceId, patientInfo, notes, location } = data;
+  const { ambulanceId, patientInfo, notes, location, emergencyType } = data;
   if (!ambulanceId) return sendError(ws, 'ambulanceId requerido', 'BAD_PAYLOAD');
 
   const amb = activeAmbulances.get(String(ambulanceId));
@@ -706,7 +728,7 @@ async function handleOperatorInitiatedEmergency(ws, data) {
     callId, correlationId,
     location: emLocation,
     address: data.address || amb.nombre || 'Iniciada por operador',
-    emergencyType: data.emergencyType || 'Iniciada por operador',
+    emergencyType: emergencyType || 'Iniciada por operador',
     patientInfo: patientInfo || {},
     notes: notes || '',
     timestamp: new Date().toISOString(),
@@ -724,16 +746,16 @@ async function handleOperatorInitiatedEmergency(ws, data) {
   rejectedAmbulances.set(callId, new Set());
   amb.status = 'en_ruta';
 
-  // Avisar al operador con el folio confirmado
+  // Confirmar al operador
   sendMessage(ws, {
     type: 'operator_emergency_created',
     callId,
     correlationId,
-    message: 'Emergencia creada. Notificando hospital.',
+    message: 'Emergencia creada. Buscando hospital conectado...',
     timestamp: new Date().toISOString(),
   });
 
-  // Difundir a todos los receptores (para que vean el folio en su panel)
+  // Difundir a receptores
   broadcastToReceptors({
     type: 'emergency_created_by_operator_broadcast',
     callId,
@@ -748,6 +770,15 @@ async function handleOperatorInitiatedEmergency(ws, data) {
 
   broadcastActiveEmergencies();
   broadcastActiveAmbulances();
+
+  // === AQUÍ EL FIX: buscar hospital conectado y enviar solicitud ===
+  await autoRequestHospital(ws, {
+    callId,
+    ambulanceId: amb.id,
+    patientInfo: emergency.patientInfo,
+    notes: emergency.notes,
+    emergencyType: emergency.emergencyType
+  });
 }
 
 function handleEmergencyAccept(ws, data) {
@@ -966,6 +997,92 @@ async function handlePatientTransferNotification(data) {
       message: 'Notificación enviada'
     });
   }
+}
+
+/**
+ * Solicitud automática de hospital: busca el más cercano conectado y notifica.
+ * Uso: (a) al crear emergencia desde operador, (b) atajo del operador.
+ */
+async function autoRequestHospital(ws, data) {
+  const { callId, ambulanceId, patientInfo, notes, emergencyType } = data;
+  if (!callId) return sendError(ws, 'callId requerido', 'BAD_PAYLOAD');
+  if (!ambulanceId) return sendError(ws, 'ambulanceId requerido', 'BAD_PAYLOAD');
+
+  const amb = activeAmbulances.get(String(ambulanceId));
+  if (!amb) return sendError(ws, 'Ambulancia no registrada', 'NOT_FOUND');
+
+  const em = activeEmergencies.get(callId);
+  if (!em) return sendError(ws, 'Emergencia no encontrada', 'NOT_FOUND');
+
+  // Ubicación: preferir la de la ambulancia (está en el lugar)
+  const loc = amb.location || em.location;
+  if (!loc?.lat) return sendError(ws, 'Sin ubicación de ambulancia', 'BAD_LOCATION');
+
+  // Excluir hospitales ya rechazados por esta unidad
+  const excluded = rejectedHospitals.get(String(ambulanceId)) || new Set();
+  const candidate = findNearestConnectedHospital(loc, excluded);
+
+  if (!candidate) {
+    console.warn(`Sin hospital conectado disponible para ${callId}`);
+    sendMessage(ws, {
+      type: 'hospital_search_failed',
+      callId,
+      reason: 'NO_CONNECTED_HOSPITALS',
+      message: 'No hay hospitales conectados con capacidad disponible.',
+      timestamp: new Date().toISOString()
+    });
+    return;
+  }
+
+  const notificationId = generateId('notif');
+  const payload = {
+    notificationId,
+    callId,
+    ambulanceId: amb.id,
+    ambulanceName: amb.nombre || amb.placa,
+    ambulanceLocation: loc,
+    hospitalId: candidate.hospital.info.id,
+    patientInfo: patientInfo || em.patientInfo || {},
+    notes: notes || em.notes || '',
+    emergencyType: emergencyType || em.emergencyType || 'Urgencia',
+    distanceKm: parseFloat(candidate.distanceKm.toFixed(2)),
+    emergencyMode: 'trasladar_paciente',
+    autoRequested: true
+  };
+
+  pendingNotifications.set(notificationId, {
+    ...payload,
+    timestamp: new Date().toISOString(),
+    status: 'pending'
+  });
+
+  // Vincular emergencia con hospital candidato
+  em.hospitalId = candidate.hospital.info.id;
+  activeEmergencies.set(callId, em);
+
+  // Notificar al hospital conectado
+  sendMessage(candidate.hospital.ws, {
+    type: 'patient_transfer_notification',
+    ...payload,
+    timestamp: new Date().toISOString()
+  });
+
+  // Confirmar al operador
+  sendMessage(ws, {
+    type: 'hospital_request_sent',
+    callId,
+    notificationId,
+    hospitalId: candidate.hospital.info.id,
+    hospitalName: candidate.hospital.info.nombre,
+    distanceKm: payload.distanceKm,
+    camasEmergencia: candidate.hospital.info.camasEmergencia ?? candidate.hospital.info.camasDisponibles ?? 0,
+    message: `Solicitud enviada a ${candidate.hospital.info.nombre}`,
+    timestamp: new Date().toISOString()
+  });
+
+  console.log(`Auto-solicitud ${notificationId}: ${amb.id} → ${candidate.hospital.info.nombre} (${payload.distanceKm}km)`);
+  broadcastActiveEmergencies();
+  broadcastActiveAmbulances();
 }
 
 async function handleHospitalAcceptPatient(data) {

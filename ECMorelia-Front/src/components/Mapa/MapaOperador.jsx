@@ -31,6 +31,9 @@ const WS_URL = resolveWsUrl();
 const DEFAULT_CENTER = { lat: 19.7024, lng: -101.1969 };
 const RECONNECT_DELAY = 3000;
 const MAX_RECONNECT = 5;
+const [hospitalRequest, setHospitalRequest] = useState(null);
+// { hospitalName, distanceKm, sentAt, callId } para mostrar en banner
+const [searchingHospital, setSearchingHospital] = useState(false);
 
 // === Estrategia anti-costo Mapbox (100k req/mes free tier) ===
 const ROUTE_POLL_INTERVAL = 20000;      // Poll cada 20s
@@ -261,6 +264,34 @@ const [isCreatingEmergency, setIsCreatingEmergency] = useState(false);
             case 'connection_established': break;
             case 'active_hospitals_update': setHospitals(data.hospitals || []); break;
             case 'emergency_offer': handleEmergencyOffer(data); break;
+            case 'hospital_request_sent':
+  setSearchingHospital(false);
+  setHospitalRequest({
+    hospitalName: data.hospitalName,
+    hospitalId: data.hospitalId,
+    distanceKm: data.distanceKm,
+    callId: data.callId,
+    sentAt: new Date().toISOString()
+  });
+  toast({
+    title: 'Solicitud enviada',
+    description: `${data.hospitalName} (${data.distanceKm} km)`,
+    status: 'success',
+    duration: 6000,
+    position: 'bottom'
+  });
+  break;
+
+case 'hospital_search_failed':
+  setSearchingHospital(false);
+  toast({
+    title: 'Sin hospitales conectados',
+    description: 'No hay hospitales disponibles en este momento.',
+    status: 'warning',
+    duration: 8000,
+    position: 'bottom'
+  });
+  break;
             case 'new_emergency_assigned':
               // Guardar datos del receptor como template local para reutilizar
 if (data.patientInfo && Object.keys(data.patientInfo).length > 0) {
@@ -687,6 +718,8 @@ const searchAddresses = useCallback((query) => {
 
   // ==================== CANCELACIÓN ====================
   const silentCleanupNavigation = useCallback(() => {
+    setHospitalRequest(null);
+setSearchingHospital(false);
     if (destinationMarker.current) { destinationMarker.current.remove(); destinationMarker.current = null; }
     try {
       if (map.current?.getLayer('active-route')) map.current.removeLayer('active-route');
@@ -716,6 +749,7 @@ const searchAddresses = useCallback((query) => {
     }
 
     if (reasonCode === 'completed') {
+      setHospitalRequest(null);
       sendWS({ type: 'emergency_completed', ambulanceId: ambulancia?.id, callId });
       silentCleanupNavigation();
       setAssignedEmergency(null);
@@ -764,6 +798,34 @@ const searchAddresses = useCallback((query) => {
     setIsSending(false);
     onDrawerClose();
   };
+
+const requestHospitalNow = useCallback(() => {
+  if (!sendWS({
+    type: 'auto_request_hospital',
+    callId: assignedEmergency?.callId,
+    ambulanceId: ambulancia?.id,
+    patientInfo: assignedEmergency?.patientInfo || {},
+    emergencyType: assignedEmergency?.emergencyType || 'Urgencia',
+    notes: assignedEmergency?.notes || ''
+  })) {
+    toast({
+      title: 'Sin conexión',
+      description: 'Reintente cuando vuelva la señal.',
+      status: 'error',
+      duration: 4000,
+      position: 'bottom'
+    });
+    return;
+  }
+  setSearchingHospital(true);
+  toast({
+    title: 'Buscando hospital conectado...',
+    status: 'info',
+    duration: 3000,
+    position: 'bottom'
+  });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [assignedEmergency, ambulancia, sendWS, toast]);
 
   const handleCreateOperatorEmergency = useCallback(async () => {
   if (!myLocation) {
@@ -937,63 +999,116 @@ const searchAddresses = useCallback((query) => {
         </SlideFade>
       )}
 
-      {/* MODO NAVEGACIÓN */}
-      {isNavigating && (
-        <>
-          <SlideFade in={true} offsetY="-20px" style={{ position: 'absolute', top: '15px', left: '5%', right: '5%', zIndex: 20 }}>
-            <Box bg="rgba(24, 24, 27, 0.95)" backdropFilter="blur(10px)" border="2px solid #0ea5e9" borderRadius="2xl" p={4} shadow="dark-lg">
-              <HStack spacing={4}>
-                <Box bg="#0ea5e9" p={4} borderRadius="xl" color="white" fontSize="3xl">{getManeuverIcon(currentManeuver)}</Box>
-                <VStack align="start" spacing={1} flex={1}>
-                  <Text fontSize="22px" fontWeight="900" color="white" lineHeight="1.1" noOfLines={2}>
-                    {currentManeuver?.maneuver?.instruction || 'Siga la ruta trazada'}
-                  </Text>
-                  <HStack spacing={4} mt={1}>
-                    <Text fontSize="18px" fontWeight="900" color="#38bdf8">
-                      {currentManeuver?.distance ? fmtDist(currentManeuver.distance / 1000) : ''}
-                    </Text>
-                    {routeProgress && (
-                      <Text fontSize="18px" fontWeight="900" color="#10b981">
-                        ETA: {fmtDur(routeProgress.durationRemaining)}
-                      </Text>
-                    )}
-                    {routeProgress && (
-                      <Text fontSize="14px" fontWeight="800" color="#a1a1aa">
-                        {fmtDist(routeProgress.distanceRemaining / 1000)}
-                      </Text>
-                    )}
-                  </HStack>
-                </VStack>
-              </HStack>
-            </Box>
-          </SlideFade>
+{/* ZONA INFERIOR: SOLICITUD HOSPITAL + CANCELACIÓN */}
+{isNavigating && (
+  <SlideFade in={true} offsetY="20px" style={{ position: 'absolute', bottom: '20px', left: 0, right: 0, zIndex: 20 }}>
+    <Box px={4}>
+      <VStack spacing={3} align="stretch">
 
-          {/* Velocímetro + Recalcular */}
-          <SlideFade in={true} offsetX="20px" style={{ position: 'absolute', right: '20px', bottom: '100px', zIndex: 20 }}>
-            <VStack spacing={3}>
-              <Flex bg="rgba(9, 9, 11, 0.9)" border="2px solid #3f3f46" w="80px" h="80px" borderRadius="full"
-                direction="column" justify="center" align="center" shadow="xl" backdropFilter="blur(10px)">
-                <Text color="#10b981" fontWeight="900" fontSize="28px" lineHeight="1">{mySpeed}</Text>
-                <Text color="#a1a1aa" fontSize="11px" fontWeight="900">KM/H</Text>
-              </Flex>
-              <Tooltip label="Recalcular ruta" placement="left" hasArrow bg="#18181b" color="white" fontWeight="bold">
-                <IconButton
-                  aria-label="Recalcular ruta"
-                  icon={<FaSyncAlt />}
-                  onClick={() => recalcRoute(false)}
-                  isLoading={isRecalculating}
-                  w="60px" h="60px"
-                  bg="rgba(24,24,27,0.9)" color="#38bdf8"
-                  border="2px solid #3f3f46"
-                  borderRadius="full"
-                  fontSize="20px"
-                  _hover={{ bg: '#27272a', borderColor: '#38bdf8' }}
-                />
-              </Tooltip>
-            </VStack>
-          </SlideFade>
-        </>
-      )}
+        {/* ── BOTÓN SOLICITAR HOSPITAL (solo si cancelStep = idle) ── */}
+        {cancelStep === 'idle' && assignedEmergency && !hospitalRequest && (
+          <Button
+            w="100%" h="70px"
+            bg="#10b981" color="white"
+            fontSize="17px" fontWeight="900" letterSpacing="1px"
+            borderRadius="2xl" shadow="dark-lg"
+            _hover={{ bg: '#059669', transform: 'scale(1.01)' }}
+            isLoading={searchingHospital}
+            loadingText="BUSCANDO HOSPITAL..."
+            onClick={requestHospitalNow}
+          >
+            <Icon as={FaHospital} mr={3} boxSize={5} />
+            SOLICITAR HOSPITAL AHORA
+          </Button>
+        )}
+
+        {/* ── BANNER VERDE: solicitud enviada (solo si cancelStep = idle) ── */}
+        {cancelStep === 'idle' && hospitalRequest && (
+          <Box
+            bg="rgba(16,185,129,0.15)"
+            border="2px solid #10b981"
+            borderRadius="2xl"
+            p={4}
+            backdropFilter="blur(10px)"
+          >
+            <HStack spacing={3} justify="center">
+              <Icon as={FaHospital} color="#10b981" boxSize={6} />
+              <VStack align="start" spacing={0}>
+                <Text color="#10b981" fontWeight="900" fontSize="13px" letterSpacing="0.5px">
+                  SOLICITUD ENVIADA
+                </Text>
+                <Text color="white" fontWeight="900" fontSize="16px">
+                  {hospitalRequest.hospitalName}
+                </Text>
+                <Text color="#a1a1aa" fontSize="11px" fontWeight="800">
+                  {hospitalRequest.distanceKm} km · Esperando aceptación
+                </Text>
+              </VStack>
+            </HStack>
+          </Box>
+        )}
+
+        {/* ── BOTÓN CANCELAR RUTA (solo si cancelStep = idle) ── */}
+        {cancelStep === 'idle' && (
+          <Button
+            w="100%" h="65px"
+            bg="#ef4444" color="white"
+            fontSize="18px" fontWeight="900" borderRadius="2xl" shadow="dark-lg"
+            _hover={{ bg: '#dc2626' }}
+            onClick={() => setCancelStep('confirm')}
+          >
+            <Icon as={FaTimesCircle} mr={2} boxSize={5} /> CANCELAR RUTA
+          </Button>
+        )}
+
+        {/* ── CONFIRMAR CANCELACIÓN ── */}
+        {cancelStep === 'confirm' && (
+          <VStack spacing={3} bg="rgba(24, 24, 27, 0.95)" p={4} borderRadius="2xl" border="2px solid #ef4444" shadow="2xl" backdropFilter="blur(10px)">
+            <Text color="#ef4444" fontWeight="900" fontSize="18px">¿TERMINAR NAVEGACIÓN?</Text>
+            <HStack w="100%" spacing={3}>
+              <Button flex={1} h="55px" bg="#27272a" color="white" fontSize="16px" fontWeight="900" borderRadius="xl" onClick={() => setCancelStep('idle')}>
+                VOLVER
+              </Button>
+              <Button flex={1} h="55px" bg="#ef4444" color="white" fontSize="16px" fontWeight="900" borderRadius="xl" onClick={() => setCancelStep('reason')}>
+                SÍ, CONTINUAR
+              </Button>
+            </HStack>
+          </VStack>
+        )}
+
+        {/* ── MOTIVO DE TÉRMINO ── */}
+        {cancelStep === 'reason' && (
+          <VStack spacing={3} bg="rgba(24, 24, 27, 0.97)" p={4} borderRadius="2xl" border="2px solid #3f3f46" shadow="2xl" backdropFilter="blur(10px)">
+            <Text color="#f8fafc" fontWeight="900" fontSize="16px" letterSpacing="1px">MOTIVO DE TÉRMINO</Text>
+            <SimpleGrid columns={2} spacing={3} w="100%">
+              <Button h="60px" bg="rgba(16,185,129,0.15)" color="#10b981" border="2px solid #10b981"
+                fontSize="14px" fontWeight="900" borderRadius="xl"
+                _hover={{ bg: 'rgba(16,185,129,0.25)' }} onClick={() => handleCancelWithReason('completed')}>
+                SERVICIO COMPLETADO
+              </Button>
+              <Button h="60px" bg="#27272a" color="white" fontSize="14px" fontWeight="900" borderRadius="xl"
+                _hover={{ bg: '#3f3f46' }} onClick={() => handleCancelWithReason('averia')}>
+                AVERÍA MECÁNICA
+              </Button>
+              <Button h="60px" bg="#27272a" color="white" fontSize="14px" fontWeight="900" borderRadius="xl"
+                _hover={{ bg: '#3f3f46' }} onClick={() => handleCancelWithReason('pinchadura')}>
+                LLANTA PONCHADA
+              </Button>
+              <Button h="60px" bg="#27272a" color="white" fontSize="14px" fontWeight="900" borderRadius="xl"
+                _hover={{ bg: '#3f3f46' }} onClick={() => handleCancelWithReason('trafico_pesado')}>
+                TRÁFICO IMPOSIBLE
+              </Button>
+            </SimpleGrid>
+            <Button variant="ghost" color="#a1a1aa" fontSize="14px" fontWeight="900" onClick={() => setCancelStep('confirm')}>
+              ← VOLVER
+            </Button>
+          </VStack>
+        )}
+
+      </VStack>
+    </Box>
+  </SlideFade>
+)}
 
       {/* CONTROLES LATERALES */}
       {!isDrawerOpen && !isNavigating && (
