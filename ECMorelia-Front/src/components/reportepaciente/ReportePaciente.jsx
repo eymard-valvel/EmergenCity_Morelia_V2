@@ -123,82 +123,97 @@ const ReportePaciente = () => {
   };
 
   // ==================== WS OPERATIVO (tras vinculación) ====================
-  useEffect(() => {
-    if (!isConfigured) return;
-    const ws = wsRef.current;
-    if (!ws) return;
+useEffect(() => {
+  if (!isConfigured) return;
+  const ws = wsRef.current;
+  if (!ws) return;
 
-    const handleMessage = async (event) => {
-      const data = event.data instanceof Blob ? await event.data.text() : event.data;
-      try {
-        const parsed = JSON.parse(data);
-
-        if (parsed.type === 'active_hospitals_update') {
-          setListaHospitales(parsed.hospitals || []);
-        }
-
-        if (parsed.type === 'new_emergency_assigned') {
-          mostrarNotificacion(`Emergencia asignada: ${parsed.callId}`, 'success');
-          setReporte(prev => ({
-            ...prev,
-            callId: parsed.callId,
-            seccionA: { ...prev.seccionA, folio: parsed.callId },
-            seccionC: { ...prev.seccionC, direccion: parsed.address || prev.seccionC.direccion },
-            seccionF: {
-              ...prev.seccionF,
-              tipo_urgencia: parsed.emergencyType || '',
-              motivo_principal: parsed.notes || ''
-            },
-            riesgos_escena: parsed.patientInfo?.riesgos || ''
-          }));
-        }
-
-        if (parsed.type === 'operator_emergency_created') {
-          mostrarNotificacion(`Emergencia creada: ${parsed.callId}`, 'success');
-          setReporte(prev => ({
-            ...prev,
-            callId: parsed.callId,
-            seccionA: { ...prev.seccionA, folio: parsed.callId }
-          }));
-        }
-
-        if (parsed.type === 'hospital_accepted_for_call') {
-          setHospitalAceptado({
-            callId: parsed.callId,
-            hospitalId: parsed.hospitalId,
-            hospitalInfo: parsed.hospitalInfo
-          });
-          if (parsed.callId === reporte.callId) {
-            setHospitalSeleccionado(parsed.hospitalId);
-            mostrarNotificacion(`Hospital ${parsed.hospitalInfo?.nombre || ''} aceptó — reporte habilitado`, 'success');
-          }
-        }
-
-        if (parsed.type === 'prehospital_report_ack') {
-          mostrarNotificacion(`Reporte v${parsed.version} enviado al hospital`, 'success');
-        }
-
-        if (parsed.type === 'active_ambulances_update') {
-          setListaAmbulancias(parsed.ambulances || []);
-        }
-      } catch (e) { console.error('WS error:', e); }
-    };
-
-    ws.addEventListener('message', handleMessage);
-
-    // Registrar hospital actual si ya estaba vinculado
-    if (configInicial.ambulanciaId) {
-      ws.send(JSON.stringify({
-        type: 'register_paramedic',
-        paramedicId: `pm_${configInicial.paramedico1}_${Date.now()}`,
-        nombre: configInicial.paramedico1,
-        ambulanceId: configInicial.ambulanciaId
-      }));
+  const safeSend = (payload) => {
+    if (ws.readyState === WebSocket.OPEN) {
+      try { ws.send(JSON.stringify(payload)); return true; } catch (_) { return false; }
     }
+    return false;
+  };
 
-    return () => ws.removeEventListener('message', handleMessage);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isConfigured, configInicial.ambulanciaId, configInicial.paramedico1, reporte.callId]);
+  const registerParamedic = () => {
+    if (!configInicial.ambulanciaId || !configInicial.paramedico1) return;
+    safeSend({
+      type: 'register_paramedic',
+      paramedicId: `pm_${configInicial.paramedico1}_${Date.now()}`,
+      nombre: configInicial.paramedico1,
+      ambulanceId: configInicial.ambulanciaId
+    });
+  };
+
+  const handleMessage = async (event) => {
+    // ⚠️ Pega aquí tu handler existente — no lo modifiques
+    const data = event.data instanceof Blob ? await event.data.text() : event.data;
+    try {
+      const parsed = JSON.parse(data);
+
+      if (parsed.type === 'active_hospitals_update') {
+        setListaHospitales(parsed.hospitals || []);
+      }
+      if (parsed.type === 'new_emergency_assigned') {
+        mostrarNotificacion(`Emergencia asignada: ${parsed.callId}`, 'success');
+        setReporte(prev => ({
+          ...prev,
+          callId: parsed.callId,
+          seccionA: { ...prev.seccionA, folio: parsed.callId },
+          seccionC: { ...prev.seccionC, direccion: parsed.address || prev.seccionC.direccion },
+          seccionF: {
+            ...prev.seccionF,
+            tipo_urgencia: parsed.emergencyType || '',
+            motivo_principal: parsed.notes || ''
+          },
+          riesgos_escena: parsed.patientInfo?.riesgos || ''
+        }));
+      }
+      if (parsed.type === 'operator_emergency_created') {
+        mostrarNotificacion(`Emergencia creada: ${parsed.callId}`, 'success');
+        setReporte(prev => ({
+          ...prev,
+          callId: parsed.callId,
+          seccionA: { ...prev.seccionA, folio: parsed.callId }
+        }));
+      }
+      if (parsed.type === 'hospital_accepted_for_call') {
+        setHospitalAceptado({
+          callId: parsed.callId,
+          hospitalId: parsed.hospitalId,
+          hospitalInfo: parsed.hospitalInfo
+        });
+        if (parsed.callId === reporte.callId) {
+          setHospitalSeleccionado(parsed.hospitalId);
+          mostrarNotificacion(`Hospital ${parsed.hospitalInfo?.nombre || ''} aceptó — reporte habilitado`, 'success');
+        }
+      }
+      if (parsed.type === 'prehospital_report_ack') {
+        mostrarNotificacion(`Reporte v${parsed.version} enviado`, 'success');
+      }
+      if (parsed.type === 'active_ambulances_update') {
+        setListaAmbulancias(parsed.ambulances || []);
+      }
+    } catch (e) { console.error('WS error:', e); }
+  };
+
+  const handleOpen = () => {
+    registerParamedic();
+  };
+
+  ws.addEventListener('message', handleMessage);
+  ws.addEventListener('open', handleOpen);
+
+  // Si el socket ya estaba abierto al montar este efecto, registrar ya
+  if (ws.readyState === WebSocket.OPEN) {
+    registerParamedic();
+  }
+
+  return () => {
+    ws.removeEventListener('message', handleMessage);
+    ws.removeEventListener('open', handleOpen);
+  };
+}, [isConfigured, configInicial.ambulanciaId, configInicial.paramedico1, reporte.callId]);
 
   // Cargar hospitales vía REST como respaldo
   useEffect(() => {

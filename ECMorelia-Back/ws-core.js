@@ -1121,18 +1121,60 @@ async function handleHospitalAcceptPatient(data) {
     console.log(`🛏️ Hospital ${h.info.id} → camas emergencia: ${h.info.camasEmergencia}`);
   }
 
+  // ⬅️ NUEVO: calcular ruta óptima con tráfico en vivo si no existía
+  let routeData = pendingRoute ? {
+    routeGeometry: pendingRoute.routeGeometry,
+    distance: pendingRoute.distance,
+    duration: pendingRoute.duration
+  } : null;
+
+  if (!routeData && amb?.location && h?.info?.lat) {
+    try {
+      const coords = `${amb.location.lng},${amb.location.lat};${h.info.lng},${h.info.lat}`;
+      const url = `https://api.mapbox.com/directions/v5/mapbox/driving-traffic/${coords}?geometries=geojson&overview=full&steps=true&access_token=${MAPBOX_TOKEN}&language=es`;
+      const r = await fetch(url);
+      if (r.ok) {
+        const json = await r.json();
+        const route = json.routes?.[0];
+        if (route) {
+          routeData = {
+            routeGeometry: route.geometry.coordinates,
+            distance: route.distance,
+            duration: route.duration
+          };
+          console.log(`🛣️ Ruta calculada al aceptar: ${(route.distance / 1000).toFixed(1)} km · ${Math.round(route.duration / 60)} min`);
+        }
+      }
+    } catch (e) {
+      console.warn('Error calculando ruta en aceptación:', e.message);
+    }
+  }
+
+  // ⬅️ NUEVO: cachear ruta activa para recomputación periódica
+  if (routeData && amb && h) {
+    activeRoutes.set(`${amb.id}-${h.info.id}`, {
+      ...routeData,
+      ambulanceId: amb.id,
+      hospitalId: h.info.id,
+      updatedAt: new Date(),
+      timestamp: new Date().toISOString()
+    });
+  }
+
+  // ⬅️ MODIFICADO: usar routeData calculada
   if (amb?.ws) {
-    if (pendingRoute) {
+    if (routeData) {
       sendMessage(amb.ws, {
         type: 'patient_accepted_with_route',
         notificationId: data.notificationId,
         hospitalId: data.hospitalId,
         hospitalInfo: data.hospitalInfo || h?.info,
         message: 'Hospital ha aceptado. Ruta trazada.',
-        routeGeometry: pendingRoute.routeGeometry,
-        distance: pendingRoute.distance, duration: pendingRoute.duration,
+        routeGeometry: routeData.routeGeometry,
+        distance: routeData.distance,
+        duration: routeData.duration,
         timestamp: new Date().toISOString(),
-        isEmergencyRoute: pendingRoute.isEmergencyRoute
+        isEmergencyRoute: false
       });
     } else {
       sendMessage(amb.ws, {
@@ -1148,7 +1190,21 @@ async function handleHospitalAcceptPatient(data) {
     rejectedHospitals.delete(amb.id);
   }
 
-    const callId = notification.callId;
+  // ⬅️ NUEVO: enviar ruta al hospital que aceptó para que la pinte en su mapa
+  if (h?.ws?.readyState === WebSocket.OPEN && routeData) {
+    sendMessage(h.ws, {
+      type: 'route_updated',
+      ambulanceId: amb.id,
+      hospitalId: h.info.id,
+      routeGeometry: routeData.routeGeometry,
+      distance: routeData.distance,
+      duration: routeData.duration,
+      timestamp: new Date().toISOString()
+    });
+    console.log(`📍 Ruta enviada al hospital ${h.info.id}`);
+  }
+
+  const callId = notification.callId;
   if (callId && activeEmergencies.has(callId)) {
     const em = activeEmergencies.get(callId);
     em.hospitalId = String(data.hospitalId);
@@ -1192,7 +1248,6 @@ async function handleHospitalAcceptPatient(data) {
   pendingEmergencyRoutes.delete(data.notificationId);
   pendingNotifications.delete(data.notificationId);
   broadcastActiveAmbulances();
-  
 }
 
 async function handleHospitalRejectPatient(data) {

@@ -31,9 +31,6 @@ const WS_URL = resolveWsUrl();
 const DEFAULT_CENTER = { lat: 19.7024, lng: -101.1969 };
 const RECONNECT_DELAY = 3000;
 const MAX_RECONNECT = 5;
-const [hospitalRequest, setHospitalRequest] = useState(null);
-// { hospitalName, distanceKm, sentAt, callId } para mostrar en banner
-const [searchingHospital, setSearchingHospital] = useState(false);
 
 // === Estrategia anti-costo Mapbox (100k req/mes free tier) ===
 const ROUTE_POLL_INTERVAL = 20000;      // Poll cada 20s
@@ -124,6 +121,9 @@ function distanceToRouteMeters(location, geometry) {
 export default function MapaOperador() {
   const toast = useToast();
   const navigate = useNavigate();
+
+  const [hospitalRequest, setHospitalRequest] = useState(null);
+const [searchingHospital, setSearchingHospital] = useState(false);
 
   const [ambulancia, setAmbulancia] = useState(() => loadSavedAmbulance());
   const wsRef = useRef(null);
