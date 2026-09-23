@@ -108,6 +108,12 @@ export default function MapaHospitalOptimizado() {
   const { isOpen: isReportModalOpen, onOpen: onReportModalOpen, onClose: onReportModalClose } = useDisclosure();
   const { isOpen: isExpedientesOpen, onOpen: onExpedientesOpen, onClose: onExpedientesClose } = useDisclosure();
 
+  const [setupStep, setSetupStep] = useState(() => {
+  const setupDone = localStorage.getItem('hospitalSetupComplete');
+  return setupDone ? 'ready' : 'beds';
+});
+const [setupBeds, setSetupBeds] = useState(10);
+
   const toast = useToast();
 
   const showToast = useCallback((status, title, description) => {
@@ -116,33 +122,14 @@ export default function MapaHospitalOptimizado() {
 
   // ==================== CARGA INICIAL ====================
   useEffect(() => {
-    isMounted.current = true;
-    try {
-      const stored = JSON.parse(localStorage.getItem("hospitalInfo") || "null");
-      if (!stored || !stored.id) {
-        showToast('error', 'Configuración Requerida', 'Complete la información del hospital');
-        return;
-      }
-      const h = {
-        id: stored.id,
-        nombre: stored.nombre || "Hospital Base",
-        direccion: stored.direccion || "",
-        lat: stored.lat ?? 19.7024,
-        lng: stored.lng ?? -101.1969,
-        especialidades: stored.especialidades || ['General'],
-        camasDisponibles: stored.camasDisponibles ?? 10,
-        camasEmergencia: stored.camasEmergencia ?? stored.camasDisponibles ?? 10,
-        telefono: stored.telefono || ''
-      };
-      setHospitalInfo(h);
-      setCamasDisponibles(h.camasDisponibles);
-      setCamasEmergencia(h.camasEmergencia);
-    } catch (e) {
-      showToast('error', 'Error de Configuración', 'No se pudieron cargar los datos del hospital');
-    }
-    return () => { isMounted.current = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  if (hospitalInfo) {
+    localStorage.setItem('hospitalBeds', JSON.stringify({
+      camasEmergencia,
+      camasDisponibles
+    }));
+  }
+}, [camasEmergencia, camasDisponibles, hospitalInfo]);
+  
 
   useEffect(() => {
     const cargarDoctores = async () => {
@@ -794,6 +781,68 @@ const handleRouteUpdated = (data) => {
             <Spinner size="xl" color="#38bdf8" thickness="4px" />
             <Text fontSize="20px" fontWeight="900" color="white" letterSpacing="2px">INICIALIZANDO SISTEMA...</Text>
           </VStack>
+        </Box>
+      </ChakraProvider>
+    );
+  }
+
+    // ── BLOQUE 2: configuración inicial de camas ──
+  if (setupStep === 'beds') {
+    return (
+      <ChakraProvider>
+        <Box h="100vh" bg="#09090b" display="flex" alignItems="center" justifyContent="center" p={4}>
+          <Box maxW="480px" w="100%" bg="#18181b" border="2px solid #38bdf8" borderRadius="2xl" p={6}>
+            <VStack spacing={5}>
+              <Icon as={FaBed} color="#38bdf8" boxSize={10} />
+              <Text fontSize="20px" fontWeight="900" color="white" textAlign="center" letterSpacing="1px">
+                CAPACIDAD DE URGENCIAS
+              </Text>
+              <Text fontSize="14px" color="#a1a1aa" textAlign="center">
+                Indique cuántas camas de urgencias tiene disponibles en este momento.
+              </Text>
+
+              <HStack spacing={4} w="100%">
+                <IconButton
+                  aria-label="Restar"
+                  icon={<FaMinus />}
+                  onClick={() => setSetupBeds(v => Math.max(0, v - 1))}
+                  w="60px" h="60px"
+                  bg="#27272a" color="white"
+                  _hover={{ bg: '#3f3f46' }}
+                />
+                <Flex flex={1} h="80px" bg="#09090b" border="2px solid #3f3f46" borderRadius="xl" align="center" justify="center">
+                  <Text fontSize="36px" fontWeight="900" color="white">{setupBeds}</Text>
+                </Flex>
+                <IconButton
+                  aria-label="Sumar"
+                  icon={<FaPlus />}
+                  onClick={() => setSetupBeds(v => v + 1)}
+                  w="60px" h="60px"
+                  bg="#27272a" color="white"
+                  _hover={{ bg: '#3f3f46' }}
+                />
+              </HStack>
+
+              <Button
+                w="100%" h="65px"
+                bg="#10b981" color="white"
+                fontSize="16px" fontWeight="900" letterSpacing="1px"
+                _hover={{ bg: '#059669' }}
+                onClick={() => {
+                  setCamasEmergencia(setupBeds);
+                  setCamasDisponibles(setupBeds);
+                  localStorage.setItem('hospitalSetupComplete', 'true');
+                  localStorage.setItem('hospitalBeds', JSON.stringify({
+                    camasEmergencia: setupBeds,
+                    camasDisponibles: setupBeds
+                  }));
+                  setSetupStep('ready');
+                }}
+              >
+                CONFIRMAR CAPACIDAD
+              </Button>
+            </VStack>
+          </Box>
         </Box>
       </ChakraProvider>
     );

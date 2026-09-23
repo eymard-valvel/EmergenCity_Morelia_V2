@@ -14,6 +14,8 @@ import ReceptorEmergencyForm from './ReceptorEmergencyForm';
 import { useAuth } from '../../auth/useAuth.js';
 import { deleteCookie } from '../../helpers/cookies.js';
 
+import { readLocal, saveLocal } from '../../helpers/persistence.js';
+
 const RECONNECT_DELAY_MS = 3000;
 const MAX_RECONNECT_ATTEMPTS = 5;
 
@@ -63,12 +65,25 @@ const ReceptorDashboard = () => {
   const reconnectTimerRef = useRef(null);
 
   const [connectionStatus, setConnectionStatus] = useState('connecting');
-  const [activeEmergencies, setActiveEmergencies] = useState([]);
-  const [activeAmbulances, setActiveAmbulances] = useState([]);
+
   const [monitorOpen, setMonitorOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('emergencies');
 
   const wsConnected = connectionStatus === 'connected';
+
+  const [activeEmergencies, setActiveEmergencies] = useState(
+  () => readLocal('receptor', 'activeEmergencies', [])
+);
+const [activeAmbulances, setActiveAmbulances] = useState(
+  () => readLocal('receptor', 'activeAmbulances', [])
+);
+const [serviceHistory, setServiceHistory] = useState(
+  () => readLocal('receptor', 'serviceHistory', [])
+);
+
+useEffect(() => { saveLocal('receptor', 'activeEmergencies', activeEmergencies); }, [activeEmergencies]);
+useEffect(() => { saveLocal('receptor', 'activeAmbulances', activeAmbulances); }, [activeAmbulances]);
+useEffect(() => { saveLocal('receptor', 'serviceHistory', serviceHistory); }, [serviceHistory]);
 
   // ---------- CONEXIÓN WS ----------
   useEffect(() => {
@@ -196,9 +211,21 @@ const ReceptorDashboard = () => {
         break;
 
       // -------- Cierre de emergencia --------
-      case 'emergency_completed_broadcast':
-        setActiveEmergencies(prev => prev.filter(em => em.callId !== data.callId));
-        break;
+            case 'emergency_completed_broadcast': {
+  setActiveEmergencies(prev => {
+    const finished = prev.find(em => em.callId === data.callId);
+    if (finished) {
+      setServiceHistory(h => [{
+        ...finished,
+        completedAt: data.timestamp || new Date().toISOString(),
+        completedBy: data.completedBy || 'operador'
+      }, ...h].slice(0, 50));
+    }
+    return prev.filter(em => em.callId !== data.callId);
+  });
+  break;
+}
+
 
       // -------- Estado y ubicación de ambulancias --------
       case 'ambulance_status_changed':
@@ -416,6 +443,18 @@ const ReceptorDashboard = () => {
                 >
                   UNIDADES ({activeAmbulances.length})
                 </Button>
+                <Button
+  flex={1}
+  bg={activeTab === 'history' ? '#0284c7' : '#18181b'}
+  color={activeTab === 'history' ? 'white' : '#a1a1aa'}
+  borderColor="#27272a"
+  onClick={() => setActiveTab('history')}
+  _hover={{ bg: activeTab === 'history' ? '#0369a1' : '#27272a' }}
+  fontSize="12px"
+  fontWeight="800"
+>
+  HISTORIAL ({serviceHistory.length})
+</Button>
               </ButtonGroup>
             </Flex>
 
@@ -438,7 +477,18 @@ const ReceptorDashboard = () => {
                       <Text fontSize="14px" fontWeight="800">Bandeja de Urgencias Limpia</Text>
                     </Box>
                   ) : (
-                    activeEmergencies.map((em) => <EmergencyCard key={em.callId} emergency={em} />)
+                    activeEmergencies.map((em) => (
+  <EmergencyCard
+    key={em.callId}
+    emergency={em}
+    onComplete={(callId) => {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: 'receptor_complete_service', callId }));
+      }
+    }}
+  />
+))
+                    
                   )}
                 </VStack>
               )}
@@ -465,6 +515,30 @@ const ReceptorDashboard = () => {
                   )}
                 </VStack>
               )}
+
+                {activeTab === 'history' && (
+    <VStack spacing={4} align="stretch">
+      {serviceHistory.length === 0 ? (
+        <Box p={8} bg="#18181b" color="#a1a1aa" borderRadius="lg" border="1px dashed #3f3f46" textAlign="center">
+          <Text fontSize="14px" fontWeight="800">Sin servicios finalizados en esta sesión</Text>
+        </Box>
+      ) : (
+        serviceHistory.map((em) => (
+          <Box key={em.callId} p={4} borderRadius="xl" bg="#18181b" border="1px solid #27272a" borderLeft="6px solid #64748b">
+            <Flex justify="space-between" align="center" mb={2}>
+              <Text fontWeight="900" color="#f8fafc" fontSize="14px">{em.callId}</Text>
+              <Text fontSize="11px" color="#64748b" fontWeight="800">
+                {new Date(em.completedAt).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })}
+              </Text>
+            </Flex>
+            <Text fontSize="13px" color="#38bdf8" mb={1}>{em.emergencyType}</Text>
+            {em.address && <Text fontSize="12px" color="#a1a1aa" noOfLines={1}>{em.address}</Text>}
+          </Box>
+        ))
+      )}
+    </VStack>
+  )}
+
             </Box>
           </VStack>
         </Box>
@@ -491,6 +565,23 @@ const EmergencyCard = ({ emergency: em }) => {
           <Text fontSize="13px" fontWeight="800" color="#10b981">{em.assignedAmbulanceName || em.assignedAmbulanceId}</Text>
         </HStack>
       )}
+      {em.status === 'assigned' && (
+  <Button
+    mt={3}
+    w="100%"
+    h="50px"
+    bg="transparent"
+    color="#ef4444"
+    border="1px solid #ef4444"
+    fontWeight="800"
+    fontSize="13px"
+    letterSpacing="0.5px"
+    _hover={{ bg: 'rgba(239,68,68,0.15)' }}
+    onClick={() => onComplete(em.callId)}
+  >
+    MARCAR COMO FINALIZADO
+  </Button>
+)}
     </Box>
   );
 };

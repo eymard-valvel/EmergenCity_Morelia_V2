@@ -7,6 +7,8 @@ import { searchPlaces, getPlaceTypeLabel } from '../../helpers/placeSearch.js';
 import { useNavigate } from 'react-router-dom';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
+import { readLocal, saveLocal } from '../../helpers/persistence.js';
+
 import {
   Box, Flex, VStack, HStack, Text, Button, Icon, Badge,
   Modal, ModalOverlay, ModalContent, ModalHeader, ModalBody, ModalFooter,
@@ -122,10 +124,9 @@ export default function MapaOperador() {
   const toast = useToast();
   const navigate = useNavigate();
 
-  const [hospitalRequest, setHospitalRequest] = useState(null);
 const [searchingHospital, setSearchingHospital] = useState(false);
 
-  const [ambulancia, setAmbulancia] = useState(() => loadSavedAmbulance());
+
   const wsRef = useRef(null);
   const isMounted = useRef(true);
   const reconnectAttempts = useRef(0);
@@ -170,10 +171,18 @@ const searchDebounceRef = useRef(null);
 
   const [ambulanceStatus, setAmbulanceStatus] = useState('disponible');
   const [hospitals, setHospitals] = useState([]);
-  const [assignedEmergency, setAssignedEmergency] = useState(null);
+
 
   const { isOpen: isDrawerOpen, onOpen: onDrawerOpen, onClose: onDrawerClose } = useDisclosure();
   const { isOpen: isAlertOpen, onOpen: onAlertOpen, onClose: onAlertClose } = useDisclosure();
+
+  const [ambulancia, setAmbulancia] = useState(() => loadSavedAmbulance());
+const [assignedEmergency, setAssignedEmergency] = useState(
+  () => readLocal('operador', 'assignedEmergency', null)
+);
+const [hospitalRequest, setHospitalRequest] = useState(
+  () => readLocal('operador', 'hospitalRequest', null)
+);
 
   const [drawerMode, setDrawerMode] = useState('atender');
   const [searchQuery, setSearchQuery] = useState('');
@@ -228,6 +237,9 @@ const [isCreatingEmergency, setIsCreatingEmergency] = useState(false);
       });
     }, 1000);
   }, [sendWS]);
+
+  useEffect(() => { saveLocal('operador', 'assignedEmergency', assignedEmergency); }, [assignedEmergency]);
+useEffect(() => { saveLocal('operador', 'hospitalRequest', hospitalRequest); }, [hospitalRequest]);
 
   // ==================== WS ====================
   useEffect(() => {
@@ -335,23 +347,18 @@ if (data.patientInfo && Object.keys(data.patientInfo).length > 0) {
 
   if (hospitalLat && hospitalLng) {
     const dest = { lat: hospitalLat, lng: hospitalLng };
-    // 1. Reemplazar destino activo: ahora vamos al hospital, no a la emergencia
     activeDestination.current = { ...dest, mode: 'transfer', address: hospitalName };
     placeDestinationMarker(dest);
 
-    // 2. Dibujar la ruta calculada por el backend (mapa visual inmediato)
     if (data.routeGeometry) {
       drawRoute(data.routeGeometry, '#ef4444');
       currentRouteGeometry.current = data.routeGeometry;
+      setRouteProgress({
+        distanceRemaining: data.distance,
+        durationRemaining: data.duration
+      });
     }
 
-    // 3. Actualizar el motor de navegación con la nueva ruta
-    setRouteProgress({
-      distanceRemaining: data.distance,
-      durationRemaining: data.duration
-    });
-
-    // 4. Recalcular desde la ubicación actual del operador para obtener maniobras
     if (myLocation) {
       const route = await computeRoute(myLocation, dest);
       if (route) {
@@ -366,12 +373,11 @@ if (data.patientInfo && Object.keys(data.patientInfo).length > 0) {
       }
     }
 
-    // 5. Activar modo urgencia (ruta roja, siguiente maniobra visible)
     setIsNavigating(true);
     setCancelStep('idle');
     changeStatus('en_ruta');
+    setHospitalRequest(null);
 
-    // 6. Centrar en la posición actual con vista GPS
     if (map.current && myLocation) {
       setIsGpsMode(true);
       setIsFollowing(true);
@@ -380,19 +386,14 @@ if (data.patientInfo && Object.keys(data.patientInfo).length > 0) {
         zoom: 18, pitch: 60, bearing: myHeading, duration: 1200
       });
     }
-
-    // 7. Limpiar el banner de solicitud (ya fue aceptada)
-    setHospitalRequest(null);
   }
   break;
 }
-            
+
 case 'patient_accepted': {
-  // Fallback sin ruta (hospital aceptó sin coordenadas válidas)
-  const hospitalName = data.hospitalInfo?.nombre || data.hospitalId;
   toast({
     title: 'Hospital aceptó',
-    description: hospitalName,
+    description: data.hospitalInfo?.nombre || data.hospitalId,
     status: 'success',
     duration: 6000,
     position: 'bottom'
@@ -804,40 +805,63 @@ setSearchingHospital(false);
   }, []);
 
   const handleCancelWithReason = useCallback((reasonCode) => {
-    const callId = assignedEmergency?.callId;
+  const callId = assignedEmergency?.callId;
 
-    if (!callId) {
-      silentCleanupNavigation();
-      changeStatus('disponible');
-      toast({ title: 'Navegación finalizada', status: 'info', duration: 3000, position: 'bottom' });
-      return;
-    }
+  if (!callId && !activeDestination.current) {
+    silentCleanupNavigation();
+    changeStatus('disponible');
+    toast({ title: 'Sin servicio activo', status: 'info', duration: 3000, position: 'bottom' });
+    return;
+  }
 
-    if (reasonCode === 'completed') {
-      setHospitalRequest(null);
-      sendWS({ type: 'emergency_completed', ambulanceId: ambulancia?.id, callId });
-      silentCleanupNavigation();
-      setAssignedEmergency(null);
-      changeStatus('disponible');
-      toast({ title: 'Servicio completado', status: 'success', duration: 4000, position: 'bottom' });
+  if (reasonCode === 'completed') {
+    if (callId) {
+      sendWS({ type: 'emergency_completed', ambulanceId: ambulancia?.id, callId, completedBy: 'operador' });
     } else {
-      sendWS({
-        type: 'ambulance_emergency_cancel',
-        ambulanceId: ambulancia?.id, callId,
-        reason: reasonCode, notes: ''
-      });
-      silentCleanupNavigation();
-      setAssignedEmergency(null);
-      if (reasonCode === 'averia' || reasonCode === 'pinchadura') {
-        changeStatus('fuera_de_servicio');
-        toast({ title: 'Unidad fuera de servicio', description: 'Emergencia reasignada a otra unidad', status: 'warning', duration: 6000, position: 'bottom' });
-      } else {
-        changeStatus('disponible');
-        toast({ title: 'Servicio cancelado', description: 'Emergencia reasignada', status: 'info', duration: 5000, position: 'bottom' });
-      }
+      sendWS({ type: 'ambulance_status_update', ambulanceId: ambulancia?.id, status: 'disponible' });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [assignedEmergency, ambulancia, sendWS, changeStatus, toast, silentCleanupNavigation]);
+    silentCleanupNavigation();
+    setAssignedEmergency(null);
+    setHospitalRequest(null);
+    changeStatus('disponible');
+    toast({ title: 'Servicio completado', status: 'success', duration: 4000, position: 'bottom' });
+    return;
+  }
+
+  if (callId) {
+    sendWS({
+      type: 'ambulance_emergency_cancel',
+      ambulanceId: ambulancia?.id,
+      callId,
+      reason: reasonCode,
+      notes: ''
+    });
+  }
+
+  silentCleanupNavigation();
+  setAssignedEmergency(null);
+  setHospitalRequest(null);
+
+  if (reasonCode === 'averia' || reasonCode === 'pinchadura') {
+    changeStatus('fuera_de_servicio');
+    toast({
+      title: 'Unidad fuera de servicio',
+      description: 'Servicio reasignado a otra unidad',
+      status: 'warning',
+      duration: 6000,
+      position: 'bottom'
+    });
+  } else {
+    changeStatus('disponible');
+    toast({
+      title: 'Servicio cancelado',
+      description: 'Unidad disponible para nuevo despacho',
+      status: 'info',
+      duration: 5000,
+      position: 'bottom'
+    });
+  }
+}, [assignedEmergency, ambulancia, sendWS, changeStatus, toast, silentCleanupNavigation]);
 
   const handleSendTransfer = async () => {
     const hospital = hospitals.find(h => h.id === selectedHospitalId);
@@ -1114,17 +1138,17 @@ const requestHospitalNow = useCallback(() => {
         )}
 
         {/* ── BOTÓN CANCELAR RUTA (solo si cancelStep = idle) ── */}
-        {cancelStep === 'idle' && (
-          <Button
-            w="100%" h="65px"
-            bg="#ef4444" color="white"
-            fontSize="18px" fontWeight="900" borderRadius="2xl" shadow="dark-lg"
-            _hover={{ bg: '#dc2626' }}
-            onClick={() => setCancelStep('confirm')}
-          >
-            <Icon as={FaTimesCircle} mr={2} boxSize={5} /> CANCELAR RUTA
-          </Button>
-        )}
+        {cancelStep === 'idle' && (assignedEmergency || activeDestination.current) && (
+  <Button
+    w="100%" h="65px"
+    bg="#ef4444" color="white"
+    fontSize="18px" fontWeight="900" borderRadius="2xl" shadow="dark-lg"
+    _hover={{ bg: '#dc2626' }}
+    onClick={() => setCancelStep('confirm')}
+  >
+    <Icon as={FaTimesCircle} mr={2} boxSize={5} /> FINALIZAR SERVICIO
+  </Button>
+)}
 
         {/* ── CONFIRMAR CANCELACIÓN ── */}
         {cancelStep === 'confirm' && (
