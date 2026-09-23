@@ -256,7 +256,7 @@ const [isCreatingEmergency, setIsCreatingEmergency] = useState(false);
         ws.send(JSON.stringify({ type: 'request_hospitals_list' }));
       };
 
-      ws.onmessage = (e) => {
+ws.onmessage = async (e) => {
         if (!isMounted.current) return;
         try {
           const data = JSON.parse(e.data);
@@ -319,23 +319,88 @@ if (data.patientInfo && Object.keys(data.patientInfo).length > 0) {
               if (data.location) startNavigationEngine(data.location, 'emergency', data.address);
               toast({ title: 'Emergencia asignada', description: data.address || 'Diríjase al punto', status: 'error', duration: 10000, position: 'bottom' });
               break;
-            case 'patient_accepted_with_route':
-            case 'patient_accepted': {
-              const hospitalName = data.hospitalInfo?.nombre || data.hospitalId;
-              toast({ title: 'Hospital aceptó', description: `Diríjase a ${hospitalName}`, status: 'success', duration: 8000, position: 'bottom' });
-              if (data.routeGeometry && data.hospitalInfo?.lat) {
-                const dest = { lat: data.hospitalInfo.lat, lng: data.hospitalInfo.lng };
-                activeDestination.current = { ...dest, mode: 'transfer', address: hospitalName };
-                placeDestinationMarker(dest);
-                drawRoute(data.routeGeometry, '#0ea5e9');
-                currentRouteGeometry.current = data.routeGeometry;
-                setRouteProgress({ distanceRemaining: data.distance, durationRemaining: data.duration });
-                setIsNavigating(true);
-                setCancelStep('idle');
-                changeStatus('en_ruta');
-              }
-              break;
-            }
+
+              case 'patient_accepted_with_route': {
+  const hospitalName = data.hospitalInfo?.nombre || data.hospitalId;
+  const hospitalLat = data.hospitalInfo?.lat;
+  const hospitalLng = data.hospitalInfo?.lng;
+
+  toast({
+    title: 'Hospital aceptó',
+    description: `Redirigiendo a ${hospitalName}`,
+    status: 'success',
+    duration: 6000,
+    position: 'bottom'
+  });
+
+  if (hospitalLat && hospitalLng) {
+    const dest = { lat: hospitalLat, lng: hospitalLng };
+    // 1. Reemplazar destino activo: ahora vamos al hospital, no a la emergencia
+    activeDestination.current = { ...dest, mode: 'transfer', address: hospitalName };
+    placeDestinationMarker(dest);
+
+    // 2. Dibujar la ruta calculada por el backend (mapa visual inmediato)
+    if (data.routeGeometry) {
+      drawRoute(data.routeGeometry, '#ef4444');
+      currentRouteGeometry.current = data.routeGeometry;
+    }
+
+    // 3. Actualizar el motor de navegación con la nueva ruta
+    setRouteProgress({
+      distanceRemaining: data.distance,
+      durationRemaining: data.duration
+    });
+
+    // 4. Recalcular desde la ubicación actual del operador para obtener maniobras
+    if (myLocation) {
+      const route = await computeRoute(myLocation, dest);
+      if (route) {
+        drawRoute(route.geometry, '#ef4444');
+        currentRouteGeometry.current = route.geometry;
+        setCurrentManeuver(route.steps[0]);
+        setRouteProgress({
+          distanceRemaining: route.distance,
+          durationRemaining: route.duration
+        });
+        lastRouteCalcRef.current = { loc: { ...myLocation }, time: Date.now() };
+      }
+    }
+
+    // 5. Activar modo urgencia (ruta roja, siguiente maniobra visible)
+    setIsNavigating(true);
+    setCancelStep('idle');
+    changeStatus('en_ruta');
+
+    // 6. Centrar en la posición actual con vista GPS
+    if (map.current && myLocation) {
+      setIsGpsMode(true);
+      setIsFollowing(true);
+      map.current.flyTo({
+        center: [myLocation.lng, myLocation.lat],
+        zoom: 18, pitch: 60, bearing: myHeading, duration: 1200
+      });
+    }
+
+    // 7. Limpiar el banner de solicitud (ya fue aceptada)
+    setHospitalRequest(null);
+  }
+  break;
+}
+            
+case 'patient_accepted': {
+  // Fallback sin ruta (hospital aceptó sin coordenadas válidas)
+  const hospitalName = data.hospitalInfo?.nombre || data.hospitalId;
+  toast({
+    title: 'Hospital aceptó',
+    description: hospitalName,
+    status: 'success',
+    duration: 6000,
+    position: 'bottom'
+  });
+  setHospitalRequest(null);
+  break;
+}
+
             case 'patient_rejected':
               toast({ title: 'Hospital rechazó', description: 'Seleccione otra alternativa.', status: 'error', duration: 8000, position: 'bottom' });
               silentCleanupNavigation();

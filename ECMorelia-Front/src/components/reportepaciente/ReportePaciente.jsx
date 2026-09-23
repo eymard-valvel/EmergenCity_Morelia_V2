@@ -558,7 +558,56 @@ useEffect(() => {
         .toast.success { background: var(--success); }
         .toast.error { background: var(--danger); }
         .toast.info { background: var(--accent); }
-        @media (max-width: 480px) { .grid-3 { grid-template-columns: 1fr 1fr; } }
+                /* === FAB del micrófono (móvil) === */
+        .voice-fab {
+          position: fixed;
+          bottom: 200px;
+          right: 20px;
+          z-index: 101;
+          background: rgba(24,24,27,0.95);
+          border: 2px solid #0ea5e9;
+          border-radius: 50%;
+          padding: 4px;
+          box-shadow: 0 8px 24px rgba(14,165,233,0.35);
+          backdrop-filter: blur(10px);
+          transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .voice-fab:hover {
+          transform: scale(1.05);
+          box-shadow: 0 12px 32px rgba(14,165,233,0.55);
+        }
+        .voice-fab:active {
+          transform: scale(0.98);
+        }
+
+        /* === Banner destino prioritario === */
+        .destino-prioritario {
+          background: linear-gradient(135deg, rgba(16,185,129,0.15), rgba(16,185,129,0.05));
+          border: 2px solid #10b981;
+          border-left: 6px solid #10b981;
+          border-radius: 12px;
+          padding: 16px;
+          margin-bottom: 16px;
+          box-shadow: 0 4px 16px rgba(16,185,129,0.2);
+        }
+        .destino-icon {
+          width: 48px;
+          height: 48px;
+          border-radius: 50%;
+          background: #10b981;
+          color: white;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 1.5rem;
+          font-weight: 900;
+        }
+
+        @media (max-width: 480px) {
+          .grid-3 { grid-template-columns: 1fr 1fr; }
+          .voice-fab { bottom: 190px; right: 14px; }
+        }
+
       `}</style>
 
       {mensajeNotificacion.texto && (
@@ -586,6 +635,25 @@ useEffect(() => {
             <button onClick={handleLogout} className="logout-btn">CERRAR SESIÓN</button>
           </div>
         </div>
+
+        {hospitalAceptado && (
+  <div className="destino-prioritario">
+    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+      <div className="destino-icon">H</div>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: '0.72rem', fontWeight: 900, letterSpacing: '1px', opacity: 0.85 }}>
+          HOSPITAL DESTINO
+        </div>
+        <div style={{ fontSize: '1.25rem', fontWeight: 900, color: '#10b981', marginTop: '2px' }}>
+          {hospitalAceptado.hospitalInfo?.nombre || hospitalAceptado.hospitalId}
+        </div>
+        <div style={{ fontSize: '0.75rem', opacity: 0.75, fontWeight: 700, marginTop: '2px' }}>
+          Folio: {reporte.callId}
+        </div>
+      </div>
+    </div>
+  </div>
+)}
 
         {reporte.callId ? (
           hospitalAceptado ? (
@@ -753,39 +821,49 @@ useEffect(() => {
         <Outlet />
       </div>
 
-      <div className="bottom-action-area">
-        <div className="pln-container">
-          <VoiceAssistant
-            onDataExtracted={handleNLPData}
-            onError={(msg) => mostrarNotificacion(msg, 'error')}
-            onRecordingComplete={() => mostrarNotificacion('Grabación completada', 'success')}
-          />
-        </div>
-          <div className="btn-row">
-  <button onClick={() => enviarVersion(true)} className="btn-urgent" disabled={!puedeEnviar}>
-    URGENTE
-  </button>
-  <button onClick={handleSubmit} className="btn-sync" disabled={!puedeEnviar}>
-    {puedeEnviar ? 'ENVIAR REPORTE COMPLETO' : 'ESPERANDO HOSPITAL'}
-  </button>
+<div className="bottom-action-area">
+  {/* Barra inferior: solo botones de envío */}
+  <div className="btn-row">
+    <button
+      onClick={() => enviarVersion(true)}
+      className="btn-urgent"
+      disabled={!puedeEnviar}
+    >
+      URGENTE
+    </button>
+    <button
+      onClick={handleSubmit}
+      className="btn-sync"
+      disabled={!puedeEnviar}
+    >
+      {puedeEnviar ? 'ENVIAR COMPLETO' : 'ESPERANDO HOSPITAL'}
+    </button>
+  </div>
+
+  {puedeEnviar && (
+    <button
+      onClick={solicitarMedico}
+      className="btn-video"
+      style={{
+        width: '100%', padding: '14px', background: '#0ea5e9', color: 'white',
+        border: 'none', borderRadius: '12px', fontSize: '0.95rem', fontWeight: 900,
+        letterSpacing: '1px', cursor: 'pointer', textTransform: 'uppercase',
+        marginTop: '8px'
+      }}
+    >
+      SOLICITAR MÉDICO (VIDEOLLAMADA)
+    </button>
+  )}
 </div>
 
-{puedeEnviar && (
-  <button
-    onClick={solicitarMedico}
-    className="btn-video"
-    style={{
-      width: '100%', padding: '16px', background: '#0ea5e9', color: 'white',
-      border: 'none', borderRadius: '12px', fontSize: '1rem', fontWeight: 900,
-      letterSpacing: '1px', cursor: 'pointer', textTransform: 'uppercase',
-      marginTop: '8px'
-    }}
-  >
-    SOLICITAR MÉDICO (VIDEOLLAMADA)
-  </button>
-)}
-
-      </div>
+{/* ⬅️ NUEVO: micrófono como FAB flotante arriba de la barra */}
+<div className="voice-fab">
+  <VoiceAssistant
+    onDataExtracted={handleNLPData}
+    onError={(msg) => mostrarNotificacion(msg, 'error')}
+    onRecordingComplete={() => mostrarNotificacion('Grabación completada', 'success')}
+  />
+</div>
     </div>
   );
 };

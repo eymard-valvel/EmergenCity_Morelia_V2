@@ -1248,7 +1248,7 @@ async function handleHospitalAcceptPatient(data) {
   pendingEmergencyRoutes.delete(data.notificationId);
   pendingNotifications.delete(data.notificationId);
   broadcastActiveAmbulances();
-}
+} 
 
 async function handleHospitalRejectPatient(data) {
   const notification = pendingNotifications.get(data.notificationId);
@@ -1582,27 +1582,75 @@ function findWsByRoleId(role, id) {
 }
 
 function handleVideoCallRequest(ws, data) {
-  const { to, callId, from } = data;
-  if (!to?.role || !to?.id) return sendError(ws, 'Destino inválido', 'BAD_PAYLOAD');
+  const { to, callId, from, ambulanceId } = data;
+  if (!to?.role) return sendError(ws, 'Destino inválido', 'BAD_PAYLOAD');
+
   const sessionId = generateId('vcall');
   const session = {
-    sessionId, callId: callId || null,
+    sessionId,
+    callId: callId || null,
+    ambulanceId: ambulanceId || null,
     caller: from || { role: ws._role, id: ws._receptorId || ws._paramedicId || ws._doctorId },
-    callee: to, status: 'ringing',
+    callee: to,
+    status: 'ringing',
     createdAt: new Date().toISOString()
   };
   videoCallSessions.set(sessionId, session);
+
+  // ⬅️ NUEVO: si to.id es "any" o no viene, broadcast a todos los del rol
+  const isBroadcast = !to.id || to.id === 'any' || to.id === '*';
+
+  if (isBroadcast) {
+    const targetMap =
+      to.role === 'doctor'    ? activeDoctors :
+      to.role === 'hospital'  ? activeHospitals :
+      to.role === 'paramedic' ? activeParamedics :
+      to.role === 'ambulance' ? activeAmbulances : null;
+
+    if (!targetMap || targetMap.size === 0) {
+      videoCallSessions.delete(sessionId);
+      return sendError(ws, 'No hay doctores conectados', 'NO_TARGETS');
+    }
+
+    const incomingPayload = {
+      type: 'video_call_incoming',
+      sessionId,
+      callId: session.callId,
+      ambulanceId: session.ambulanceId,
+      from: session.caller,
+      timestamp: new Date().toISOString()
+    };
+
+    let sent = 0;
+    targetMap.forEach(entry => {
+      if (entry.ws?.readyState === WebSocket.OPEN) {
+        sendMessage(entry.ws, incomingPayload);
+        sent++;
+      }
+    });
+
+    console.log(`📹 Videollamada ${sessionId} → broadcast a ${sent} ${to.role}(s)`);
+    sendMessage(ws, { type: 'video_call_ringing', sessionId, targets: sent, timestamp: new Date().toISOString() });
+    return;
+  }
+
+  // Comportamiento original: destinatario específico
   const target = findWsByRoleId(to.role, to.id);
   if (!target) {
     videoCallSessions.delete(sessionId);
     return sendError(ws, 'Destino no disponible', 'NOT_FOUND');
   }
+
   sendMessage(target, {
     type: 'video_call_incoming',
-    sessionId, callId: session.callId, from: session.caller,
+    sessionId,
+    callId: session.callId,
+    ambulanceId: session.ambulanceId,
+    from: session.caller,
     timestamp: new Date().toISOString()
   });
   sendMessage(ws, { type: 'video_call_ringing', sessionId, timestamp: new Date().toISOString() });
+  console.log(`📹 Videollamada ${sessionId} → ${to.role}:${to.id}`);
 }
 
 function handleVideoCallAccept(ws, data) {

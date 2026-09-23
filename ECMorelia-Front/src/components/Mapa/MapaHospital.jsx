@@ -551,21 +551,51 @@ export default function MapaHospitalOptimizado() {
     } catch (_) {}
   };
 
-  const handleRouteUpdated = (data) => {
-    const { ambulanceId, hospitalId, routeGeometry, distance, duration } = data;
-    if (hospitalId && hospitalId !== hospitalInfo?.id) return;
-    if (routeGeometry) drawAmbulanceRoute(ambulanceId, routeGeometry);
-    else { clearAmbulanceRoute(ambulanceId); return; }
+const handleRouteUpdated = (data) => {
+  const { ambulanceId, hospitalId, routeGeometry, distance, duration } = data;
+  if (hospitalId && hospitalId !== hospitalInfo?.id) return;
 
-    setActiveRoutes(prev => {
-      const idx = prev.findIndex(r => r.ambulanceId === ambulanceId);
-      const newRoute = { ambulanceId, hospitalId: hospitalId || hospitalInfo?.id, distance, duration, geometry: routeGeometry };
-      if (idx >= 0) {
-        const copy = [...prev]; copy[idx] = newRoute; return copy;
-      }
-      return [...prev, newRoute];
-    });
-  };
+  if (routeGeometry) {
+    drawAmbulanceRoute(ambulanceId, routeGeometry, distance, duration);
+
+    // ⬅️ NUEVO: forzar visibilidad del marcador de la ambulancia
+    const marker = ambulanceMarkers.current[ambulanceId];
+    if (marker) {
+      marker.getElement().style.zIndex = '100';
+    }
+
+    // ⬅️ NUEVO: auto-centrar en la ruta si es la primera vez que llega
+    if (!activeRoutes.some(r => r.ambulanceId === ambulanceId)) {
+      setTimeout(() => {
+        if (!map.current) return;
+        const bounds = new mapboxgl.LngLatBounds();
+        bounds.extend([hospitalInfo.lng, hospitalInfo.lat]);
+        routeGeometry.forEach(c => bounds.extend([c[0], c[1]]));
+        map.current.fitBounds(bounds, { padding: 80, duration: 1200 });
+      }, 300);
+    }
+  } else {
+    clearAmbulanceRoute(ambulanceId);
+    return;
+  }
+
+  setActiveRoutes(prev => {
+    const idx = prev.findIndex(r => r.ambulanceId === ambulanceId);
+    const newRoute = {
+      ambulanceId,
+      hospitalId: hospitalId || hospitalInfo?.id,
+      distance, duration,
+      geometry: routeGeometry,
+      updatedAt: new Date().toISOString()
+    };
+    if (idx >= 0) {
+      const copy = [...prev];
+      copy[idx] = newRoute;
+      return copy;
+    }
+    return [...prev, newRoute];
+  });
+};
 
   const handleNavigationCancelled = (data) => {
     if (data.ambulanceId) clearAmbulanceRoute(data.ambulanceId);
