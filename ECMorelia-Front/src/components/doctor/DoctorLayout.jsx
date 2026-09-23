@@ -26,11 +26,11 @@ function DoctorLayoutContent() {
     socket.onopen = () => {
       setWsConnected(true);
       socket.send(JSON.stringify({
-        type: 'register_doctor',
-        doctorId: `doc_${Date.now()}`,
-        nombre: 'EC-Doctor',
-        especialidad: 'Urgenciólogo'
-      }));
+  type: 'register_doctor',
+  doctorId: `doc_${Date.now()}`,
+  nombre: 'EC-Doctor',
+  especialidad: 'Urgenciólogo'
+}));
     };
 
     socket.onmessage = (event) => {
@@ -38,49 +38,50 @@ function DoctorLayoutContent() {
         const data = JSON.parse(event.data);
 
         if (data.type === 'video_call_incoming') {
-          setIncomingCall(data);
-          toast({
-            position: "top-right",
-            duration: null,
-            isClosable: true,
-            render: ({ onClose }) => (
-              <Box color="white" p={4} bg="#0ea5e9" borderRadius="lg" boxShadow="dark-lg" border="2px solid white" maxWidth="380px">
-                <Flex align="center" mb={3}>
-                  <Icon as={FaVideo} boxSize={8} mr={3} />
-                  <Box>
-                    <Text fontWeight="900" fontSize="lg">SOLICITUD DE VIDEOLLAMADA</Text>
-                    <Text fontSize="sm">Paramédico: {data.from?.id || 'EC-Paramedico'}</Text>
-                    {data.callId && <Text fontSize="xs" opacity={0.9}>Folio: {data.callId}</Text>}
-                  </Box>
-                </Flex>
-                <HStack spacing={2}>
-                  <Button
-                    flex={1} h="50px" bg="white" color="#0ea5e9" fontWeight="900"
-                    _hover={{ bg: "gray.100" }}
-                    onClick={() => {
-                      onClose();
-                      socket.send(JSON.stringify({ type: 'video_call_accept', sessionId: data.sessionId }));
-                      window.open(`/videollamada?room=${data.sessionId}&role=doctor`, '_blank');
-                    }}
-                  >
-                    ACEPTAR
-                  </Button>
-                  <Button
-                    flex={0.6} h="50px" bg="transparent" color="white"
-                    border="2px solid white" fontWeight="900"
-                    _hover={{ bg: "rgba(255,255,255,0.2)" }}
-                    onClick={() => {
-                      onClose();
-                      socket.send(JSON.stringify({ type: 'video_call_reject', sessionId: data.sessionId, reason: 'No disponible' }));
-                    }}
-                  >
-                    RECHAZAR
-                  </Button>
-                </HStack>
-              </Box>
-            ),
-          });
-        }
+  const sessionId = data.sessionId;
+  toast({
+    position: 'top-right',
+    duration: null,
+    isClosable: true,
+    render: ({ onClose }) => (
+      <Box color="white" p={4} bg="#0ea5e9" borderRadius="lg" boxShadow="dark-lg" border="2px solid white" maxWidth="400px">
+        <Flex align="center" mb={3}>
+          <Icon as={FaVideo} boxSize={8} mr={3} />
+          <Box>
+            <Text fontWeight="900" fontSize="lg">SOLICITUD DE VIDEOLLAMADA</Text>
+            <Text fontSize="sm">Paramédico: {data.from?.id || 'EC-Paramedico'}</Text>
+            {data.callId && <Text fontSize="xs" opacity={0.9}>Folio: {data.callId}</Text>}
+            <Text fontSize="xs" opacity={0.9}>Sala: {sessionId}</Text>
+          </Box>
+        </Flex>
+        <HStack spacing={2}>
+          <Button
+            flex={1} h="50px" bg="white" color="#0ea5e9" fontWeight="900"
+            _hover={{ bg: 'gray.100' }}
+            onClick={() => {
+              onClose();
+              socket.send(JSON.stringify({ type: 'video_call_accept', sessionId }));
+              window.open(`/videollamada?room=${sessionId}&role=doctor&user=EC-Doctor`, '_blank');
+            }}
+          >
+            ACEPTAR
+          </Button>
+          <Button
+            flex={0.6} h="50px" bg="transparent" color="white"
+            border="2px solid white" fontWeight="900"
+            _hover={{ bg: 'rgba(255,255,255,0.2)' }}
+            onClick={() => {
+              onClose();
+              socket.send(JSON.stringify({ type: 'video_call_reject', sessionId, reason: 'No disponible' }));
+            }}
+          >
+            RECHAZAR
+          </Button>
+        </HStack>
+      </Box>
+    )
+  });
+}
 
         if (data.type === 'prehospital_report_broadcast') {
           setUnreadReports(prev => prev + 1);

@@ -276,7 +276,28 @@ ws.onmessage = async (e) => {
             case 'connection_established': break;
             case 'active_hospitals_update': setHospitals(data.hospitals || []); break;
             case 'emergency_offer': handleEmergencyOffer(data); break;
-            case 'hospital_request_sent':
+
+            
+case 'operator_emergency_created':
+  // Guardar el folio de la emergencia generada por el operador
+  setAssignedEmergency(prev => ({
+    ...(prev || {}),
+    callId: data.callId,
+    emergencyType: prev?.emergencyType || 'Iniciada por operador',
+    address: prev?.address || 'Atención en campo',
+    patientInfo: prev?.patientInfo || {},
+    createdBy: 'operator'
+  }));
+  toast({
+    title: 'Folio generado',
+    description: data.callId,
+    status: 'success',
+    duration: 5000,
+    position: 'bottom'
+  });
+  break;
+
+
   setSearchingHospital(false);
   setHospitalRequest({
     hospitalName: data.hospitalName,
@@ -294,17 +315,36 @@ ws.onmessage = async (e) => {
   });
   break;
 
+case 'hospital_request_sent':
+  setSearchingHospital(false);
+  setHospitalRequest({
+    hospitalName: data.hospitalName,
+    hospitalId: data.hospitalId,
+    distanceKm: data.distanceKm,
+    callId: data.callId,
+    sentAt: new Date().toISOString()
+  });
+  toast({
+    title: 'Solicitud enviada',
+    description: `${data.hospitalName} · ${data.distanceKm} km`,
+    status: 'success',
+    duration: 6000,
+    position: 'bottom'
+  });
+  break;
+
 case 'hospital_search_failed':
   setSearchingHospital(false);
   toast({
     title: 'Sin hospitales conectados',
-    description: 'No hay hospitales disponibles en este momento.',
+    description: 'No hay hospitales con capacidad disponible.',
     status: 'warning',
     duration: 8000,
     position: 'bottom'
   });
   break;
-            case 'new_emergency_assigned':
+  
+  case 'new_emergency_assigned':
               // Guardar datos del receptor como template local para reutilizar
 if (data.patientInfo && Object.keys(data.patientInfo).length > 0) {
   try {
@@ -389,6 +429,7 @@ if (data.patientInfo && Object.keys(data.patientInfo).length > 0) {
   }
   break;
 }
+              
 
 case 'patient_accepted': {
   toast({

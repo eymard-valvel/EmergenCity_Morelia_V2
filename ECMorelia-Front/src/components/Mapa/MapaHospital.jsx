@@ -91,6 +91,7 @@ export default function MapaHospitalOptimizado() {
   const [trafficEnabled, setTrafficEnabled] = useState(true);
   const [camasDisponibles, setCamasDisponibles] = useState(0);
   const [camasEmergencia, setCamasEmergencia] = useState(0);
+  const [mapLoaded, setMapLoaded] = useState(false);
 
   const [historialExpedientes, setHistorialExpedientes] = useState([]);
   const [patientNotifications, setPatientNotifications] = useState([]);
@@ -120,6 +121,27 @@ const [setupBeds, setSetupBeds] = useState(10);
     toast({ title, description, status, duration: 4000, isClosable: true, position: 'top-right' });
   }, [toast]);
 
+  const geocodeHospitalAddress = useCallback(async (address) => {
+  if (!address || address.trim() === '') return null;
+  try {
+    const q = encodeURIComponent(`${address.trim()}, Morelia, Michoacán, México`);
+    const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${q}.json?access_token=${mapboxgl.accessToken}&country=mx&types=address,poi,place&limit=1&language=es`;
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const data = await res.json();
+    const feature = data.features?.[0];
+    if (!feature) return null;
+    return {
+      lat: feature.center[1],
+      lng: feature.center[0],
+      place_name: feature.place_name
+    };
+  } catch (err) {
+    console.warn('Geocoding falló:', err.message);
+    return null;
+  }
+}, []);
+
   // ==================== CARGA INICIAL ====================
   useEffect(() => {
   if (hospitalInfo) {
@@ -129,6 +151,75 @@ const [setupBeds, setSetupBeds] = useState(10);
     }));
   }
 }, [camasEmergencia, camasDisponibles, hospitalInfo]);
+
+useEffect(() => {
+  if (!mapLoaded || !map.current) return;
+  if (ambulances.length > 0) {
+    updateAmbulanceMarkers(ambulances);
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [ambulances, mapLoaded]);
+
+// ==================== CARGA INICIAL DEL HOSPITAL ====================
+// ==================== CARGA INICIAL DEL HOSPITAL ====================
+useEffect(() => {
+  isMounted.current = true;
+
+  const loadHospital = async () => {
+    try {
+      const stored = JSON.parse(localStorage.getItem('hospitalInfo') || 'null');
+      if (!stored || !stored.id) {
+        showToast('error', 'Configuración requerida', 'Complete los datos del hospital');
+        return;
+      }
+
+      const beds = JSON.parse(localStorage.getItem('hospitalBeds') || 'null');
+
+      const h = {
+        id: stored.id,
+        nombre: stored.nombre || 'Hospital Base',
+        direccion: stored.direccion || '',
+        lat: stored.lat ?? null,
+        lng: stored.lng ?? null,
+        especialidades: stored.especialidades || ['General'],
+        camasDisponibles: beds?.camasDisponibles ?? stored.camasDisponibles ?? 10,
+        camasEmergencia: beds?.camasEmergencia ?? stored.camasEmergencia ?? stored.camasDisponibles ?? 10,
+        telefono: stored.telefono || ''
+      };
+
+      // Si no hay coordenadas pero hay dirección, geocodificar
+      if ((!h.lat || !h.lng) && h.direccion) {
+        const geo = await geocodeHospitalAddress(h.direccion);
+        if (geo) {
+          h.lat = geo.lat;
+          h.lng = geo.lng;
+          // Persistir para no geocodificar cada vez
+          const updated = { ...stored, lat: geo.lat, lng: geo.lng, direccion: geo.place_name || stored.direccion };
+          localStorage.setItem('hospitalInfo', JSON.stringify(updated));
+        }
+      }
+
+      // Último fallback si de plano no hay dirección ni coordenadas
+      if (!h.lat || !h.lng) {
+        h.lat = 19.7024;
+        h.lng = -101.1969;
+      }
+
+      if (isMounted.current) {
+        setHospitalInfo(h);
+        setCamasDisponibles(h.camasDisponibles);
+        setCamasEmergencia(h.camasEmergencia);
+      }
+    } catch (err) {
+      console.error('Error cargando hospital:', err);
+      showToast('error', 'Error de configuración', 'No se pudieron cargar los datos');
+    }
+  };
+
+  loadHospital();
+
+  return () => { isMounted.current = false; };
+}, [geocodeHospitalAddress, showToast]);
   
 
   useEffect(() => {
@@ -348,6 +439,7 @@ case 'doctor_disconnected':
       placeHospitalMarker();
       if (trafficEnabled) addTrafficLayer();
       add3DBuildings();
+      setMapLoaded(true); 
     });
 
     return () => {
@@ -419,62 +511,111 @@ case 'doctor_disconnected':
   };
 
   const placeHospitalMarker = () => {
-    if (!map.current || !hospitalInfo) return;
-    try {
-      if (hospitalMarker.current) hospitalMarker.current.remove();
-      const el = document.createElement('div');
-      el.innerHTML = `
-        <div style="width:70px;height:70px;background:#09090b;border:4px solid #38bdf8;border-radius:50%;
-          display:flex;align-items:center;justify-content:center;font-size:32px;
-          box-shadow:0 0 25px rgba(56,189,248,0.6);cursor:pointer;">
-          <span style="color:#38bdf8;font-weight:900;font-size:28px;">H</span>
-        </div>`;
-      const popup = new mapboxgl.Popup({ offset: 35 }).setHTML(`
-        <div style="text-align:center;">
-          <h3 style="font-size:18px;font-weight:900;color:#38bdf8;margin-bottom:5px;">${hospitalInfo.nombre}</h3>
-          <p style="font-size:13px;color:#a1a1aa;">${hospitalInfo.direccion}</p>
-        </div>`);
-      hospitalMarker.current = new mapboxgl.Marker({ element: el })
-        .setLngLat([hospitalInfo.lng, hospitalInfo.lat])
-        .setPopup(popup)
-        .addTo(map.current);
-    } catch (_) {}
-  };
+  if (!map.current || !hospitalInfo) return;
+  try {
+    if (hospitalMarker.current) hospitalMarker.current.remove();
 
+    const el = document.createElement('div');
+    el.style.cssText = `
+      width:70px; height:70px;
+      background:#09090b;
+      border:4px solid #38bdf8;
+      border-radius:50%;
+      display:flex; align-items:center; justify-content:center;
+      box-shadow:0 0 25px rgba(56,189,248,0.6);
+      cursor:pointer;
+    `;
+    const label = document.createElement('span');
+    label.style.cssText = 'color:#38bdf8; font-weight:900; font-size:28px;';
+    label.textContent = 'H';
+    el.appendChild(label);
+
+    // Popup construido con DOM para evitar inyección HTML
+    const popupNode = document.createElement('div');
+    popupNode.style.textAlign = 'center';
+
+    const titleNode = document.createElement('h3');
+    titleNode.style.cssText = 'font-size:18px; font-weight:900; color:#38bdf8; margin-bottom:6px;';
+    titleNode.textContent = hospitalInfo.nombre || 'Hospital';
+
+    const addrNode = document.createElement('p');
+    addrNode.style.cssText = 'font-size:13px; color:#a1a1aa; margin:0;';
+    addrNode.textContent = hospitalInfo.direccion || 'Dirección no registrada';
+
+    popupNode.appendChild(titleNode);
+    popupNode.appendChild(addrNode);
+
+    const popup = new mapboxgl.Popup({ offset: 35 }).setDOMContent(popupNode);
+
+    hospitalMarker.current = new mapboxgl.Marker({ element: el })
+      .setLngLat([hospitalInfo.lng, hospitalInfo.lat])
+      .setPopup(popup)
+      .addTo(map.current);
+  } catch (err) {
+    console.warn('Error marcador hospital:', err.message);
+  }
+};
+  
   const updateAmbulanceMarkers = (list) => {
-    if (!map.current) return;
-    Object.values(ambulanceMarkers.current).forEach(m => m.remove());
-    ambulanceMarkers.current = {};
+  if (!map.current) return;
 
-    list.forEach(amb => {
-      if (!amb.location?.lat || !amb.location?.lng) return;
-      const isRoute = amb.status === 'en_ruta';
-      const el = document.createElement('div');
-      el.innerHTML = `
-        <div style="width:50px;height:50px;background:${isRoute ? '#10b981' : '#f59e0b'};border:4px solid #18181b;
-          border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:22px;
-          box-shadow:0 0 20px ${isRoute ? 'rgba(16,185,129,0.7)' : 'rgba(245,158,11,0.7)'};cursor:pointer;">
-          <span style="color:#fff;font-weight:900;">A</span>
-        </div>`;
-      const popup = new mapboxgl.Popup({ offset: 30 }).setHTML(`
-        <div style="text-align:center;">
-          <strong style="font-size:16px;color:${isRoute ? '#10b981' : '#f59e0b'};">UNIDAD ${amb.id}</strong>
-          <div style="margin-top:8px;font-size:13px;color:#d4d4d8;">
-            <p>ESTADO: ${(amb.status || '').replace('_', ' ').toUpperCase()}</p>
-            <p>VELOCIDAD: ${amb.speed || 0} km/h</p>
-          </div>
-        </div>`);
-      const marker = new mapboxgl.Marker({ element: el })
-        .setLngLat([amb.location.lng, amb.location.lat])
-        .setPopup(popup)
-        .addTo(map.current);
-      ambulanceMarkers.current[amb.id] = marker;
-      el.addEventListener('click', () => {
-        setSelectedAmbulance(amb);
-        map.current.flyTo({ center: [amb.location.lng, amb.location.lat], zoom: 16, duration: 800 });
-      });
+  // Remover los marcadores existentes
+  Object.values(ambulanceMarkers.current).forEach(m => m.remove());
+  ambulanceMarkers.current = {};
+
+  list.forEach(amb => {
+    if (!amb.location?.lat || !amb.location?.lng) return;
+    const isRoute = amb.status === 'en_ruta';
+    const color = isRoute ? '#10b981' : amb.status === 'fuera_de_servicio' ? '#64748b' : '#f59e0b';
+
+    const el = document.createElement('div');
+    el.style.cssText = `
+      width:50px; height:50px;
+      background:${color};
+      border:4px solid #18181b;
+      border-radius:50%;
+      display:flex; align-items:center; justify-content:center;
+      box-shadow:0 0 20px ${color}99;
+      cursor:pointer;
+    `;
+    const label = document.createElement('span');
+    label.style.cssText = 'color:#fff; font-weight:900; font-size:20px;';
+    label.textContent = 'A';
+    el.appendChild(label);
+
+    const popupNode = document.createElement('div');
+    popupNode.style.textAlign = 'center';
+
+    const title = document.createElement('strong');
+    title.style.cssText = `font-size:16px; color:${color};`;
+    title.textContent = `UNIDAD ${amb.id}`;
+
+    const state = document.createElement('p');
+    state.style.cssText = 'margin-top:8px; font-size:13px; color:#d4d4d8;';
+    state.textContent = `ESTADO: ${(amb.status || '').replace('_', ' ').toUpperCase()}`;
+
+    const speed = document.createElement('p');
+    speed.style.cssText = 'margin:4px 0 0 0; font-size:13px; color:#d4d4d8;';
+    speed.textContent = `VELOCIDAD: ${amb.speed || 0} km/h`;
+
+    popupNode.appendChild(title);
+    popupNode.appendChild(state);
+    popupNode.appendChild(speed);
+
+    const marker = new mapboxgl.Marker({ element: el })
+      .setLngLat([amb.location.lng, amb.location.lat])
+      .setPopup(new mapboxgl.Popup({ offset: 30 }).setDOMContent(popupNode))
+      .addTo(map.current);
+
+    ambulanceMarkers.current[amb.id] = marker;
+
+    el.addEventListener('click', () => {
+      setSelectedAmbulance(amb);
+      map.current.flyTo({ center: [amb.location.lng, amb.location.lat], zoom: 16, duration: 800 });
     });
-  };
+  });
+};
+
 
   const handleAmbulanceLocationUpdate = (data) => {
     if (!data.ambulanceId || !data.location) return;

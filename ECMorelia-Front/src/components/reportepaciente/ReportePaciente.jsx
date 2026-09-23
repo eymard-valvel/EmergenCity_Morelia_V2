@@ -310,7 +310,7 @@ useEffect(() => {
   };
 
 
-  const solicitarMedico = () => {
+const solicitarMedico = () => {
   if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
     mostrarNotificacion('Sin conexión al servidor', 'error');
     return;
@@ -320,21 +320,26 @@ useEffect(() => {
     return;
   }
 
+  // El sessionId se genera en el cliente. El paramédico es el host.
+  const sessionId = `EC-${reporte.callId || Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+
+  // 1. Abrir la ventana del paramédico inmediatamente
+  window.open(`/videollamada?room=${sessionId}&role=paramedico`, '_blank');
+
+  // 2. Notificar por WS a cualquier doctor disponible
   wsRef.current.send(JSON.stringify({
     type: 'video_call_request',
+    sessionId,
     from: {
       role: 'paramedic',
-      id: `pm_${configInicial.paramedico1}_${configInicial.ambulanciaId}`
+      id: `pm_${configInicial.paramedico1 || 'EC-Paramedico'}_${configInicial.ambulanciaId}`
     },
-    to: {
-      role: 'doctor',
-      id: 'any' // broadcast a cualquier doctor disponible
-    },
+    to: { role: 'doctor', id: 'any' },
     callId: reporte.callId,
     ambulanceId: configInicial.ambulanciaId
   }));
 
-  mostrarNotificacion('Solicitud de médico enviada...', 'info');
+  mostrarNotificacion('Sala abierta. Esperando doctor.', 'info');
 };
 
   // ==================== ENVÍO DE VERSIONES ====================

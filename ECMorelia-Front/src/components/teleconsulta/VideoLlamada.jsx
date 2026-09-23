@@ -13,19 +13,20 @@ export default function VideoLlamada() {
   const userFromUrl = searchParams.get('user');
   const [displayName, setDisplayName] = useState('EC-Usuario');
 
-  useEffect(() => {
-    if (userFromUrl) {
-      setDisplayName(decodeURIComponent(userFromUrl));
-      return;
-    }
-    try {
-      const stored = localStorage.getItem('videoCallData');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed.userName) setDisplayName(parsed.userName);
-      }
-    } catch (_) {}
-  }, [userFromUrl]);
+useEffect(() => {
+  const role = searchParams.get('role');
+  if (userFromUrl) {
+    setDisplayName(decodeURIComponent(userFromUrl));
+    return;
+  }
+  if (role === 'doctor') {
+    setDisplayName('EC-Doctor');
+  } else if (role === 'paramedico') {
+    setDisplayName('EC-Paramedico');
+  } else {
+    setDisplayName('EC-Usuario');
+  }
+}, [userFromUrl, searchParams]);
 
   if (!roomCode) {
     return (
@@ -43,52 +44,42 @@ export default function VideoLlamada() {
 
   return (
     <div style={{ height: '100vh', width: '100%' }}>
-      <JitsiMeeting
-        domain={JAAS_APP_ID ? '8x8.vc' : 'meet.jit.si'}
-        roomName={JAAS_APP_ID ? `${JAAS_APP_ID}/${roomCode}` : `EmergenCity-${roomCode}`}
-        configOverwrite={{
-          startWithAudioMuted: false,
-          startWithVideoMuted: false,
-          disableThirdPartyRequests: true,
-          prejoinPageEnabled: false,
-          enableWelcomePage: false,
-          disableDeepLinking: true,
-          requireDisplayName: false,
-          defaultLanguage: 'es',
-          toolbarButtons: [
-            'microphone', 'camera', 'closedcaptions', 'desktop', 'fullscreen',
-            'fodeviceselection', 'hangup', 'profile', 'chat', 'raisehand',
-            'videoquality', 'filmstrip', 'tileview', 'videobackgroundblur', 'settings'
-          ]
-        }}
-        interfaceConfigOverwrite={{
-          TOOLBAR_BUTTONS: [
-            'microphone', 'camera', 'closedcaptions', 'desktop', 'fullscreen',
-            'fodeviceselection', 'hangup', 'profile', 'chat', 'raisehand',
-            'videoquality', 'filmstrip', 'tileview', 'videobackgroundblur', 'settings'
-          ],
-          SHOW_JITSI_WATERMARK: false,
-          SHOW_WATERMARK_FOR_GUESTS: false,
-          DEFAULT_BACKGROUND: '#09090b',
-          DISABLE_JOIN_LEAVE_NOTIFICATIONS: true,
-          MOBILE_APP_PROMO: false
-        }}
-        userInfo={{
-          displayName: displayName,
-          email: ''
-        }}
-        onApiReady={(externalApi) => {
-          externalApi.addListener('videoConferenceLeft', () => {
-            navigate('/');
-          });
-        }}
-        onReadyToClose={() => navigate('/')}
-        getIFrameRef={(iframeRef) => {
-          iframeRef.style.height = '100%';
-          iframeRef.style.width = '100%';
-          iframeRef.style.border = 'none';
-        }}
-      />
+<JitsiMeeting
+  domain={JAAS_APP_ID ? '8x8.vc' : 'meet.jit.si'}
+  roomName={JAAS_APP_ID ? `${JAAS_APP_ID}/${roomCode}` : `EmergenCity-${roomCode}`}
+  configOverwrite={{
+    startWithAudioMuted: false,
+    startWithVideoMuted: false,
+    disableThirdPartyRequests: true,
+    prejoinPageEnabled: false,
+    enableWelcomePage: false,
+    disableDeepLinking: true,
+    requireDisplayName: false,
+    defaultLanguage: 'es',
+    toolbarButtons: [
+      'microphone', 'camera', 'closedcaptions', 'desktop', 'fullscreen',
+      'fodeviceselection', 'hangup', 'profile', 'chat', 'raisehand',
+      'videoquality', 'filmstrip', 'tileview', 'videobackgroundblur', 'settings'
+    ]
+  }}
+  interfaceConfigOverwrite={{
+    SHOW_JITSI_WATERMARK: false,
+    SHOW_WATERMARK_FOR_GUESTS: false,
+    DEFAULT_BACKGROUND: '#09090b',
+    DISABLE_JOIN_LEAVE_NOTIFICATIONS: true,
+    MOBILE_APP_PROMO: false
+  }}
+  userInfo={{ displayName, email: '' }}
+  onApiReady={(externalApi) => {
+    externalApi.addListener('videoConferenceLeft', () => navigate('/'));
+  }}
+  onReadyToClose={() => navigate('/')}
+  getIFrameRef={(iframeRef) => {
+    iframeRef.style.height = '100%';
+    iframeRef.style.width = '100%';
+    iframeRef.style.border = 'none';
+  }}
+/>
     </div>
   );
 }

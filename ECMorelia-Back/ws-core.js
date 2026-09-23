@@ -755,10 +755,11 @@ async function handleOperatorInitiatedEmergency(ws, data) {
   const correlationId = generateId('corr');
   const emLocation = location || amb.location || DEFAULT_LOCATION;
 
-  console.log(`Emergencia operador ${callId} · unidad ${amb.id}`);
+  console.log(`[operator] Emergencia ${callId} desde unidad ${amb.id}`);
 
   const emergency = {
-    callId, correlationId,
+    callId,
+    correlationId,
     location: emLocation,
     address: data.address || amb.nombre || 'Iniciada por operador',
     emergencyType: emergencyType || 'Iniciada por operador',
@@ -773,19 +774,21 @@ async function handleOperatorInitiatedEmergency(ws, data) {
     receptorWs: null,
     hospitalId: null,
     doctorId: null,
-    initiatedBy: 'operator',
+    initiatedBy: 'operator'
   };
+
   activeEmergencies.set(callId, emergency);
   rejectedAmbulances.set(callId, new Set());
   amb.status = 'en_ruta';
 
-  // Confirmar al operador
+  // Confirmar al operador con el folio
   sendMessage(ws, {
     type: 'operator_emergency_created',
     callId,
     correlationId,
-    message: 'Emergencia creada. Buscando hospital conectado...',
-    timestamp: new Date().toISOString(),
+    ambulanceId: amb.id,
+    message: 'Emergencia creada. Buscando hospital disponible.',
+    timestamp: new Date().toISOString()
   });
 
   // Difundir a receptores
@@ -798,13 +801,13 @@ async function handleOperatorInitiatedEmergency(ws, data) {
     address: emergency.address,
     patientInfo: emergency.patientInfo,
     timestamp: new Date().toISOString(),
-    correlationId,
+    correlationId
   });
 
   broadcastActiveEmergencies();
   broadcastActiveAmbulances();
 
-  // === AQUÍ EL FIX: buscar hospital conectado y enviar solicitud ===
+  // Disparar la solicitud automática al hospital conectado más cercano
   await autoRequestHospital(ws, {
     callId,
     ambulanceId: amb.id,
@@ -1094,24 +1097,23 @@ async function autoRequestHospital(ws, data) {
   const em = activeEmergencies.get(callId);
   if (!em) return sendError(ws, 'Emergencia no encontrada', 'NOT_FOUND');
 
-  // Ubicación: preferir la de la ambulancia (está en el lugar)
   const loc = amb.location || em.location;
-  if (!loc?.lat) return sendError(ws, 'Sin ubicación de ambulancia', 'BAD_LOCATION');
+  if (!loc?.lat) {
+    return sendError(ws, 'Sin ubicación de ambulancia', 'BAD_LOCATION');
+  }
 
-  // Excluir hospitales ya rechazados por esta unidad
   const excluded = rejectedHospitals.get(String(ambulanceId)) || new Set();
   const candidate = findNearestConnectedHospital(loc, excluded);
 
   if (!candidate) {
-    console.warn(`Sin hospital conectado disponible para ${callId}`);
-    sendMessage(ws, {
+    console.warn(`[autoRequestHospital] Sin hospital conectado disponible para ${callId}`);
+    return sendMessage(ws, {
       type: 'hospital_search_failed',
       callId,
       reason: 'NO_CONNECTED_HOSPITALS',
       message: 'No hay hospitales conectados con capacidad disponible.',
       timestamp: new Date().toISOString()
     });
-    return;
   }
 
   const notificationId = generateId('notif');
@@ -1136,18 +1138,17 @@ async function autoRequestHospital(ws, data) {
     status: 'pending'
   });
 
-  // Vincular emergencia con hospital candidato
   em.hospitalId = candidate.hospital.info.id;
   activeEmergencies.set(callId, em);
 
-  // Notificar al hospital conectado
+  console.log(`[autoRequestHospital] Enviando notificación ${notificationId} a hospital ${candidate.hospital.info.id} (${candidate.hospital.info.nombre})`);
+
   sendMessage(candidate.hospital.ws, {
     type: 'patient_transfer_notification',
     ...payload,
     timestamp: new Date().toISOString()
   });
 
-  // Confirmar al operador
   sendMessage(ws, {
     type: 'hospital_request_sent',
     callId,
@@ -1160,7 +1161,6 @@ async function autoRequestHospital(ws, data) {
     timestamp: new Date().toISOString()
   });
 
-  console.log(`Auto-solicitud ${notificationId}: ${amb.id} → ${candidate.hospital.info.nombre} (${payload.distanceKm}km)`);
   broadcastActiveEmergencies();
   broadcastActiveAmbulances();
 }
@@ -1662,23 +1662,31 @@ function findWsByRoleId(role, id) {
 }
 
 function handleVideoCallRequest(ws, data) {
-  const { to, callId, from, ambulanceId } = data;
+  const { to, callId, from, sessionId, ambulanceId } = data;
   if (!to?.role) return sendError(ws, 'Destino inválido', 'BAD_PAYLOAD');
+  if (!sessionId) return sendError(ws, 'sessionId requerido', 'BAD_PAYLOAD');
 
-  const sessionId = generateId('vcall');
   const session = {
     sessionId,
     callId: callId || null,
     ambulanceId: ambulanceId || null,
-    caller: from || { role: ws._role, id: ws._receptorId || ws._paramedicId || ws._doctorId },
+    caller: from || { role: ws._role, id: ws._paramedicId || ws._receptorId || 'unknown' },
     callee: to,
     status: 'ringing',
     createdAt: new Date().toISOString()
   };
   videoCallSessions.set(sessionId, session);
 
-  // ⬅️ NUEVO: si to.id es "any" o no viene, broadcast a todos los del rol
   const isBroadcast = !to.id || to.id === 'any' || to.id === '*';
+
+  const incomingPayload = {
+    type: 'video_call_incoming',
+    sessionId,
+    callId: session.callId,
+    ambulanceId: session.ambulanceId,
+    from: session.caller,
+    timestamp: new Date().toISOString()
+  };
 
   if (isBroadcast) {
     const targetMap =
@@ -1692,15 +1700,6 @@ function handleVideoCallRequest(ws, data) {
       return sendError(ws, 'No hay doctores conectados', 'NO_TARGETS');
     }
 
-    const incomingPayload = {
-      type: 'video_call_incoming',
-      sessionId,
-      callId: session.callId,
-      ambulanceId: session.ambulanceId,
-      from: session.caller,
-      timestamp: new Date().toISOString()
-    };
-
     let sent = 0;
     targetMap.forEach(entry => {
       if (entry.ws?.readyState === WebSocket.OPEN) {
@@ -1709,28 +1708,19 @@ function handleVideoCallRequest(ws, data) {
       }
     });
 
-    console.log(`📹 Videollamada ${sessionId} → broadcast a ${sent} ${to.role}(s)`);
+    console.log(`[video] Sesión ${sessionId} → ${sent} doctor(es)`);
     sendMessage(ws, { type: 'video_call_ringing', sessionId, targets: sent, timestamp: new Date().toISOString() });
     return;
   }
 
-  // Comportamiento original: destinatario específico
   const target = findWsByRoleId(to.role, to.id);
   if (!target) {
     videoCallSessions.delete(sessionId);
     return sendError(ws, 'Destino no disponible', 'NOT_FOUND');
   }
 
-  sendMessage(target, {
-    type: 'video_call_incoming',
-    sessionId,
-    callId: session.callId,
-    ambulanceId: session.ambulanceId,
-    from: session.caller,
-    timestamp: new Date().toISOString()
-  });
+  sendMessage(target, incomingPayload);
   sendMessage(ws, { type: 'video_call_ringing', sessionId, timestamp: new Date().toISOString() });
-  console.log(`📹 Videollamada ${sessionId} → ${to.role}:${to.id}`);
 }
 
 function handleVideoCallAccept(ws, data) {
@@ -1840,6 +1830,8 @@ async function handleMessage(ws, data) {
     case 'request_active_ambulances': return handleRequestActiveAmbulances(ws);
     case 'location_update':             return handleLocationUpdate(data);
     case 'video_call_request': return handleVideoCallRequest(ws, data);
+    case 'auto_request_hospital':        return autoRequestHospital(ws, data);
+case 'operator_initiated_emergency': return handleOperatorInitiatedEmergency(ws, data);
 case 'video_call_accept':  return handleVideoCallAccept(ws, data);
 case 'video_call_reject':  return handleVideoCallReject(ws, data);
 case 'video_call_signal':  return handleVideoCallSignal(ws, data);
