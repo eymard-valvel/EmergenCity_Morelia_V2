@@ -263,23 +263,25 @@ const [setupBeds, setSetupBeds] = useState(10);
                 `Unidad ${data.ambulanceName || data.ambulanceId} · ${data.emergencyType || ''}`);
               break;
 
-            case 'doctor_connected':
-              if (data.doctor) {
-                setListaDoctores(prev => {
-                  const exists = prev.some(d => d.id === data.doctor.doctorId);
-                  return exists ? prev : [...prev, {
-                    id: data.doctor.doctorId,
-                    nombre: data.doctor.nombre,
-                    especialidad: data.doctor.especialidad
-                  }];
-                });
-              }
-              break;
+              case 'doctor_connected':
+  if (data.doctor) {
+    setListaDoctores(prev => {
+      const exists = prev.some(d => d.id_doctor === data.doctor.doctorId);
+      return exists ? prev : [...prev, {
+        id_doctor: data.doctor.doctorId,
+        nombre: data.doctor.nombre,
+        apellidos: '',
+        licencia_medica: '',
+        especialidad: data.doctor.especialidad
+      }];
+    });
+  }
+  break;
 
-            case 'doctor_disconnected':
-              setListaDoctores(prev => prev.filter(d => d.id !== data.doctorId));
-              break;
-
+case 'doctor_disconnected':
+  setListaDoctores(prev => prev.filter(d => d.id_doctor !== data.doctorId));
+  break;
+            
             case 'error':
               // Silencioso — puede ser un mensaje transitorio
               break;
@@ -699,7 +701,7 @@ const handleRouteUpdated = (data) => {
     const motivo = report?.seccionF?.motivo_principal || '';
     const espReq = clasificarEspecialidad(motivo);
     const docIdeal = listaDoctores.find(d => d.especialidad?.toLowerCase() === espReq.toLowerCase());
-    if (docIdeal) setDoctorSeleccionado(docIdeal.id);
+    if (docIdeal) setDoctorSeleccionado(docIdeal.id_doctor);
 
     showToast('info', `Reporte v${version} recibido`, urgentOnly ? 'Datos urgentes — preparar recursos' : 'Actualización de expediente');
   };
@@ -1143,10 +1145,11 @@ const handleRouteUpdated = (data) => {
                     h="55px" value={doctorSeleccionado} onChange={(e) => setDoctorSeleccionado(e.target.value)}>
                     <option value="" style={{ background: '#09090b' }}>-- SELECCIONAR MÉDICO --</option>
                     {listaDoctores.map(doc => (
-                      <option key={doc.id} value={doc.id} style={{ background: '#09090b' }}>
-                        {doc.nombre} — {doc.especialidad}
-                      </option>
-                    ))}
+  <option key={doc.id_doctor} value={doc.id_doctor}>
+    Dr(a). {doc.nombre} {doc.apellidos || ''} — Lic. {doc.licencia_medica || 'N/A'}
+  </option>
+))}
+
                   </Select>
                 </Box>
               </Box>

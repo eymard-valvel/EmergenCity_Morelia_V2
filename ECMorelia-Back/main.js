@@ -142,14 +142,19 @@ app.get('/api/ambulances/health', (req, res) => {
 app.get('/api/doctores', async (req, res) => {
   try {
     const doctores = await prisma.doctor.findMany({
-      select: { id: true, nombre: true, especialidad: true }
-    })
-    res.json(doctores)
+      select: {
+        id_doctor: true,
+        nombre: true,
+        apellidos: true,
+        licencia_medica: true
+      }
+    });
+    res.json(doctores);
   } catch (error) {
-    console.error("Error obteniendo doctores:", error)
-    res.status(500).json({ error: 'Error interno' })
+    console.error('Error obteniendo doctores:', error);
+    res.status(500).json({ error: 'Error interno' });
   }
-})
+});
 
 // Compatibilidad con Python: /api/pacientes broadcast crudo
 app.post('/api/pacientes', async (req, res) => {
