@@ -68,6 +68,16 @@ const fmtDur = (seconds) => {
   return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${m % 60}m`;
 };
 
+function bearingBetween(from, to) {
+  const toRad = (d) => d * Math.PI / 180;
+  const toDeg = (r) => r * 180 / Math.PI;
+  const dLon = toRad(to.lng - from.lng);
+  const y = Math.sin(dLon) * Math.cos(toRad(to.lat));
+  const x = Math.cos(toRad(from.lat)) * Math.sin(toRad(to.lat)) -
+            Math.sin(toRad(from.lat)) * Math.cos(toRad(to.lat)) * Math.cos(dLon);
+  return (toDeg(Math.atan2(y, x)) + 360) % 360;
+}
+
 function calcDistance(lat1, lon1, lat2, lon2) {
   const R = 6371;
   const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -569,16 +579,26 @@ case 'patient_accepted': {
         updateAmbulanceMarker(loc, hdg);
 
         if (isFollowing && map.current) {
-          if (!isInitialMapCentered.current) {
-            map.current.jumpTo({ center: [loc.lng, loc.lat], zoom: isGpsMode ? 18 : 14, pitch: isGpsMode ? 60 : 0 });
-            isInitialMapCentered.current = true;
-          } else {
-            map.current.easeTo({
-              center: [loc.lng, loc.lat], bearing: isGpsMode ? hdg : 0,
-              pitch: isGpsMode ? 60 : 0, zoom: isGpsMode ? 18 : 14, duration: 1000
-            });
-          }
-        }
+  if (!isInitialMapCentered.current) {
+    map.current.jumpTo({ center: [loc.lng, loc.lat], zoom: 18, pitch: 60 });
+    isInitialMapCentered.current = true;
+  } else {
+    let bearing = hdg;
+    const nextPoint = currentManeuver?.maneuver?.location;
+    if (nextPoint) {
+      bearing = bearingBetween(loc, { lat: nextPoint[1], lng: nextPoint[0] });
+    }
+    map.current.easeTo({
+      center: [loc.lng, loc.lat],
+      bearing,
+      pitch: 60,
+      zoom: 18,
+      duration: 800,
+      easing: (t) => t
+    });
+  }
+}
+
         sendWS({
           type: 'location_update', ambulanceId: ambulancia.id,
           location: loc, speed: spd, heading: hdg, status: ambulanceStatus
@@ -701,6 +721,9 @@ case 'patient_accepted': {
         drawRoute(route.geometry, color);
         currentRouteGeometry.current = route.geometry;
         setCurrentManeuver(route.steps[0]);
+        // limpiar maniobras ya superadas
+const stepsPendientes = route.steps.filter((s, idx) => idx === 0 || s.distance > 5);
+if (stepsPendientes.length > 0) setCurrentManeuver(stepsPendientes[0]);
         setRouteProgress({ distanceRemaining: route.distance, durationRemaining: route.duration });
         lastRouteCalcRef.current = { loc: { ...myLocation }, time: Date.now() };
         if (!silent) toast({ title: 'Ruta actualizada', status: 'info', duration: 2000, position: 'bottom' });
@@ -1131,113 +1154,23 @@ const requestHospitalNow = useCallback(() => {
 
 {/* ZONA INFERIOR: SOLICITUD HOSPITAL + CANCELACIÓN */}
 {isNavigating && (
-  <SlideFade in={true} offsetY="20px" style={{ position: 'absolute', bottom: '20px', left: 0, right: 0, zIndex: 20 }}>
-    <Box px={4}>
-      <VStack spacing={3} align="stretch">
+  <>
+    {/* Bloque 1: instrucción de maniobra (arriba) */}
+    <SlideFade in={true} offsetY="-20px" style={{ position: 'absolute', top: '15px', left: '5%', right: '5%', zIndex: 20 }}>
+      {/* ...maniobra actual... */}
+    </SlideFade>
 
-        {/* ── BOTÓN SOLICITAR HOSPITAL (solo si cancelStep = idle) ── */}
-        {cancelStep === 'idle' && assignedEmergency && !hospitalRequest && (
-          <Button
-            w="100%" h="70px"
-            bg="#10b981" color="white"
-            fontSize="17px" fontWeight="900" letterSpacing="1px"
-            borderRadius="2xl" shadow="dark-lg"
-            _hover={{ bg: '#059669', transform: 'scale(1.01)' }}
-            isLoading={searchingHospital}
-            loadingText="BUSCANDO HOSPITAL..."
-            onClick={requestHospitalNow}
-          >
-            <Icon as={FaHospital} mr={3} boxSize={5} />
-            SOLICITAR HOSPITAL AHORA
-          </Button>
-        )}
-
-        {/* ── BANNER VERDE: solicitud enviada (solo si cancelStep = idle) ── */}
-        {cancelStep === 'idle' && hospitalRequest && (
-          <Box
-            bg="rgba(16,185,129,0.15)"
-            border="2px solid #10b981"
-            borderRadius="2xl"
-            p={4}
-            backdropFilter="blur(10px)"
-          >
-            <HStack spacing={3} justify="center">
-              <Icon as={FaHospital} color="#10b981" boxSize={6} />
-              <VStack align="start" spacing={0}>
-                <Text color="#10b981" fontWeight="900" fontSize="13px" letterSpacing="0.5px">
-                  SOLICITUD ENVIADA
-                </Text>
-                <Text color="white" fontWeight="900" fontSize="16px">
-                  {hospitalRequest.hospitalName}
-                </Text>
-                <Text color="#a1a1aa" fontSize="11px" fontWeight="800">
-                  {hospitalRequest.distanceKm} km · Esperando aceptación
-                </Text>
-              </VStack>
-            </HStack>
-          </Box>
-        )}
-
-        {/* ── BOTÓN CANCELAR RUTA (solo si cancelStep = idle) ── */}
-        {cancelStep === 'idle' && (assignedEmergency || activeDestination.current) && (
-  <Button
-    w="100%" h="65px"
-    bg="#ef4444" color="white"
-    fontSize="18px" fontWeight="900" borderRadius="2xl" shadow="dark-lg"
-    _hover={{ bg: '#dc2626' }}
-    onClick={() => setCancelStep('confirm')}
-  >
-    <Icon as={FaTimesCircle} mr={2} boxSize={5} /> FINALIZAR SERVICIO
-  </Button>
-)}
-
-        {/* ── CONFIRMAR CANCELACIÓN ── */}
-        {cancelStep === 'confirm' && (
-          <VStack spacing={3} bg="rgba(24, 24, 27, 0.95)" p={4} borderRadius="2xl" border="2px solid #ef4444" shadow="2xl" backdropFilter="blur(10px)">
-            <Text color="#ef4444" fontWeight="900" fontSize="18px">¿TERMINAR NAVEGACIÓN?</Text>
-            <HStack w="100%" spacing={3}>
-              <Button flex={1} h="55px" bg="#27272a" color="white" fontSize="16px" fontWeight="900" borderRadius="xl" onClick={() => setCancelStep('idle')}>
-                VOLVER
-              </Button>
-              <Button flex={1} h="55px" bg="#ef4444" color="white" fontSize="16px" fontWeight="900" borderRadius="xl" onClick={() => setCancelStep('reason')}>
-                SÍ, CONTINUAR
-              </Button>
-            </HStack>
-          </VStack>
-        )}
-
-        {/* ── MOTIVO DE TÉRMINO ── */}
-        {cancelStep === 'reason' && (
-          <VStack spacing={3} bg="rgba(24, 24, 27, 0.97)" p={4} borderRadius="2xl" border="2px solid #3f3f46" shadow="2xl" backdropFilter="blur(10px)">
-            <Text color="#f8fafc" fontWeight="900" fontSize="16px" letterSpacing="1px">MOTIVO DE TÉRMINO</Text>
-            <SimpleGrid columns={2} spacing={3} w="100%">
-              <Button h="60px" bg="rgba(16,185,129,0.15)" color="#10b981" border="2px solid #10b981"
-                fontSize="14px" fontWeight="900" borderRadius="xl"
-                _hover={{ bg: 'rgba(16,185,129,0.25)' }} onClick={() => handleCancelWithReason('completed')}>
-                SERVICIO COMPLETADO
-              </Button>
-              <Button h="60px" bg="#27272a" color="white" fontSize="14px" fontWeight="900" borderRadius="xl"
-                _hover={{ bg: '#3f3f46' }} onClick={() => handleCancelWithReason('averia')}>
-                AVERÍA MECÁNICA
-              </Button>
-              <Button h="60px" bg="#27272a" color="white" fontSize="14px" fontWeight="900" borderRadius="xl"
-                _hover={{ bg: '#3f3f46' }} onClick={() => handleCancelWithReason('pinchadura')}>
-                LLANTA PONCHADA
-              </Button>
-              <Button h="60px" bg="#27272a" color="white" fontSize="14px" fontWeight="900" borderRadius="xl"
-                _hover={{ bg: '#3f3f46' }} onClick={() => handleCancelWithReason('trafico_pesado')}>
-                TRÁFICO IMPOSIBLE
-              </Button>
-            </SimpleGrid>
-            <Button variant="ghost" color="#a1a1aa" fontSize="14px" fontWeight="900" onClick={() => setCancelStep('confirm')}>
-              ← VOLVER
-            </Button>
-          </VStack>
-        )}
-
+    {/* Bloque 2: velocímetro (abajo derecha) — ESTE es el que buscas */}
+    <SlideFade in={true} offsetX="20px" style={{ position: 'absolute', right: '20px', bottom: '100px', zIndex: 20 }}>
+      <VStack spacing={3}>
+        <Flex bg="rgba(9, 9, 11, 0.9)" border="2px solid #3f3f46" w="80px" h="80px" borderRadius="full" direction="column" justify="center" align="center" shadow="xl" backdropFilter="blur(10px)">
+          <Text color="#10b981" fontWeight="900" fontSize="28px" lineHeight="1">{mySpeed}</Text>
+          <Text color="#a1a1aa" fontSize="11px" fontWeight="900">KM/H</Text>
+        </Flex>
+        {/* ...botón de recalcular si lo tienes... */}
       </VStack>
-    </Box>
-  </SlideFade>
+    </SlideFade>
+  </>
 )}
 
       {/* CONTROLES LATERALES */}

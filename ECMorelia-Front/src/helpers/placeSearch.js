@@ -163,21 +163,9 @@ export function getPlaceTypeLabel(type, source = 'mapbox', categories = []) {
   return MAPBOX_TYPE_LABEL[type] || 'DIRECCIÓN';
 }
 
-export async function searchPlaces(query, { proximity, mapboxToken, signal } = {}) {
+export async function searchPlaces(query, { proximity, mapboxToken, signal, mode = 'all' } = {}) {
   const q = (query || '').trim();
   if (q.length < 2) return { addresses: [], places: [] };
-
-  // Ejecutar ambas fuentes en paralelo para reducir latencia
-  const [mapboxResults, foursquareResults] = await Promise.all([
-    searchMapbox(q, { token: mapboxToken, signal }).catch(e => {
-      if (e.name === 'AbortError') throw e;
-      return [];
-    }),
-    searchFoursquare(q, { signal }).catch(e => {
-      if (e.name === 'AbortError') throw e;
-      return [];
-    })
-  ]);
 
   const prox = proximity?.lat != null ? proximity : MORELIA_CENTER;
 
@@ -187,13 +175,26 @@ export async function searchPlaces(query, { proximity, mapboxToken, signal } = {
     return dA - dB;
   });
 
-  // Deduplicar places vs addresses (mismo lugar a menos de 50m)
+  const mapboxResults = await searchMapbox(q, { token: mapboxToken, signal }).catch((e) => {
+    if (e.name === 'AbortError') throw e;
+    return [];
+  });
+
+  if (mode === 'address-only') {
+    return { addresses: sortByProximity(mapboxResults), places: [] };
+  }
+
+  const foursquareResults = await searchFoursquare(q, { signal }).catch((e) => {
+    if (e.name === 'AbortError') throw e;
+    return [];
+  });
+
   const places = [];
   for (const p of foursquareResults) {
-    const isDuplicate = mapboxResults.some(m =>
+    const duplicado = mapboxResults.some((m) =>
       calcDistanceKm(m.lat, m.lng, p.lat, p.lng) < 0.05
     );
-    if (!isDuplicate) places.push(p);
+    if (!duplicado) places.push(p);
   }
 
   return {

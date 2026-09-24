@@ -237,33 +237,34 @@ const searchAddresses = useCallback((query) => {
     const reqId = ++searchRequestId.current;
 
     try {
-      
-      const results = await searchPlaces(query, {
-  proximity: selectedLocation,
-  mapboxToken: mapboxgl.accessToken,
-  signal: controller.signal
-});
+      const respuesta = await searchPlaces(query, {
+        proximity: selectedLocation,
+        mapboxToken: mapboxgl.accessToken,
+        signal: controller.signal,
+        mode: 'address-only'
+      });
 
-if (reqId !== searchRequestId.current) return;
+      if (reqId !== searchRequestId.current) return;
 
-// Aplanar ambas secciones en un solo array para el índice de teclado,
-// pero guardar el tipo para el render.
-const flat = [
-  ...results.addresses.map(r => ({ ...r, section: 'address' })),
-  ...results.places.map(r => ({ ...r, section: 'place' }))
-];
+      const planas = [
+        ...respuesta.addresses.map((r) => ({ ...r, section: 'address' })),
+        ...respuesta.places.map((r) => ({ ...r, section: 'place' }))
+      ];
 
-      setSearchResults(results);
-      setHighlightedIndex(results.length > 0 ? 0 : -1);
+      setSearchResults(planas);
+      setHighlightedIndex(planas.length > 0 ? 0 : -1);
     } catch (e) {
       if (e.name !== 'AbortError' && reqId === searchRequestId.current) {
         setSearchResults([]);
+        setHighlightedIndex(-1);
       }
     } finally {
       if (reqId === searchRequestId.current) setIsSearching(false);
     }
   }, SEARCH_DEBOUNCE_MS);
 }, [selectedLocation]);
+
+
   const selectSearchResult = useCallback((result) => {
     if (!result) return;
     skipNextReverseGeocode.current = true;

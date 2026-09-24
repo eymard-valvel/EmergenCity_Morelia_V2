@@ -44,7 +44,8 @@ useEffect(() => {
 
   return (
     <div style={{ height: '100vh', width: '100%' }}>
-<JitsiMeeting
+
+    <JitsiMeeting
   domain={JAAS_APP_ID ? '8x8.vc' : 'meet.jit.si'}
   roomName={JAAS_APP_ID ? `${JAAS_APP_ID}/${roomCode}` : `EmergenCity-${roomCode}`}
   configOverwrite={{
@@ -59,7 +60,7 @@ useEffect(() => {
     toolbarButtons: [
       'microphone', 'camera', 'closedcaptions', 'desktop', 'fullscreen',
       'fodeviceselection', 'hangup', 'profile', 'chat', 'raisehand',
-      'videoquality', 'filmstrip', 'tileview', 'videobackgroundblur', 'settings'
+      'videoquality', 'filmstrip', 'tileview', 'settings'
     ]
   }}
   interfaceConfigOverwrite={{
@@ -70,16 +71,27 @@ useEffect(() => {
     MOBILE_APP_PROMO: false
   }}
   userInfo={{ displayName, email: '' }}
-  onApiReady={(externalApi) => {
-    externalApi.addListener('videoConferenceLeft', () => navigate('/'));
+  onApiReady={(api) => {
+    api.addListener('videoConferenceLeft', () => {
+      setTimeout(() => {
+        window.close();
+        if (!window.closed) navigate('/');
+      }, 300);
+    });
   }}
-  onReadyToClose={() => navigate('/')}
+  onReadyToClose={() => {
+    setTimeout(() => {
+      window.close();
+      if (!window.closed) navigate('/');
+    }, 300);
+  }}
   getIFrameRef={(iframeRef) => {
     iframeRef.style.height = '100%';
     iframeRef.style.width = '100%';
     iframeRef.style.border = 'none';
   }}
 />
+
     </div>
   );
 }

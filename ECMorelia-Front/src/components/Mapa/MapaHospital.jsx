@@ -1124,16 +1124,11 @@ const handleRouteUpdated = (data) => {
                           {(amb.status || '').replace('_', ' ').toUpperCase()}
                         </Badge>
                       </Flex>
-                      <HStack justify="space-between" spacing={3}>
-                        <Button flex={1} h="50px" bg="#27272a" color="white" _hover={{ bg: '#3f3f46' }} fontSize="12px" fontWeight="900"
-                          onClick={() => { if (amb.location && map.current) map.current.flyTo({ center: [amb.location.lng, amb.location.lat], zoom: 16 }); }}>
-                          UBICAR MAPA
-                        </Button>
-                        <Button flex={1} h="50px" bg="#0284c7" color="white" _hover={{ bg: '#0369a1' }} fontSize="12px" fontWeight="900"
-                          onClick={() => { setSelectedAmbulance(amb); onNoteOpen(); }}>
-                          COMUNICAR
-                        </Button>
-                      </HStack>
+                      <Button w="100%" h="50px" bg="#27272a" color="white" _hover={{ bg: '#3f3f46' }} fontSize="12px" fontWeight="900"
+  onClick={() => { if (amb.location && map.current) map.current.flyTo({ center: [amb.location.lng, amb.location.lat], zoom: 16 }); }}>
+  UBICAR MAPA
+</Button>
+
                     </Box>
                   ))}
                 </VStack>

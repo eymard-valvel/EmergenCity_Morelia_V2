@@ -727,6 +727,47 @@ const solicitarMedico = () => {
           transform: scale(0.98);
         }
 
+        .voice-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  padding: 16px;
+  overflow-y: auto;
+}
+.voice-modal {
+  background: #1e293b;
+  color: #f1f5f9;
+  border-radius: 16px;
+  width: 100%;
+  max-width: 520px;
+  max-height: 90vh;
+  overflow-y: auto;
+  padding: 24px 28px 28px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+  position: relative;
+}
+@media (max-width: 480px) {
+  .voice-modal {
+    padding: 18px 16px;
+    border-radius: 12px;
+  }
+}
+@media (orientation: landscape) and (max-height: 500px) {
+  .voice-modal-overlay {
+    align-items: flex-start;
+    padding: 8px;
+  }
+  .voice-modal {
+    max-height: calc(100vh - 16px);
+    padding: 14px 20px;
+  }
+}
+
         /* === Banner destino prioritario === */
         .destino-prioritario {
           background: linear-gradient(135deg, rgba(16,185,129,0.15), rgba(16,185,129,0.05));
@@ -968,51 +1009,47 @@ const solicitarMedico = () => {
         <Outlet />
       </div>
 
-<div className="bottom-action-area">
-  {/* Barra inferior: solo botones de envío */}
-  <div className="btn-row">
-    <button
-      onClick={() => enviarVersion(true)}
-      className="btn-urgent"
-      disabled={!puedeEnviar}
-    >
-      URGENTE
-    </button>
-    <button
-      onClick={handleSubmit}
-      className="btn-sync"
-      disabled={!puedeEnviar}
-    >
-      {puedeEnviar ? 'ENVIAR COMPLETO' : 'ESPERANDO HOSPITAL'}
-    </button>
-  </div>
+      <div className="bottom-action-area">
+        <div className="btn-row">
+          <button
+            onClick={() => enviarVersion(true)}
+            className="btn-urgent"
+            disabled={!puedeEnviar}
+          >
+            URGENTE
+          </button>
+          <button
+            onClick={handleSubmit}
+            className="btn-sync"
+            disabled={!puedeEnviar}
+          >
+            {puedeEnviar ? 'ENVIAR COMPLETO' : 'ESPERANDO HOSPITAL'}
+          </button>
+        </div>
 
-  {puedeEnviar && (
-    <button
-      onClick={solicitarMedico}
-      className="btn-video"
-      style={{
-        width: '100%', padding: '14px', background: '#0ea5e9', color: 'white',
-        border: 'none', borderRadius: '12px', fontSize: '0.95rem', fontWeight: 900,
-        letterSpacing: '1px', cursor: 'pointer', textTransform: 'uppercase',
-        marginTop: '8px'
-      }}
-    >
-      SOLICITAR MÉDICO (VIDEOLLAMADA)
-    </button>
-  )}
-</div>
-
-{/* ⬅️ NUEVO: micrófono como FAB flotante arriba de la barra */}
-<div className="voice-fab">
-  <VoiceAssistant
-  onDataExtracted={handleNLPData}
-  onError={(msg) => mostrarNotificacion(msg, 'error')}
-  onRecordingComplete={(parsed) => {
-    mostrarNotificacion('Dictado finalizado', 'success');
-  }}
-/>
-</div>
+        {puedeEnviar && (
+          <button
+            onClick={solicitarMedico}
+            className="btn-video"
+            style={{
+              width: '100%',
+              padding: '14px',
+              background: '#0ea5e9',
+              color: 'white',
+              border: 'none',
+              borderRadius: '12px',
+              fontSize: '0.95rem',
+              fontWeight: 900,
+              letterSpacing: '1px',
+              cursor: 'pointer',
+              textTransform: 'uppercase',
+              marginTop: '8px'
+            }}
+          >
+            SOLICITAR MÉDICO
+          </button>
+        )}
+      </div>
     </div>
   );
 };
