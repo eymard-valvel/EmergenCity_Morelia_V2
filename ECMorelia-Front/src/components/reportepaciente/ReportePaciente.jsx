@@ -644,413 +644,397 @@ const solicitarMedico = () => {
   // ==================== VISTA 2: REPORTE ====================
   const puedeEnviar = !!hospitalAceptado;
 
-  return (
-    <div className={`reporte-root ${theme === 'dark' ? 'theme-dark' : 'theme-light'}`}>
-      <style>{`
-        :root {
-          --bg-light: #f5f7fa; --panel-light: #ffffff; --text-light: #2c3e50;
-          --bg-dark: #0f172a; --panel-dark: #1e293b; --text-dark: #f1f5f9;
-          --accent: #2563eb; --accent-hover: #1d4ed8;
-          --border-light: #e2e8f0; --border-dark: #334155;
-          --danger: #ef4444; --warning: #f59e0b; --success: #10b981;
-        }
-        * { box-sizing: border-box; }
-        .reporte-root { min-height: 100vh; padding-bottom: 140px; font-family: system-ui, -apple-system, sans-serif; }
-        [data-theme="light"] .reporte-root { background: var(--bg-light); color: var(--text-light); }
-        [data-theme="dark"] .reporte-root { background: var(--bg-dark); color: var(--text-dark); }
-        .container { max-width: 768px; margin: 0 auto; padding: 16px; }
-        .header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; background: var(--panel-light); padding: 16px; border-radius: 12px; border: 1px solid var(--border-light); }
-        [data-theme="dark"] .header { background: var(--panel-dark); border-color: var(--border-dark); }
-        .brand { display: flex; align-items: center; gap: 12px; }
-        .logo { width: 36px; height: 36px; border-radius: 8px; background: linear-gradient(135deg, var(--accent), #0ea5e9); }
-        .header-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-        .triage-indicator { display: flex; align-items: center; gap: 8px; }
-        .triage-circle { width: 40px; height: 40px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.2); }
-        .logout-btn { background: transparent; border: 1px solid var(--danger); padding: 8px 14px; border-radius: 8px; cursor: pointer; color: var(--danger); font-weight: 700; font-size: 0.85rem; }
-        .icon-btn { background: transparent; border: 1px solid var(--border-light); padding: 8px; border-radius: 8px; cursor: pointer; color: inherit; }
-        [data-theme="dark"] .icon-btn { border-color: var(--border-dark); }
-        .status-banner { background: var(--panel-light); border-left: 4px solid var(--accent); padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; font-size: 0.9rem; border: 1px solid var(--border-light); }
-        [data-theme="dark"] .status-banner { background: var(--panel-dark); border-color: var(--border-dark); }
-        .banner-warn { border-left-color: var(--warning); }
-        .banner-success { border-left-color: var(--success); background: rgba(16,185,129,0.08); }
-        details { background: var(--panel-light); border-radius: 10px; margin-bottom: 12px; border: 1px solid var(--border-light); overflow: hidden; }
-        [data-theme="dark"] details { background: var(--panel-dark); border-color: var(--border-dark); }
-        .priority-red { border-left: 4px solid var(--danger); }
-        .priority-yellow { border-left: 4px solid var(--warning); }
-        .priority-green { border-left: 4px solid var(--success); }
-        summary { font-weight: 600; padding: 16px; cursor: pointer; user-select: none; list-style: none; display: flex; justify-content: space-between; align-items: center; font-size: 1rem; }
-        summary::-webkit-details-marker { display: none; }
-        summary:after { content: '+'; font-size: 1.2em; font-weight: 300; opacity: 0.5; }
-        details[open] summary:after { content: '-'; }
-        details[open] summary { border-bottom: 1px solid var(--border-light); }
-        [data-theme="dark"] details[open] summary { border-bottom-color: var(--border-dark); }
-        .section-content { padding: 16px; display: flex; flex-direction: column; gap: 16px; }
-        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-        .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
-        label { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.75; margin-bottom: 6px; display: block; }
-        input, select, textarea { width: 100%; padding: 11px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--bg-light); font-size: 1rem; color: inherit; font-family: inherit; }
-        [data-theme="dark"] input, [data-theme="dark"] select, [data-theme="dark"] textarea { border-color: var(--border-dark); background: rgba(0,0,0,0.2); }
-        input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
-        .bottom-action-area { position: fixed; bottom: 0; left: 0; width: 100%; background: var(--panel-light); border-top: 1px solid var(--border-light); padding: 14px; z-index: 100; box-shadow: 0 -10px 20px rgba(0,0,0,0.2); display: flex; flex-direction: column; gap: 10px; }
-        [data-theme="dark"] .bottom-action-area { background: var(--panel-dark); border-top-color: var(--border-dark); }
-        .pln-container { width: 100%; display: flex; justify-content: center; }
-        .btn-row { display: flex; gap: 10px; }
-        .btn-sync { flex: 1; padding: 16px; background: var(--success); color: white; border: none; border-radius: 12px; font-size: 1rem; font-weight: 700; cursor: pointer; text-transform: uppercase; letter-spacing: 0.5px; }
-        .btn-sync:hover:not(:disabled) { opacity: 0.9; }
-        .btn-sync:disabled { background: #475569; cursor: not-allowed; opacity: 0.6; }
-        .btn-urgent { flex: 0.6; padding: 16px; background: var(--warning); color: #000; border: none; border-radius: 12px; font-size: 0.95rem; font-weight: 700; cursor: pointer; text-transform: uppercase; }
-        .btn-urgent:hover:not(:disabled) { opacity: 0.9; }
-        .btn-urgent:disabled { background: #475569; color: #cbd5e1; cursor: not-allowed; opacity: 0.6; }
-        .toast { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); padding: 12px 24px; border-radius: 8px; color: white; font-weight: 600; z-index: 9999; box-shadow: 0 4px 12px rgba(0,0,0,0.3); font-size: 0.9rem; }
-        .toast.success { background: var(--success); }
-        .toast.error { background: var(--danger); }
-        .toast.info { background: var(--accent); }
-                /* === FAB del micrófono (móvil) === */
-        .voice-fab {
-          position: fixed;
-          bottom: 200px;
-          right: 20px;
-          z-index: 101;
-          background: rgba(24,24,27,0.95);
-          border: 2px solid #0ea5e9;
-          border-radius: 50%;
-          padding: 4px;
-          box-shadow: 0 8px 24px rgba(14,165,233,0.35);
-          backdrop-filter: blur(10px);
-          transition: transform 0.2s, box-shadow 0.2s;
-        }
-        .voice-fab:hover {
-          transform: scale(1.05);
-          box-shadow: 0 12px 32px rgba(14,165,233,0.55);
-        }
-        .voice-fab:active {
-          transform: scale(0.98);
-        }
+   return (
+    <>
+      <div className={`reporte-root ${theme === 'dark' ? 'theme-dark' : 'theme-light'}`}>
+        <style>{`
+          :root {
+            --bg-light: #f5f7fa; --panel-light: #ffffff; --text-light: #2c3e50;
+            --bg-dark: #0f172a; --panel-dark: #1e293b; --text-dark: #f1f5f9;
+            --accent: #2563eb; --accent-hover: #1d4ed8;
+            --border-light: #e2e8f0; --border-dark: #334155;
+            --danger: #ef4444; --warning: #f59e0b; --success: #10b981;
+          }
+          * { box-sizing: border-box; }
+          .reporte-root { min-height: 100vh; padding-bottom: 140px; font-family: system-ui, -apple-system, sans-serif; }
+          [data-theme="light"] .reporte-root { background: var(--bg-light); color: var(--text-light); }
+          [data-theme="dark"] .reporte-root { background: var(--bg-dark); color: var(--text-dark); }
+          .container { max-width: 768px; margin: 0 auto; padding: 16px; }
+          .header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; background: var(--panel-light); padding: 16px; border-radius: 12px; border: 1px solid var(--border-light); }
+          [data-theme="dark"] .header { background: var(--panel-dark); border-color: var(--border-dark); }
+          .brand { display: flex; align-items: center; gap: 12px; }
+          .logo { width: 36px; height: 36px; border-radius: 8px; background: linear-gradient(135deg, var(--accent), #0ea5e9); }
+          .header-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+          .triage-indicator { display: flex; align-items: center; gap: 8px; }
+          .triage-circle { width: 40px; height: 40px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.2); }
+          .logout-btn { background: transparent; border: 1px solid var(--danger); padding: 8px 14px; border-radius: 8px; cursor: pointer; color: var(--danger); font-weight: 700; font-size: 0.85rem; }
+          .icon-btn { background: transparent; border: 1px solid var(--border-light); padding: 8px; border-radius: 8px; cursor: pointer; color: inherit; }
+          [data-theme="dark"] .icon-btn { border-color: var(--border-dark); }
+          .status-banner { background: var(--panel-light); border-left: 4px solid var(--accent); padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; font-size: 0.9rem; border: 1px solid var(--border-light); }
+          [data-theme="dark"] .status-banner { background: var(--panel-dark); border-color: var(--border-dark); }
+          .banner-warn { border-left-color: var(--warning); }
+          .banner-success { border-left-color: var(--success); background: rgba(16,185,129,0.08); }
+          details { background: var(--panel-light); border-radius: 10px; margin-bottom: 12px; border: 1px solid var(--border-light); overflow: hidden; }
+          [data-theme="dark"] details { background: var(--panel-dark); border-color: var(--border-dark); }
+          .priority-red { border-left: 4px solid var(--danger); }
+          .priority-yellow { border-left: 4px solid var(--warning); }
+          .priority-green { border-left: 4px solid var(--success); }
+          summary { font-weight: 600; padding: 16px; cursor: pointer; user-select: none; list-style: none; display: flex; justify-content: space-between; align-items: center; font-size: 1rem; }
+          summary::-webkit-details-marker { display: none; }
+          summary:after { content: '+'; font-size: 1.2em; font-weight: 300; opacity: 0.5; }
+          details[open] summary:after { content: '-'; }
+          details[open] summary { border-bottom: 1px solid var(--border-light); }
+          [data-theme="dark"] details[open] summary { border-bottom-color: var(--border-dark); }
+          .section-content { padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+          .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+          .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+          label { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.75; margin-bottom: 6px; display: block; }
+          input, select, textarea { width: 100%; padding: 11px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--bg-light); font-size: 1rem; color: inherit; font-family: inherit; }
+          [data-theme="dark"] input, [data-theme="dark"] select, [data-theme="dark"] textarea { border-color: var(--border-dark); background: rgba(0,0,0,0.2); }
+          input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+          .bottom-action-area { position: fixed; bottom: 0; left: 0; width: 100%; background: var(--panel-light); border-top: 1px solid var(--border-light); padding: 14px; z-index: 100; box-shadow: 0 -10px 20px rgba(0,0,0,0.2); display: flex; flex-direction: column; gap: 10px; }
+          [data-theme="dark"] .bottom-action-area { background: var(--panel-dark); border-top-color: var(--border-dark); }
+          .pln-container { width: 100%; display: flex; justify-content: center; }
+          .btn-row { display: flex; gap: 10px; }
+          .btn-sync { flex: 1; padding: 16px; background: var(--success); color: white; border: none; border-radius: 12px; font-size: 1rem; font-weight: 700; cursor: pointer; text-transform: uppercase; letter-spacing: 0.5px; }
+          .btn-sync:hover:not(:disabled) { opacity: 0.9; }
+          .btn-sync:disabled { background: #475569; cursor: not-allowed; opacity: 0.6; }
+          .btn-urgent { flex: 0.6; padding: 16px; background: var(--warning); color: #000; border: none; border-radius: 12px; font-size: 0.95rem; font-weight: 700; cursor: pointer; text-transform: uppercase; }
+          .btn-urgent:hover:not(:disabled) { opacity: 0.9; }
+          .btn-urgent:disabled { background: #475569; color: #cbd5e1; cursor: not-allowed; opacity: 0.6; }
+          .toast { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); padding: 12px 24px; border-radius: 8px; color: white; font-weight: 600; z-index: 9999; box-shadow: 0 4px 12px rgba(0,0,0,0.3); font-size: 0.9rem; }
+          .toast.success { background: var(--success); }
+          .toast.error { background: var(--danger); }
+          .toast.info { background: var(--accent); }
 
-        .voice-modal-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(6px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 9999;
-  padding: 16px;
-  overflow-y: auto;
-}
-.voice-modal {
-  background: #1e293b;
-  color: #f1f5f9;
-  border-radius: 16px;
-  width: 100%;
-  max-width: 520px;
-  max-height: 90vh;
-  overflow-y: auto;
-  padding: 24px 28px 28px;
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
-  position: relative;
-}
-@media (max-width: 480px) {
-  .voice-modal {
-    padding: 18px 16px;
-    border-radius: 12px;
-  }
-}
-@media (orientation: landscape) and (max-height: 500px) {
-  .voice-modal-overlay {
-    align-items: flex-start;
-    padding: 8px;
-  }
-  .voice-modal {
-    max-height: calc(100vh - 16px);
-    padding: 14px 20px;
-  }
-}
+          .voice-modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.55);
+            backdrop-filter: blur(6px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+            padding: 16px;
+            overflow-y: auto;
+          }
+          .voice-modal {
+            background: #1e293b;
+            color: #f1f5f9;
+            border-radius: 16px;
+            width: 100%;
+            max-width: 520px;
+            max-height: 90vh;
+            overflow-y: auto;
+            padding: 24px 28px 28px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+            position: relative;
+          }
+          @media (max-width: 480px) {
+            .voice-modal {
+              padding: 18px 16px;
+              border-radius: 12px;
+            }
+          }
+          @media (orientation: landscape) and (max-height: 500px) {
+            .voice-modal-overlay {
+              align-items: flex-start;
+              padding: 8px;
+            }
+            .voice-modal {
+              max-height: calc(100vh - 16px);
+              padding: 14px 20px;
+            }
+          }
 
-        /* === Banner destino prioritario === */
-        .destino-prioritario {
-          background: linear-gradient(135deg, rgba(16,185,129,0.15), rgba(16,185,129,0.05));
-          border: 2px solid #10b981;
-          border-left: 6px solid #10b981;
-          border-radius: 12px;
-          padding: 16px;
-          margin-bottom: 16px;
-          box-shadow: 0 4px 16px rgba(16,185,129,0.2);
-        }
-        .destino-icon {
-          width: 48px;
-          height: 48px;
-          border-radius: 50%;
-          background: #10b981;
-          color: white;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          font-size: 1.5rem;
-          font-weight: 900;
-        }
+          .destino-prioritario {
+            background: linear-gradient(135deg, rgba(16,185,129,0.15), rgba(16,185,129,0.05));
+            border: 2px solid #10b981;
+            border-left: 6px solid #10b981;
+            border-radius: 12px;
+            padding: 16px;
+            margin-bottom: 16px;
+            box-shadow: 0 4px 16px rgba(16,185,129,0.2);
+          }
+          .destino-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            background: #10b981;
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            font-weight: 900;
+          }
 
-        @media (max-width: 480px) {
-          .grid-3 { grid-template-columns: 1fr 1fr; }
-          .voice-fab { bottom: 190px; right: 14px; }
-        }
+          @media (max-width: 480px) {
+            .grid-3 { grid-template-columns: 1fr 1fr; }
+          }
+        `}</style>
 
-      `}</style>
+        {mensajeNotificacion.texto && (
+          <div className={`toast ${mensajeNotificacion.tipo}`}>{mensajeNotificacion.texto}</div>
+        )}
 
-      {mensajeNotificacion.texto && (
-        <div className={`toast ${mensajeNotificacion.tipo}`}>{mensajeNotificacion.texto}</div>
-      )}
-
-      <div className="container">
-        <div className="header">
-          <div className="brand">
-            <div className="logo" />
-            <div>
-              <div style={{ fontWeight: 700, fontSize: '1.05rem' }}>Emergencity</div>
-              <div style={{ fontSize: '0.75rem', opacity: 0.7 }}>Unidad {configInicial.ambulanciaId}</div>
-            </div>
-          </div>
-          <div className="header-actions">
-            <div className="triage-indicator">
-              <div className="triage-circle" style={{ background: triaje.color }} />
-              <span style={{ fontSize: '13px', fontWeight: 'bold' }}>{triaje.label}</span>
-              <span style={{ fontSize: '12px', opacity: 0.6 }}>GCS: {total}</span>
-            </div>
-            <button onClick={() => setTheme(t => t === 'light' ? 'dark' : 'light')} className="icon-btn">
-              {theme === 'light' ? 'NOCHE' : 'DÍA'}
-            </button>
-            <button onClick={handleLogout} className="logout-btn">CERRAR SESIÓN</button>
-          </div>
-        </div>
-
-        {hospitalAceptado && (
-  <div className="destino-prioritario">
-    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-      <div className="destino-icon">H</div>
-      <div style={{ flex: 1 }}>
-        <div style={{ fontSize: '0.72rem', fontWeight: 900, letterSpacing: '1px', opacity: 0.85 }}>
-          HOSPITAL DESTINO
-        </div>
-        <div style={{ fontSize: '1.25rem', fontWeight: 900, color: '#10b981', marginTop: '2px' }}>
-          {hospitalAceptado.hospitalInfo?.nombre || hospitalAceptado.hospitalId}
-        </div>
-        <div style={{ fontSize: '0.75rem', opacity: 0.75, fontWeight: 700, marginTop: '2px' }}>
-          Folio: {reporte.callId}
-        </div>
-      </div>
-    </div>
-  </div>
-)}
-
-        {reporte.callId ? (
-          hospitalAceptado ? (
-            <div className="status-banner banner-success">
-              <div><strong>Folio:</strong> {reporte.callId}</div>
-              <div style={{ fontSize: '0.82rem', marginTop: 4 }}>
-                Hospital destino: <strong>{hospitalAceptado.hospitalInfo?.nombre || hospitalAceptado.hospitalId}</strong>
-              </div>
-              <div style={{ fontSize: '0.78rem', opacity: 0.85, marginTop: 2 }}>
-                Puede enviar versiones del reporte prehospitalario.
+        <div className="container">
+          <div className="header">
+            <div className="brand">
+              <div className="logo" />
+              <div>
+                <div style={{ fontWeight: 700, fontSize: '1.05rem' }}>Emergencity</div>
+                <div style={{ fontSize: '0.75rem', opacity: 0.7 }}>Unidad {configInicial.ambulanciaId}</div>
               </div>
             </div>
+            <div className="header-actions">
+              <div className="triage-indicator">
+                <div className="triage-circle" style={{ background: triaje.color }} />
+                <span style={{ fontSize: '13px', fontWeight: 'bold' }}>{triaje.label}</span>
+                <span style={{ fontSize: '12px', opacity: 0.6 }}>GCS: {total}</span>
+              </div>
+              <button onClick={() => setTheme(t => t === 'light' ? 'dark' : 'light')} className="icon-btn">
+                {theme === 'light' ? 'NOCHE' : 'DÍA'}
+              </button>
+              <button onClick={handleLogout} className="logout-btn">CERRAR SESIÓN</button>
+            </div>
+          </div>
+
+          {hospitalAceptado && (
+            <div className="destino-prioritario">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <div className="destino-icon">H</div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: '0.72rem', fontWeight: 900, letterSpacing: '1px', opacity: 0.85 }}>
+                    HOSPITAL DESTINO
+                  </div>
+                  <div style={{ fontSize: '1.25rem', fontWeight: 900, color: '#10b981', marginTop: '2px' }}>
+                    {hospitalAceptado.hospitalInfo?.nombre || hospitalAceptado.hospitalId}
+                  </div>
+                  <div style={{ fontSize: '0.75rem', opacity: 0.75, fontWeight: 700, marginTop: '2px' }}>
+                    Folio: {reporte.callId}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {reporte.callId ? (
+            hospitalAceptado ? (
+              <div className="status-banner banner-success">
+                <div><strong>Folio:</strong> {reporte.callId}</div>
+                <div style={{ fontSize: '0.82rem', marginTop: 4 }}>
+                  Hospital destino: <strong>{hospitalAceptado.hospitalInfo?.nombre || hospitalAceptado.hospitalId}</strong>
+                </div>
+                <div style={{ fontSize: '0.78rem', opacity: 0.85, marginTop: 2 }}>
+                  Puede enviar versiones del reporte prehospitalario.
+                </div>
+              </div>
+            ) : (
+              <div className="status-banner banner-warn">
+                <div><strong>Folio:</strong> {reporte.callId}</div>
+                <div style={{ fontSize: '0.85rem', marginTop: 4 }}>
+                  Esperando aceptación del hospital para habilitar el envío del reporte.
+                </div>
+              </div>
+            )
           ) : (
             <div className="status-banner banner-warn">
-              <div><strong>Folio:</strong> {reporte.callId}</div>
-              <div style={{ fontSize: '0.85rem', marginTop: 4 }}>
-                Esperando aceptación del hospital para habilitar el envío del reporte.
+              <div style={{ fontSize: '0.85rem' }}>
+                Esperando asignación del sistema central (Unidad: {configInicial.ambulanciaId}).
               </div>
             </div>
-          )
-        ) : (
-          <div className="status-banner banner-warn">
-            <div style={{ fontSize: '0.85rem' }}>
-              Esperando asignación del sistema central (Unidad: {configInicial.ambulanciaId}).
-            </div>
-          </div>
-        )}
+          )}
 
-        <form onSubmit={handleSubmit}>
-          <details className="priority-red" open>
-            <summary>A y F. Datos y Motivo</summary>
-            <div className="section-content">
-              <div className="grid-2">
-                <div><label>Folio</label><input type="text" readOnly value={reporte.seccionA.folio || 'Pendiente'} disabled /></div>
-                <div><label>Fecha</label><input type="date" value={reporte.seccionA.fecha} onChange={e => handleChange(['seccionA', 'fecha'], e.target.value)} /></div>
-                <div>
-                  <label>Tipo Servicio</label>
-                  <select value={reporte.seccionA.tipo_servicio} onChange={e => handleChange(['seccionA', 'tipo_servicio'], e.target.value)}>
-                    <option>Urgencia</option><option>Traslado</option><option>Cuidados Intensivos</option>
-                  </select>
+          <form onSubmit={handleSubmit}>
+            <details className="priority-red" open>
+              <summary>A y F. Datos y Motivo</summary>
+              <div className="section-content">
+                <div className="grid-2">
+                  <div><label>Folio</label><input type="text" readOnly value={reporte.seccionA.folio || 'Pendiente'} disabled /></div>
+                  <div><label>Fecha</label><input type="date" value={reporte.seccionA.fecha} onChange={e => handleChange(['seccionA', 'fecha'], e.target.value)} /></div>
+                  <div>
+                    <label>Tipo Servicio</label>
+                    <select value={reporte.seccionA.tipo_servicio} onChange={e => handleChange(['seccionA', 'tipo_servicio'], e.target.value)}>
+                      <option>Urgencia</option><option>Traslado</option><option>Cuidados Intensivos</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label>Tipo Urgencia</label>
+                    <select value={reporte.seccionF.tipo_urgencia} onChange={e => handleChange(['seccionF', 'tipo_urgencia'], e.target.value)}>
+                      <option value="">Seleccione...</option>
+                      <option>Accidente vehicular</option><option>Motociclista lesionado</option>
+                      <option>Atropellamiento</option><option>Caída</option>
+                      <option>Agresión</option><option>Persona inconsciente</option>
+                      <option>Otro</option>
+                    </select>
+                  </div>
                 </div>
                 <div>
-                  <label>Tipo Urgencia</label>
-                  <select value={reporte.seccionF.tipo_urgencia} onChange={e => handleChange(['seccionF', 'tipo_urgencia'], e.target.value)}>
-                    <option value="">Seleccione...</option>
-                    <option>Accidente vehicular</option><option>Motociclista lesionado</option>
-                    <option>Atropellamiento</option><option>Caída</option>
-                    <option>Agresión</option><option>Persona inconsciente</option>
-                    <option>Otro</option>
-                  </select>
+                  <label>Motivo principal / Notas</label>
+                  <textarea rows="3" value={reporte.seccionF.motivo_principal} onChange={e => handleChange(['seccionF', 'motivo_principal'], e.target.value)} placeholder="Describa el motivo..." />
                 </div>
-              </div>
-              <div>
-                <label>Motivo principal / Notas</label>
-                <textarea rows="3" value={reporte.seccionF.motivo_principal} onChange={e => handleChange(['seccionF', 'motivo_principal'], e.target.value)} placeholder="Describa el motivo..." />
-              </div>
-              {reporte.riesgos_escena && (
-                <div>
-                  <label>Riesgos en Escena</label>
-                  <input type="text" readOnly value={reporte.riesgos_escena} disabled style={{ color: 'var(--danger)', fontWeight: 'bold' }} />
-                </div>
-              )}
-              <div className="grid-3">
-                <div><label>Activación</label><input type="time" value={reporte.seccionB.activacion} onChange={e => handleChange(['seccionB', 'activacion'], e.target.value)} /></div>
-                <div><label>Salida Base</label><input type="time" value={reporte.seccionB.salida_base} onChange={e => handleChange(['seccionB', 'salida_base'], e.target.value)} /></div>
-                <div><label>En Escena</label><input type="time" value={reporte.seccionB.llegada_escena} onChange={e => handleChange(['seccionB', 'llegada_escena'], e.target.value)} /></div>
-              </div>
-            </div>
-          </details>
-
-          <details className="priority-yellow">
-            <summary>C y D. Localización y Paciente</summary>
-            <div className="section-content">
-              <div>
-                <label>Dirección del Incidente</label>
-                <input type="text" value={reporte.seccionC.direccion} onChange={e => handleChange(['seccionC', 'direccion'], e.target.value)} placeholder="Calle, Número, Colonia..." />
-              </div>
-              <div className="grid-2">
-                <div>
-                  <label>Tipo de lugar</label>
-                  <select value={reporte.seccionC.tipo_lugar} onChange={e => handleChange(['seccionC', 'tipo_lugar'], e.target.value)}>
-                    <option>Vía pública</option><option>Hogar</option><option>Trabajo</option><option>Otro</option>
-                  </select>
-                </div>
-                <div><label>Nombre del Paciente</label><input type="text" value={reporte.seccionD.nombre} onChange={e => handleChange(['seccionD', 'nombre'], e.target.value)} placeholder="Desconocido" /></div>
-                <div><label>Edad Aprox.</label><input type="number" value={reporte.seccionD.edad} onChange={e => handleChange(['seccionD', 'edad'], e.target.value)} /></div>
-                <div>
-                  <label>Sexo</label>
-                  <select value={reporte.seccionD.sexo} onChange={e => handleChange(['seccionD', 'sexo'], e.target.value)}>
-                    <option value="">Seleccione</option><option value="M">Masculino</option><option value="F">Femenino</option>
-                  </select>
-                </div>
-              </div>
-            </div>
-          </details>
-
-          <details className="priority-yellow">
-            <summary>H. Evaluación Primaria y Glasgow</summary>
-            <div className="section-content">
-              <div className="grid-2">
-                <div><label>Vía Aérea</label><select value={reporte.seccionH.via_aerea} onChange={e => handleChange(['seccionH', 'via_aerea'], e.target.value)}><option>Libre</option><option>Comprometida</option></select></div>
-                <div><label>Ventilación</label><select value={reporte.seccionH.ventilacion} onChange={e => handleChange(['seccionH', 'ventilacion'], e.target.value)}><option>Adecuada</option><option>Dificultosa</option></select></div>
-              </div>
-              <div style={{ padding: '14px', background: 'var(--bg-light)', borderRadius: '8px', border: '1px solid var(--border-light)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}>
-                  <span style={{ fontWeight: 700, fontSize: '0.9rem' }}>Total Glasgow: {total}</span>
-                </div>
+                {reporte.riesgos_escena && (
+                  <div>
+                    <label>Riesgos en Escena</label>
+                    <input type="text" readOnly value={reporte.riesgos_escena} disabled style={{ color: 'var(--danger)', fontWeight: 'bold' }} />
+                  </div>
+                )}
                 <div className="grid-3">
-                  <div><label>Ocular</label><select value={ocular} onChange={e => setOcular(Number(e.target.value))}><option value={4}>4</option><option value={3}>3</option><option value={2}>2</option><option value={1}>1</option></select></div>
-                  <div><label>Verbal</label><select value={verbal} onChange={e => setVerbal(Number(e.target.value))}><option value={5}>5</option><option value={4}>4</option><option value={3}>3</option><option value={2}>2</option><option value={1}>1</option></select></div>
-                  <div><label>Motor</label><select value={motor} onChange={e => setMotor(Number(e.target.value))}><option value={6}>6</option><option value={5}>5</option><option value={4}>4</option><option value={3}>3</option><option value={2}>2</option><option value={1}>1</option></select></div>
+                  <div><label>Activación</label><input type="time" value={reporte.seccionB.activacion} onChange={e => handleChange(['seccionB', 'activacion'], e.target.value)} /></div>
+                  <div><label>Salida Base</label><input type="time" value={reporte.seccionB.salida_base} onChange={e => handleChange(['seccionB', 'salida_base'], e.target.value)} /></div>
+                  <div><label>En Escena</label><input type="time" value={reporte.seccionB.llegada_escena} onChange={e => handleChange(['seccionB', 'llegada_escena'], e.target.value)} /></div>
                 </div>
               </div>
-            </div>
-          </details>
+            </details>
 
-          <details className="priority-yellow">
-            <summary>I. Signos Vitales</summary>
-            <div className="section-content">
-              <div className="grid-3">
-                <div><label>FC</label><input type="number" value={reporte.seccionI.fc} onChange={e => handleChange(['seccionI', 'fc'], e.target.value)} /></div>
-                <div><label>FR</label><input type="number" value={reporte.seccionI.fr} onChange={e => handleChange(['seccionI', 'fr'], e.target.value)} /></div>
-                <div><label>SpO₂</label><input type="number" value={reporte.seccionI.spo2} onChange={e => handleChange(['seccionI', 'spo2'], e.target.value)} /></div>
-                <div><label>T/A</label><input type="text" placeholder="120/80" value={reporte.seccionI.ta} onChange={e => handleChange(['seccionI', 'ta'], e.target.value)} /></div>
-                <div><label>Temp</label><input type="number" step="0.1" value={reporte.seccionI.temp} onChange={e => handleChange(['seccionI', 'temp'], e.target.value)} /></div>
-                <div><label>Gluc</label><input type="number" value={reporte.seccionI.glucemia} onChange={e => handleChange(['seccionI', 'glucemia'], e.target.value)} /></div>
-              </div>
-              <div className="grid-2" style={{ marginTop: '8px', borderTop: '1px solid var(--border-light)', paddingTop: '14px' }}>
-                <div><label>Hora Contacto</label><input type="time" value={reporte.seccionB.primer_contacto} onChange={e => handleChange(['seccionB', 'primer_contacto'], e.target.value)} /></div>
-                <div><label>Salida Escena</label><input type="time" value={reporte.seccionB.salida_escena} onChange={e => handleChange(['seccionB', 'salida_escena'], e.target.value)} /></div>
-              </div>
-            </div>
-          </details>
-
-          <details className="priority-green">
-            <summary>N y O. Destino y Cierre</summary>
-            <div className="section-content">
-              <div className="grid-2">
-                <div style={{ gridColumn: 'span 2' }}>
-                  <label>Hospital Destino {hospitalAceptado ? '(aceptado)' : '*'}</label>
-                  <select value={hospitalSeleccionado} onChange={e => setHospitalSeleccionado(e.target.value)} disabled={!!hospitalAceptado}>
-                    <option value="">Seleccione un hospital...</option>
-                    {listaHospitales.map(h => (
-                      <option key={h.id} value={h.id}>{h.nombre}</option>
-                    ))}
-                  </select>
-                  {hospitalAceptado && (
-                    <p style={{ fontSize: '0.75rem', color: 'var(--success)', marginTop: 6, fontWeight: 700 }}>
-                      Hospital destino fijado por el sistema central.
-                    </p>
-                  )}
-                </div>
-                <div><label>ETA</label><input type="time" value={reporte.seccionN.eta} onChange={e => handleChange(['seccionN', 'eta'], e.target.value)} /></div>
+            <details className="priority-yellow">
+              <summary>C y D. Localización y Paciente</summary>
+              <div className="section-content">
                 <div>
-                  <label>Área Receptora</label>
-                  <select value={reporte.seccionOP.area_receptora} onChange={e => handleChange(['seccionOP', 'area_receptora'], e.target.value)}>
-                    <option>Urgencias</option><option>Choque</option><option>Tococirugía</option>
-                  </select>
+                  <label>Dirección del Incidente</label>
+                  <input type="text" value={reporte.seccionC.direccion} onChange={e => handleChange(['seccionC', 'direccion'], e.target.value)} placeholder="Calle, Número, Colonia..." />
+                </div>
+                <div className="grid-2">
+                  <div>
+                    <label>Tipo de lugar</label>
+                    <select value={reporte.seccionC.tipo_lugar} onChange={e => handleChange(['seccionC', 'tipo_lugar'], e.target.value)}>
+                      <option>Vía pública</option><option>Hogar</option><option>Trabajo</option><option>Otro</option>
+                    </select>
+                  </div>
+                  <div><label>Nombre del Paciente</label><input type="text" value={reporte.seccionD.nombre} onChange={e => handleChange(['seccionD', 'nombre'], e.target.value)} placeholder="Desconocido" /></div>
+                  <div><label>Edad Aprox.</label><input type="number" value={reporte.seccionD.edad} onChange={e => handleChange(['seccionD', 'edad'], e.target.value)} /></div>
+                  <div>
+                    <label>Sexo</label>
+                    <select value={reporte.seccionD.sexo} onChange={e => handleChange(['seccionD', 'sexo'], e.target.value)}>
+                      <option value="">Seleccione</option><option value="M">Masculino</option><option value="F">Femenino</option>
+                    </select>
+                  </div>
                 </div>
               </div>
-            </div>
-          </details>
-        </form>
+            </details>
 
-        <Outlet />
-      </div>
+            <details className="priority-yellow">
+              <summary>H. Evaluación Primaria y Glasgow</summary>
+              <div className="section-content">
+                <div className="grid-2">
+                  <div><label>Vía Aérea</label><select value={reporte.seccionH.via_aerea} onChange={e => handleChange(['seccionH', 'via_aerea'], e.target.value)}><option>Libre</option><option>Comprometida</option></select></div>
+                  <div><label>Ventilación</label><select value={reporte.seccionH.ventilacion} onChange={e => handleChange(['seccionH', 'ventilacion'], e.target.value)}><option>Adecuada</option><option>Dificultosa</option></select></div>
+                </div>
+                <div style={{ padding: '14px', background: 'var(--bg-light)', borderRadius: '8px', border: '1px solid var(--border-light)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}>
+                    <span style={{ fontWeight: 700, fontSize: '0.9rem' }}>Total Glasgow: {total}</span>
+                  </div>
+                  <div className="grid-3">
+                    <div><label>Ocular</label><select value={ocular} onChange={e => setOcular(Number(e.target.value))}><option value={4}>4</option><option value={3}>3</option><option value={2}>2</option><option value={1}>1</option></select></div>
+                    <div><label>Verbal</label><select value={verbal} onChange={e => setVerbal(Number(e.target.value))}><option value={5}>5</option><option value={4}>4</option><option value={3}>3</option><option value={2}>2</option><option value={1}>1</option></select></div>
+                    <div><label>Motor</label><select value={motor} onChange={e => setMotor(Number(e.target.value))}><option value={6}>6</option><option value={5}>5</option><option value={4}>4</option><option value={3}>3</option><option value={2}>2</option><option value={1}>1</option></select></div>
+                  </div>
+                </div>
+              </div>
+            </details>
 
-      <div className="bottom-action-area">
-        <div className="btn-row">
-          <button
-            onClick={() => enviarVersion(true)}
-            className="btn-urgent"
-            disabled={!puedeEnviar}
-          >
-            URGENTE
-          </button>
-          <button
-            onClick={handleSubmit}
-            className="btn-sync"
-            disabled={!puedeEnviar}
-          >
-            {puedeEnviar ? 'ENVIAR COMPLETO' : 'ESPERANDO HOSPITAL'}
-          </button>
+            <details className="priority-yellow">
+              <summary>I. Signos Vitales</summary>
+              <div className="section-content">
+                <div className="grid-3">
+                  <div><label>FC</label><input type="number" value={reporte.seccionI.fc} onChange={e => handleChange(['seccionI', 'fc'], e.target.value)} /></div>
+                  <div><label>FR</label><input type="number" value={reporte.seccionI.fr} onChange={e => handleChange(['seccionI', 'fr'], e.target.value)} /></div>
+                  <div><label>SpO₂</label><input type="number" value={reporte.seccionI.spo2} onChange={e => handleChange(['seccionI', 'spo2'], e.target.value)} /></div>
+                  <div><label>T/A</label><input type="text" placeholder="120/80" value={reporte.seccionI.ta} onChange={e => handleChange(['seccionI', 'ta'], e.target.value)} /></div>
+                  <div><label>Temp</label><input type="number" step="0.1" value={reporte.seccionI.temp} onChange={e => handleChange(['seccionI', 'temp'], e.target.value)} /></div>
+                  <div><label>Gluc</label><input type="number" value={reporte.seccionI.glucemia} onChange={e => handleChange(['seccionI', 'glucemia'], e.target.value)} /></div>
+                </div>
+                <div className="grid-2" style={{ marginTop: '8px', borderTop: '1px solid var(--border-light)', paddingTop: '14px' }}>
+                  <div><label>Hora Contacto</label><input type="time" value={reporte.seccionB.primer_contacto} onChange={e => handleChange(['seccionB', 'primer_contacto'], e.target.value)} /></div>
+                  <div><label>Salida Escena</label><input type="time" value={reporte.seccionB.salida_escena} onChange={e => handleChange(['seccionB', 'salida_escena'], e.target.value)} /></div>
+                </div>
+              </div>
+            </details>
+
+            <details className="priority-green">
+              <summary>N y O. Destino y Cierre</summary>
+              <div className="section-content">
+                <div className="grid-2">
+                  <div style={{ gridColumn: 'span 2' }}>
+                    <label>Hospital Destino {hospitalAceptado ? '(aceptado)' : '*'}</label>
+                    <select value={hospitalSeleccionado} onChange={e => setHospitalSeleccionado(e.target.value)} disabled={!!hospitalAceptado}>
+                      <option value="">Seleccione un hospital...</option>
+                      {listaHospitales.map(h => (
+                        <option key={h.id} value={h.id}>{h.nombre}</option>
+                      ))}
+                    </select>
+                    {hospitalAceptado && (
+                      <p style={{ fontSize: '0.75rem', color: 'var(--success)', marginTop: 6, fontWeight: 700 }}>
+                        Hospital destino fijado por el sistema central.
+                      </p>
+                    )}
+                  </div>
+                  <div><label>ETA</label><input type="time" value={reporte.seccionN.eta} onChange={e => handleChange(['seccionN', 'eta'], e.target.value)} /></div>
+                  <div>
+                    <label>Área Receptora</label>
+                    <select value={reporte.seccionOP.area_receptora} onChange={e => handleChange(['seccionOP', 'area_receptora'], e.target.value)}>
+                      <option>Urgencias</option><option>Choque</option><option>Tococirugía</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </details>
+          </form>
+
+          <Outlet />
         </div>
 
-        {puedeEnviar && (
-          <button
-            onClick={solicitarMedico}
-            className="btn-video"
-            style={{
-              width: '100%',
-              padding: '14px',
-              background: '#0ea5e9',
-              color: 'white',
-              border: 'none',
-              borderRadius: '12px',
-              fontSize: '0.95rem',
-              fontWeight: 900,
-              letterSpacing: '1px',
-              cursor: 'pointer',
-              textTransform: 'uppercase',
-              marginTop: '8px'
-            }}
-          >
-            SOLICITAR MÉDICO
-          </button>
-        )}
+        <div className="bottom-action-area">
+          <div className="btn-row">
+            <button
+              onClick={() => enviarVersion(true)}
+              className="btn-urgent"
+              disabled={!puedeEnviar}
+            >
+              URGENTE
+            </button>
+            <button
+              onClick={handleSubmit}
+              className="btn-sync"
+              disabled={!puedeEnviar}
+            >
+              {puedeEnviar ? 'ENVIAR COMPLETO' : 'ESPERANDO HOSPITAL'}
+            </button>
+          </div>
+
+          {puedeEnviar && (
+            <button
+              onClick={solicitarMedico}
+              className="btn-video"
+              style={{
+                width: '100%',
+                padding: '14px',
+                background: '#0ea5e9',
+                color: 'white',
+                border: 'none',
+                borderRadius: '12px',
+                fontSize: '0.95rem',
+                fontWeight: 900,
+                letterSpacing: '1px',
+                cursor: 'pointer',
+                textTransform: 'uppercase',
+                marginTop: '8px'
+              }}
+            >
+              SOLICITAR MÉDICO
+            </button>
+          )}
+        </div>
       </div>
-    </div>
+
+      <VoiceAssistant
+        onDataExtracted={handleNLPData}
+        onError={(msg) => mostrarNotificacion(msg, 'error')}
+        onRecordingComplete={() => mostrarNotificacion('Dictado finalizado', 'success')}
+      />
+    </>
   );
 };
 
