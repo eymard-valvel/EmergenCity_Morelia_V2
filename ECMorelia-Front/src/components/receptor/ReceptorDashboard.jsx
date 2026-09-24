@@ -14,6 +14,7 @@ import ReceptorEmergencyForm from './ReceptorEmergencyForm';
 import { useAuth } from '../../auth/useAuth.js';
 import { deleteCookie } from '../../helpers/cookies.js';
 
+
 import { readLocal, saveLocal } from '../../helpers/persistence.js';
 
 const RECONNECT_DELAY_MS = 3000;
@@ -565,6 +566,20 @@ const EmergencyCard = ({ emergency: em }) => {
           <Text fontSize="13px" fontWeight="800" color="#10b981">{em.assignedAmbulanceName || em.assignedAmbulanceId}</Text>
         </HStack>
       )}
+      {em.status === 'pending' && em.lastAssignedAmbulanceName && (
+  <HStack spacing={2} mt={3} pt={3} borderTop="1px solid #27272a">
+    <Icon as={FaAmbulance} color="#f59e0b" />
+    <VStack align="start" spacing={0}>
+      <Text fontSize="11px" color="#a1a1aa" fontWeight="800">ÚLTIMA UNIDAD ASIGNADA</Text>
+      <Text fontSize="13px" fontWeight="800" color="#f59e0b">
+        {em.lastAssignedAmbulanceName}
+      </Text>
+      {em.unassignedReason === 'ambulance_disconnected' && (
+        <Text fontSize="10px" color="#71717a">Se desconectó del sistema</Text>
+      )}
+    </VStack>
+  </HStack>
+)}
       {em.status === 'assigned' && (
   <Button
     mt={3}

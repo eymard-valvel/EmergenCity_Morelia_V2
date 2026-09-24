@@ -13,6 +13,7 @@ import {
   FaMapMarkerAlt, FaExclamationTriangle, FaUserInjured, FaShieldAlt,
   FaCity, FaChevronDown, FaChevronUp, FaCheck
 } from 'react-icons/fa';
+import { FaMapMarkerAlt, FaExclamationTriangle, FaUserInjured, FaShieldAlt, FaCity, FaCheck, FaBuilding } from 'react-icons/fa';
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN ||
   'pk.eyJ1IjoiZXltYXJkMjkiLCJhIjoiY21tcDY4YzNpMGw3bjJzb203YmZyNTVnMyI';
@@ -237,12 +238,22 @@ const searchAddresses = useCallback((query) => {
     const reqId = ++searchRequestId.current;
 
     try {
+      
       const results = await searchPlaces(query, {
-        proximity: selectedLocation,
-        mapboxToken: mapboxgl.accessToken,
-        signal: controller.signal,
-      });
-      if (reqId !== searchRequestId.current) return;
+  proximity: selectedLocation,
+  mapboxToken: mapboxgl.accessToken,
+  signal: controller.signal
+});
+
+if (reqId !== searchRequestId.current) return;
+
+// Aplanar ambas secciones en un solo array para el índice de teclado,
+// pero guardar el tipo para el render.
+const flat = [
+  ...results.addresses.map(r => ({ ...r, section: 'address' })),
+  ...results.places.map(r => ({ ...r, section: 'place' }))
+];
+
       setSearchResults(results);
       setHighlightedIndex(results.length > 0 ? 0 : -1);
     } catch (e) {
@@ -681,40 +692,72 @@ const searchAddresses = useCallback((query) => {
           </InputGroup>
 
           {searchResults.length > 0 && (
-            <List
-              w="100%" mt={2} bg="#18181b" border="1px solid #3f3f46"
-              borderRadius="md" shadow="2xl" maxH="400px" overflowY="auto"
+  <List
+    w="100%" mt={2} bg="#18181b" border="1px solid #3f3f46"
+    borderRadius="md" shadow="2xl" maxH="400px" overflowY="auto"
+  >
+    {searchResults.map((res, idx) => {
+      const isHighlighted = idx === highlightedIndex;
+      const typeLabel = getPlaceTypeLabel(res.type, res.source, res.categories);
+      const showSectionHeader =
+        (idx === 0 && res.section === 'address') ||
+        (idx > 0 && searchResults[idx - 1].section !== res.section);
+
+      return (
+        <React.Fragment key={res.id}>
+          {showSectionHeader && (
+            <ListItem
+              px={4} py={2}
+              bg="#0f0f10"
+              borderTop={idx > 0 ? '1px solid #27272a' : 'none'}
+              borderBottom="1px solid #27272a"
             >
-              {searchResults.map((res, idx) => {
-                const isHighlighted = idx === highlightedIndex;
-const typeLabel = getPlaceTypeLabel(res.type, res.source, res.categories);
-                return (
-                  <ListItem
-                    key={res.id}
-                    p={4}
-                    borderBottom={idx < searchResults.length - 1 ? '1px solid #27272a' : 'none'}
-                    cursor="pointer"
-                    bg={isHighlighted ? '#27272a' : 'transparent'}
-                    _hover={{ bg: '#27272a' }}
-                    onMouseEnter={() => setHighlightedIndex(idx)}
-                    onClick={() => selectSearchResult(res)}
-                  >
-                    <HStack align="start" spacing={3}>
-                      <Icon as={FaMapMarkerAlt} color={isHighlighted ? '#38bdf8' : '#ef4444'} boxSize={5} mt={0.5} />
-                      <VStack align="start" spacing={1} flex={1}>
-                        <Box px={2} py={0.5} bg="#27272a" borderRadius="sm">
-                          <Text fontSize="9px" fontWeight="900" color="#38bdf8" letterSpacing="0.5px">{typeLabel}</Text>
-                        </Box>
-                        <Text fontSize="15px" fontWeight="700" color="#e4e4e7" noOfLines={2} textAlign="left">
-                          {res.place_name}
-                        </Text>
-                      </VStack>
-                    </HStack>
-                  </ListItem>
-                );
-              })}
-            </List>
+              <Text fontSize="10px" fontWeight="900" letterSpacing="1px" color="#71717a">
+                {res.section === 'address' ? 'DIRECCIONES' : 'LUGARES Y ESTABLECIMIENTOS'}
+              </Text>
+            </ListItem>
           )}
+          <ListItem
+            p={4}
+            borderBottom={idx < searchResults.length - 1 ? '1px solid #27272a' : 'none'}
+            cursor="pointer"
+            bg={isHighlighted ? '#27272a' : 'transparent'}
+            _hover={{ bg: '#27272a' }}
+            onMouseEnter={() => setHighlightedIndex(idx)}
+            onClick={() => selectSearchResult(res)}
+          >
+            <HStack align="start" spacing={3}>
+              <Icon
+                as={res.section === 'address' ? FaMapMarkerAlt : FaBuilding}
+                color={isHighlighted ? '#38bdf8' : (res.section === 'address' ? '#ef4444' : '#10b981')}
+                boxSize={5}
+                mt={0.5}
+              />
+              <VStack align="start" spacing={1} flex={1} minW={0}>
+                <HStack spacing={2}>
+                  <Box px={2} py={0.5} bg="#27272a" borderRadius="sm">
+                    <Text fontSize="9px" fontWeight="900" color={res.section === 'address' ? '#38bdf8' : '#10b981'} letterSpacing="0.5px">
+                      {typeLabel}
+                    </Text>
+                  </Box>
+                </HStack>
+                <Text fontSize="15px" fontWeight="900" color="#f8fafc" textAlign="left">
+                  {res.place_name}
+                </Text>
+                {res.subtitle && res.subtitle !== res.place_name && (
+                  <Text fontSize="12px" fontWeight="700" color="#a1a1aa" noOfLines={2} textAlign="left">
+                    {res.subtitle}
+                  </Text>
+                )}
+              </VStack>
+            </HStack>
+          </ListItem>
+        </React.Fragment>
+      );
+    })}
+  </List>
+)}
+          
         </Box>
 
         <div ref={mapContainer} style={{ width: '100%', height: '100%' }} />

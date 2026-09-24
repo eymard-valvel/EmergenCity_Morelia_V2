@@ -1799,14 +1799,21 @@ function cleanupDisconnectedClient(ws) {
       lastLocationBroadcast.delete(id);
       console.log(`🚑 Ambulancia ${id} desconectada`);
       for (const [callId, em] of activeEmergencies) {
-        if (em.assignedAmbulanceId === id) {
-          em.status = 'pending';
-          em.assignedAmbulanceId = null;
-          em.assignedAmbulanceName = null;
-          em.assignedAt = null;
-          activeEmergencies.set(callId, em);
-        }
-      }
+  if (em.assignedAmbulanceId === id) {
+    // Mantener la referencia histórica para que el receptor pueda ver
+    // quién atendió el caso aunque la unidad se haya desconectado.
+    em.status = 'pending';
+    em.lastAssignedAmbulanceId = em.assignedAmbulanceId;
+    em.lastAssignedAmbulanceName = em.assignedAmbulanceName;
+    em.assignedAmbulanceId = null;
+    em.assignedAmbulanceName = null;
+    em.assignedAt = null;
+    em.unassignedAt = new Date().toISOString();
+    em.unassignedReason = 'ambulance_disconnected';
+    activeEmergencies.set(callId, em);
+  }
+}
+      
       for (const [offerId, o] of pendingOffers) {
         if (o.ambulanceId === id) { clearTimeout(o.timer); pendingOffers.delete(offerId); }
       }
@@ -1876,12 +1883,18 @@ function startIntervals() {
   if (intervalsStarted) return;
   intervalsStarted = true;
 
-  setInterval(() => {
-    if (!currentWss) return;
-    currentWss.clients.forEach(c => {
-      if (c.readyState === WebSocket.OPEN) { try { c.ping(); } catch (_) {} }
-    });
-  }, 30_000);
+setInterval(() => {
+  if (!currentWss) return;
+  currentWss.clients.forEach(client => {
+    if (client.readyState === WebSocket.OPEN) {
+      try {
+        client.ping();
+      } catch (_) {
+        // Ignorar — el socket se limpiará cuando falle el close
+      }
+    }
+  });
+}, 30000);
 
   setInterval(() => {
     const now = Date.now();
@@ -1971,17 +1984,28 @@ function attachV2WebSocket(server, options = {}) {
       serverTime: new Date().toISOString()
     });
 
-    ws.on('message', async raw => {
-      let data;
-      try { data = JSON.parse(raw); }
-      catch { return sendError(ws, 'JSON inválido', 'BAD_JSON'); }
-      if (!data?.type) return sendError(ws, 'Falta type', 'BAD_TYPE');
-      try { await handleMessage(ws, data); }
-      catch (e) {
-        console.error(`❌ [${data.type}]`, e.message);
-        sendError(ws, 'Error procesando mensaje', 'HANDLER_ERROR');
-      }
-    });
+    // El cliente puede enviar heartbeat y el servidor responde con ack.
+// Esto es útil cuando la pestaña está en segundo plano y el navegador
+// no deja correr el ping/pong nativo del WebSocket.
+ws.on('message', async raw => {
+  let data;
+  try { data = JSON.parse(raw); }
+  catch { return sendError(ws, 'JSON inválido', 'BAD_JSON'); }
+
+  // Responder heartbeat sin pasar por handleMessage
+  if (data.type === 'heartbeat') {
+    ws._lastHeartbeat = Date.now();
+    return sendMessage(ws, { type: 'heartbeat_ack', timestamp: new Date().toISOString() });
+  }
+
+  if (!data.type) return sendError(ws, 'Falta type', 'BAD_TYPE');
+  try {
+    await handleMessage(ws, data);
+  } catch (e) {
+    console.error(`[${data.type}]`, e.message);
+    sendError(ws, 'Error procesando mensaje', 'HANDLER_ERROR');
+  }
+});
 
     ws.on('close', (code, reason) => {
       console.log(`🔌 WS cierre ${code} - ${reason || ''}`);

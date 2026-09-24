@@ -9,6 +9,10 @@ const WS_URL = resolveWsUrl();
 const API_URL = (import.meta.env.VITE_API || 'https://emergencity-morelia-v2.onrender.com').replace(/\/+$/, '');
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
 
+import { readLocal, saveLocal } from '../../helpers/persistence.js';
+
+
+
 const ReportePaciente = () => {
   const navigate = useNavigate();
   const [theme, setTheme] = useState('dark');
@@ -33,9 +37,12 @@ const ReportePaciente = () => {
   const [ambulanciasCargadas, setAmbulanciasCargadas] = useState(false);
 
   // Estado de hospital aceptado (desbloquea envío de versiones)
-  const [hospitalAceptado, setHospitalAceptado] = useState(null);
-
-  const [reporte, setReporte] = useState({
+  
+const [hospitalAceptado, setHospitalAceptado] = useState(
+  () => readLocal('paramedico', 'hospitalAceptado', null)
+);
+const [reporte, setReporte] = useState(() =>
+  readLocal('paramedico', 'reporte', {
     id_ambulancia: '',
     callId: '',
     tripulacion: {},
@@ -60,6 +67,14 @@ const ReportePaciente = () => {
 
   // ==================== WS PERMANENTE (para vinculación) ====================
   const wsRef = useRef(null);
+
+  useEffect(() => {
+  saveLocal('paramedico', 'hospitalAceptado', hospitalAceptado);
+}, [hospitalAceptado]);
+
+useEffect(() => {
+  saveLocal('paramedico', 'reporte', reporte);
+}, [reporte]);
 
   useEffect(() => {
     // Conexión temprana para poder listar ambulancias activas
