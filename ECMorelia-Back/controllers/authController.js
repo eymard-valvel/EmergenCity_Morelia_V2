@@ -61,11 +61,11 @@ class AuthController {
 if (role !== 'hospitales') {
   return res
     .cookie('token', result, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      maxAge: 3600000,
-      sameSite: 'Strict'
-    })
+  httpOnly: true,
+  secure: process.env.NODE_ENV === 'production',
+  maxAge: 86400000,
+  sameSite: 'Strict'
+})  
     .status(200)
     .send({ message: 'Login successful', role })
 }

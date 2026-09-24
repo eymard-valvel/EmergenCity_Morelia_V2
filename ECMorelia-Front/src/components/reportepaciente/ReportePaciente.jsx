@@ -11,6 +11,26 @@ const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
 
 import { readLocal, saveLocal } from '../../helpers/persistence.js';
 
+const REPORTE_INICIAL = {
+  id_ambulancia: '',
+  callId: '',
+  tripulacion: {},
+  seccionA: { folio: '', fecha: new Date().toISOString().split('T')[0], tipo_servicio: 'Urgencia' },
+  seccionB: { activacion: '', salida_base: '', llegada_escena: '', primer_contacto: '', salida_escena: '', llegada_hospital: '', entrega_paciente: '', liberacion_unidad: '' },
+  seccionC: { direccion: '', municipio: '', estado: '', tipo_lugar: 'Vía pública', tipo_lugar_otro: '' },
+  seccionD: { nombre: '', edad: '', sexo: '', peso: '', paciente_identificado: 'Sí', acompanante: '', telefono: '' },
+  seccionE: { alergias: '', medicamentos: '', enfermedades: '', ultima_comida: '', embarazo: 'No' },
+  seccionF: { tipo_urgencia: '', motivo_principal: '' },
+  seccionG: { mecanismo: '', otro_mecanismo: '' },
+  seccionH: { via_aerea: 'Libre', ventilacion: 'Adecuada', circulacion_pulso: 'Periférico', lesiones_exposicion: '' },
+  seccionI: { fc: '', fr: '', ta: '', pam: '', spo2: '', temp: '', glucemia: '', eva: '', hora_toma: '' },
+  seccionK: { cabeza: '', torax: '', abdomen: '', extremidades: '' },
+  intervenciones: [],
+  seccionN: { eta: '', diagnostico_presuntivo: '', necesidades: '' },
+  seccionOP: { area_receptora: 'Urgencias', medico_recibe: '', estado_final: 'Estable' },
+  riesgos_escena: ''
+};
+
 
 
 const ReportePaciente = () => {
@@ -37,44 +57,59 @@ const ReportePaciente = () => {
   const [ambulanciasCargadas, setAmbulanciasCargadas] = useState(false);
 
   // Estado de hospital aceptado (desbloquea envío de versiones)
-  
-const [hospitalAceptado, setHospitalAceptado] = useState(
+  // Estructura base del reporte. Se usa como fallback cuando no hay nada
+// guardado en localStorage.
+const REPORTE_INICIAL = {
+  id_ambulancia: '',
+  callId: '',
+  tripulacion: {},
+  seccionA: { folio: '', fecha: new Date().toISOString().split('T')[0], tipo_servicio: 'Urgencia' },
+  seccionB: { activacion: '', salida_base: '', llegada_escena: '', primer_contacto: '', salida_escena: '', llegada_hospital: '', entrega_paciente: '', liberacion_unidad: '' },
+  seccionC: { direccion: '', municipio: '', estado: '', tipo_lugar: 'Vía pública', tipo_lugar_otro: '' },
+  seccionD: { nombre: '', edad: '', sexo: '', peso: '', paciente_identificado: 'Sí', acompanante: '', telefono: '' },
+  seccionE: { alergias: '', medicamentos: '', enfermedades: '', ultima_comida: '', embarazo: 'No' },
+  seccionF: { tipo_urgencia: '', motivo_principal: '' },
+  seccionG: { mecanismo: '', otro_mecanismo: '' },
+  seccionH: { via_aerea: 'Libre', ventilacion: 'Adecuada', circulacion_pulso: 'Periférico', lesiones_exposicion: '' },
+  seccionI: { fc: '', fr: '', ta: '', pam: '', spo2: '', temp: '', glucemia: '', eva: '', hora_toma: '' },
+  seccionK: { cabeza: '', torax: '', abdomen: '', extremidades: '' },
+  intervenciones: [],
+  seccionN: { eta: '', diagnostico_presuntivo: '', necesidades: '' },
+  seccionOP: { area_receptora: 'Urgencias', medico_recibe: '', estado_final: 'Estable' },
+  riesgos_escena: ''
+};
+
+  const [hospitalAceptado, setHospitalAceptado] = useState(
   () => readLocal('paramedico', 'hospitalAceptado', null)
 );
-const [reporte, setReporte] = useState(() =>
-  readLocal('paramedico', 'reporte', {
-    id_ambulancia: '',
-    callId: '',
-    tripulacion: {},
-    seccionA: { folio: '', fecha: new Date().toISOString().split('T')[0], tipo_servicio: 'Urgencia' },
-    seccionB: { activacion: '', salida_base: '', llegada_escena: '', primer_contacto: '', salida_escena: '', llegada_hospital: '', entrega_paciente: '', liberacion_unidad: '' },
-    seccionC: { direccion: '', municipio: '', estado: '', tipo_lugar: 'Vía pública', tipo_lugar_otro: '' },
-    seccionD: { nombre: '', edad: '', sexo: '', peso: '', paciente_identificado: 'Sí', acompanante: '', telefono: '' },
-    seccionE: { alergias: '', medicamentos: '', enfermedades: '', ultima_comida: '', embarazo: 'No' },
-    seccionF: { tipo_urgencia: '', motivo_principal: '' },
-    seccionG: { mecanismo: '', otro_mecanismo: '' },
-    seccionH: { via_aerea: 'Libre', ventilacion: 'Adecuada', circulacion_pulso: 'Periférico', lesiones_exposicion: '' },
-    seccionI: { fc: '', fr: '', ta: '', pam: '', spo2: '', temp: '', glucemia: '', eva: '', hora_toma: '' },
-    seccionK: { cabeza: '', torax: '', abdomen: '', extremidades: '' },
-    intervenciones: [],
-    seccionN: { eta: '', diagnostico_presuntivo: '', necesidades: '' },
-    seccionOP: { area_receptora: 'Urgencias', medico_recibe: '', estado_final: 'Estable' },
-    riesgos_escena: ''
-  });
+
+const [reporte, setReporte] = useState(() => {
+  const stored = readLocal('paramedico', 'reporte', null);
+  if (!stored) return REPORTE_INICIAL;
+  return {
+    ...REPORTE_INICIAL,
+    ...stored,
+    seccionA: { ...REPORTE_INICIAL.seccionA, ...(stored.seccionA || {}) },
+    seccionB: { ...REPORTE_INICIAL.seccionB, ...(stored.seccionB || {}) },
+    seccionC: { ...REPORTE_INICIAL.seccionC, ...(stored.seccionC || {}) },
+    seccionD: { ...REPORTE_INICIAL.seccionD, ...(stored.seccionD || {}) },
+    seccionE: { ...REPORTE_INICIAL.seccionE, ...(stored.seccionE || {}) },
+    seccionF: { ...REPORTE_INICIAL.seccionF, ...(stored.seccionF || {}) },
+    seccionG: { ...REPORTE_INICIAL.seccionG, ...(stored.seccionG || {}) },
+    seccionH: { ...REPORTE_INICIAL.seccionH, ...(stored.seccionH || {}) },
+    seccionI: { ...REPORTE_INICIAL.seccionI, ...(stored.seccionI || {}) },
+    seccionK: { ...REPORTE_INICIAL.seccionK, ...(stored.seccionK || {}) },
+    seccionN: { ...REPORTE_INICIAL.seccionN, ...(stored.seccionN || {}) },
+    seccionOP: { ...REPORTE_INICIAL.seccionOP, ...(stored.seccionOP || {}) }
+  };
+});
+  
 
   const { ocular, setOcular, verbal, setVerbal, motor, setMotor, total, getTriageLevel } = useGlasgow(4, 5, 6);
   const triaje = getTriageLevel(total);
 
   // ==================== WS PERMANENTE (para vinculación) ====================
   const wsRef = useRef(null);
-
-  useEffect(() => {
-  saveLocal('paramedico', 'hospitalAceptado', hospitalAceptado);
-}, [hospitalAceptado]);
-
-useEffect(() => {
-  saveLocal('paramedico', 'reporte', reporte);
-}, [reporte]);
 
   useEffect(() => {
     // Conexión temprana para poder listar ambulancias activas
@@ -102,6 +137,14 @@ useEffect(() => {
       wsRef.current.send(JSON.stringify({ type: 'request_active_ambulances' }));
     }
   }, [wsConnected]);
+
+useEffect(() => {
+  saveLocal('paramedico', 'hospitalAceptado', hospitalAceptado);
+}, [hospitalAceptado]);
+
+useEffect(() => {
+  saveLocal('paramedico', 'reporte', reporte);
+}, [reporte]);
 
   // Recuperar config guardada
   useEffect(() => {

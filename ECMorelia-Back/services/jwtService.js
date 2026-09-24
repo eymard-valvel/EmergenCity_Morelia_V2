@@ -6,7 +6,7 @@ class JWTService {
   }
 
   generateToken(payload) {
-    return jwt.sign(payload, process.env.SECRET, { expiresIn: '1h' })
+    return jwt.sign(payload, process.env.SECRET, { expiresIn: '24h' })
   }
 
   verifyToken(token) {
