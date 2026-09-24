@@ -11,9 +11,8 @@ import {
 import { CheckCircleIcon, AddIcon, MinusIcon } from '@chakra-ui/icons';
 import {
   FaMapMarkerAlt, FaExclamationTriangle, FaUserInjured, FaShieldAlt,
-  FaCity, FaChevronDown, FaChevronUp, FaCheck
+  FaCity, FaChevronDown, FaChevronUp, FaCheck, FaBuilding
 } from 'react-icons/fa';
-import { FaMapMarkerAlt, FaExclamationTriangle, FaUserInjured, FaShieldAlt, FaCity, FaCheck, FaBuilding } from 'react-icons/fa';
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN ||
   'pk.eyJ1IjoiZXltYXJkMjkiLCJhIjoiY21tcDY4YzNpMGw3bjJzb203YmZyNTVnMyI';
