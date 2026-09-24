@@ -1,256 +1,373 @@
 // src/pln/localParser.js
-// VERSIÓN DEFINITIVA - Sincronizada con el backend
+// Parser local de dictado médico. Divide el texto por secciones,
+// extrae valores y detecta comandos de acción.
 
+import {
+  NUMEROS_HABLADOS,
+  ANCLAS_SECCION,
+  VOCABULARIO,
+  COMANDOS,
+  ABREVIACIONES,
+  CORRECCIONES_FONETICAS,
+  SECCIONES_URGENTES
+} from './glosario';
+
+// ==================== NORMALIZACIÓN ====================
+
+function reemplazarTodas(text, buscar, reemplazo) {
+  return text.split(buscar).join(reemplazo);
+}
+
+// Convierte números hablados a dígitos. Maneja casos como
+// "ciento veinte" -> "120", "treinta y cinco" -> "35".
+function numerosADigitos(text) {
+  let result = text.toLowerCase();
+
+  // Correcciones fonéticas primero (frases completas)
+  for (const [origen, destino] of Object.entries(CORRECCIONES_FONETICAS)) {
+    result = reemplazarTodas(result, origen, destino);
+  }
+
+  // Decenas + unidades: "treinta y cinco" -> 35
+  result = result.replace(
+    /\b(veinte|treinta|cuarenta|cincuenta|sesenta|setenta|ochenta|noventa)\s+y\s+(uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve)\b/gi,
+    (m, decena, unidad) => {
+      const d = NUMEROS_HABLADOS[decena.toLowerCase()] || 0;
+      const u = NUMEROS_HABLADOS[unidad.toLowerCase()] || 0;
+      return String(d + u);
+    }
+  );
+
+  // Centenas + decenas/unidades: "ciento veinte" -> 120, "doscientos cinco" -> 205
+  result = result.replace(
+    /\b(cien|ciento|doscientos|trescientos|cuatrocientos|quinientos|seiscientos|setecientos|ochocientos|novecientos)\s+(veinte|treinta|cuarenta|cincuenta|sesenta|setenta|ochenta|noventa|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce|trece|catorce|quince|dieciséis|dieciseis|diecisiete|dieciocho|diecinueve)\b/gi,
+    (m, centena, resto) => {
+      const c = NUMEROS_HABLADOS[centena.toLowerCase()] || 0;
+      const r = NUMEROS_HABLADOS[resto.toLowerCase()] || 0;
+      return String(c + r);
+    }
+  );
+
+  // Números solos
+  const palabras = Object.keys(NUMEROS_HABLADOS).sort((a, b) => b.length - a.length);
+  const regexPalabras = new RegExp(`\\b(${palabras.join('|')})\\b`, 'gi');
+  result = result.replace(regexPalabras, (match) => {
+    const num = NUMEROS_HABLADOS[match.toLowerCase()];
+    return num !== undefined ? String(num) : match;
+  });
+
+  return result;
+}
+
+// Expande abreviaciones habladas a su forma completa para que el parser
+// las reconozca.
+function expandirAbreviaciones(text) {
+  let result = text;
+  for (const [abrev, completo] of Object.entries(ABREVIACIONES)) {
+    const regex = new RegExp(`\\b${abrev}\\b`, 'gi');
+    result = result.replace(regex, completo);
+  }
+  return result;
+}
+
+export function normalizarTexto(textoOriginal) {
+  let t = textoOriginal
+    .replace(/\s+/g, ' ')
+    .replace(/[.,;](?=\s|$)/g, ',')
+    .trim()
+    .toLowerCase();
+
+  t = numerosADigitos(t);
+  t = expandirAbreviaciones(t);
+
+  return t;
+}
+
+// ==================== DIVISIÓN POR SECCIONES ====================
+
+function encontrarAnclas(texto) {
+  const encontradas = [];
+
+  for (const ancla of ANCLAS_SECCION) {
+    for (const patron of ancla.patrones) {
+      const regex = new RegExp(`\\b${patron}\\b`, 'gi');
+      let match;
+      while ((match = regex.exec(texto)) !== null) {
+        encontradas.push({
+          id: ancla.id,
+          inicio: match.index,
+          fin: match.index + match[0].length
+        });
+      }
+    }
+  }
+
+  // Ordenar por posición y eliminar anclas solapadas (conservar la primera)
+  encontradas.sort((a, b) => a.inicio - b.inicio);
+
+  const sinSolape = [];
+  let ultimoFin = -1;
+  for (const a of encontradas) {
+    if (a.inicio >= ultimoFin) {
+      sinSolape.push(a);
+      ultimoFin = a.fin;
+    }
+  }
+
+  return sinSolape;
+}
+
+function dividirPorSecciones(texto) {
+  const anclas = encontrarAnclas(texto);
+  const secciones = {};
+
+  if (anclas.length === 0) {
+    // Sin anclas, todo va a "general"
+    secciones.general = [texto];
+    return secciones;
+  }
+
+  // Texto antes de la primera ancla
+  if (anclas[0].inicio > 0) {
+    const preambulo = texto.substring(0, anclas[0].inicio).trim();
+    if (preambulo) secciones.general = [preambulo];
+  }
+
+  for (let i = 0; i < anclas.length; i++) {
+    const inicio = anclas[i].fin;
+    const fin = i + 1 < anclas.length ? anclas[i + 1].inicio : texto.length;
+    const contenido = texto.substring(inicio, fin).trim();
+    if (!contenido) continue;
+
+    const id = anclas[i].id;
+    if (!secciones[id]) secciones[id] = [];
+    secciones[id].push(contenido);
+  }
+
+  return secciones;
+}
+
+// ==================== EXTRACTORES POR SECCIÓN ====================
+
+function extraerSignosVitales(texto) {
+  const result = {};
+
+  // Frecuencia cardíaca
+  const fcRegex = /(?:frecuencia cardiaca|pulso|latidos por minuto)\s*(?:de|en|es|:)?\s*(\d{2,3})/i;
+  const fcMatch = texto.match(fcRegex);
+  if (fcMatch) result.frecuencia_cardiaca = parseInt(fcMatch[1], 10);
+
+  // Frecuencia respiratoria
+  const frRegex = /(?:frecuencia respiratoria|respiraciones por minuto|respira)\s*(?:de|en|es|:)?\s*(\d{2,3})/i;
+  const frMatch = texto.match(frRegex);
+  if (frMatch) result.frecuencia_respiratoria = parseInt(frMatch[1], 10);
+
+  // Tensión arterial (varios formatos)
+  const taRegexes = [
+    /(?:tension arterial|presion arterial)\s*(?:de|en|es|:)?\s*(\d{2,3})\s*(?:\/|sobre|por)\s*(\d{2,3})/i,
+    /(?:tension|presion)\s*(?:de|en|es|:)?\s*(\d{2,3})\s*(?:\/|sobre|por)\s*(\d{2,3})/i,
+    /\b(\d{2,3})\s*(?:\/|sobre|por)\s*(\d{2,3})\b/
+  ];
+  for (const rx of taRegexes) {
+    const m = texto.match(rx);
+    if (m) {
+      result.tension_arterial = `${m[1]}/${m[2]}`;
+      break;
+    }
+  }
+
+  // Saturación
+  const spo2Regex = /(?:saturacion de oxigeno|saturacion|spo2|oximetria)\s*(?:de|en|es|:)?\s*(\d{2,3})\s*(?:por ciento|%)?/i;
+  const spo2Match = texto.match(spo2Regex);
+  if (spo2Match) result.saturacion_oxigeno = parseInt(spo2Match[1], 10);
+
+  // Temperatura
+  const tempRegex = /(?:temperatura|temp)\s*(?:de|en|es|:)?\s*(\d{2}(?:\.\d+)?)/i;
+  const tempMatch = texto.match(tempRegex);
+  if (tempMatch) result.temperatura = parseFloat(tempMatch[1]);
+
+  // Glucemia
+  const gluRegex = /(?:glucemia|glucosa|dextro)\s*(?:de|en|es|:)?\s*(\d{2,3})/i;
+  const gluMatch = texto.match(gluRegex);
+  if (gluMatch) result.glucemia = parseInt(gluMatch[1], 10);
+
+  return result;
+}
+
+function extraerGlasgow(texto) {
+  const result = {};
+
+  // Total
+  const totalRegex = /(?:glasgow|escala de glasgow|gcs)\s*(?:de|en|es|:)?\s*(\d{1,2})/i;
+  const totalMatch = texto.match(totalRegex);
+  if (totalMatch) {
+    const t = parseInt(totalMatch[1], 10);
+    if (t >= 3 && t <= 15) result.total = t;
+  }
+
+  // Componentes
+  const ocularRegex = /ocular\s*(?:de|en|es|:)?\s*(\d)/i;
+  const ocularMatch = texto.match(ocularRegex);
+  if (ocularMatch) result.ocular = parseInt(ocularMatch[1], 10);
+
+  const verbalRegex = /verbal\s*(?:de|en|es|:)?\s*(\d)/i;
+  const verbalMatch = texto.match(verbalRegex);
+  if (verbalMatch) result.verbal = parseInt(verbalMatch[1], 10);
+
+  const motorRegex = /motor\s*(?:de|en|es|:)?\s*(\d)/i;
+  const motorMatch = texto.match(motorRegex);
+  if (motorMatch) result.motor = parseInt(motorMatch[1], 10);
+
+  return result;
+}
+
+function extraerDemografia(texto) {
+  const result = {};
+
+  // Edad
+  const edadRegex = /(?:de\s+)?(\d{1,3})\s*(?:años|año)/i;
+  const edadMatch = texto.match(edadRegex);
+  if (edadMatch) result.edad = parseInt(edadMatch[1], 10);
+
+  // Sexo
+  if (/\b(masculino|hombre|varon|varón|niño|señor)\b/i.test(texto)) result.sexo = 'M';
+  else if (/\b(femenino|mujer|niña|señora)\b/i.test(texto)) result.sexo = 'F';
+
+  // Nombre (heurística simple: "paciente" seguido de nombre propio)
+  const nombreRegex = /paciente\s+([a-záéíóúñ]+(?:\s+[a-záéíóúñ]+){0,2})/i;
+  const nombreMatch = texto.match(nombreRegex);
+  if (nombreMatch) result.nombre = nombreMatch[1].trim();
+
+  return result;
+}
+
+function extraerIntervenciones(texto) {
+  const encontradas = [];
+
+  for (const [clave, sinonimos] of Object.entries(VOCABULARIO)) {
+    for (const sinonimo of sinonimos) {
+      const regex = new RegExp(`\\b${sinonimo}\\b`, 'i');
+      if (regex.test(texto)) {
+        encontradas.push({
+          tipo_intervencion: clave,
+          descripcion: '',
+          hora_intervencion: ''
+        });
+        break;
+      }
+    }
+  }
+
+  return encontradas;
+}
+
+function extraerMotivo(texto) {
+  const limpio = texto
+    .replace(/^(?:de urgencia|de consulta|principal)\s*/i, '')
+    .trim();
+  return { motivo_urgencia: limpio || '' };
+}
+
+function extraerLesiones(texto) {
+  const limpio = texto.trim();
+  return { descripcion_lesion: limpio || '' };
+}
+
+// ==================== DETECCIÓN DE COMANDOS ====================
+
+function detectarComandos(textoNormalizado) {
+  const acciones = [];
+
+  for (const [accion, frases] of Object.entries(COMANDOS)) {
+    for (const frase of frases) {
+      const regex = new RegExp(`\\b${frase}\\b`, 'i');
+      if (regex.test(textoNormalizado)) {
+        acciones.push(accion);
+        break;
+      }
+    }
+  }
+
+  return [...new Set(acciones)];
+}
+
+// ==================== API PÚBLICA ====================
+
+/**
+ * Analiza un fragmento de texto dictado y devuelve las secciones detectadas,
+ * las acciones solicitadas y qué secciones urgentes están completas.
+ */
 export function parseTextLocal(rawText) {
-    const text = rawText.replace(/\s+/g, ' ').trim();
-
-    const result = {
-        paciente: { nombre: '', edad: '', sexo: '' },
-        signos_vitales: {
-            frecuencia_cardiaca: '',
-            frecuencia_respiratoria: '',
-            tension_arterial: '',
-            saturacion_oxigeno: '',
-            temperatura: ''
-        },
-        glasgow: { ocular: null, verbal: null, motor: null, total: null },
-        motivo_urgencia: '',
-        descripcion_lesion: '',
-        hallazgos_escena: text,
-        intervenciones: [],
-        hora_estimada: ''
+  if (!rawText || !rawText.trim()) {
+    return {
+      secciones: {},
+      acciones: [],
+      seccionesCompletas: [],
+      textoNormalizado: '',
+      textoOriginal: ''
     };
+  }
 
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // FUNCIONES AUXILIARES
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    
-    function extractBetween(text, startPattern, endPattern, fallbackPattern = null) {
-        let result = '';
-        const startMatch = text.match(startPattern);
-        if (startMatch) {
-            const startIdx = startMatch.index + startMatch[0].length;
-            let endIdx = text.length;
-            if (endPattern) {
-                const endMatch = text.substring(startIdx).match(endPattern);
-                if (endMatch) {
-                    endIdx = startIdx + endMatch.index;
-                }
-            }
-            result = text.substring(startIdx, endIdx).trim();
-        } else if (fallbackPattern) {
-            const fallbackMatch = text.match(fallbackPattern);
-            if (fallbackMatch) {
-                result = fallbackMatch[0].trim();
-            }
-        }
-        return result;
-    }
+  const textoNormalizado = normalizarTexto(rawText);
+  const acciones = detectarComandos(textoNormalizado);
+  const seccionesCrudas = dividirPorSecciones(textoNormalizado);
 
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // DATOS DEMOGRÁFICOS
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    
-    const nombreMatch = text.match(/paciente\s+([A-Za-záéíóúñ\s]+?)(?=\s+\d+\s*años|\s+sexo|\s+motivo|,|\.|$)/i);
-    if (nombreMatch) result.paciente.nombre = nombreMatch[1].trim();
+  // Procesar cada sección con su extractor correspondiente
+  const secciones = {};
 
-    const edadMatch = text.match(/\b(\d{1,3})\s*(años|año|edad)\b/i);
-    if (edadMatch) result.paciente.edad = parseInt(edadMatch[1], 10);
+  if (seccionesCrudas.signos) {
+    const acumulado = seccionesCrudas.signos.join(' ');
+    secciones.signos = extraerSignosVitales(acumulado);
+  }
 
-    if (/\b(masculino|hombre|varón)\b/i.test(text)) result.paciente.sexo = 'M';
-    else if (/\b(femenino|mujer)\b/i.test(text)) result.paciente.sexo = 'F';
+  if (seccionesCrudas.glasgow) {
+    const acumulado = seccionesCrudas.glasgow.join(' ');
+    secciones.glasgow = extraerGlasgow(acumulado);
+  }
 
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // MOTIVO DE URGENCIA
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    
-    let motivo = extractBetween(
-        text,
-        /\b(?:motivo\s+(?:de\s+)?(?:urgencia|consulta)|por\s+(?:presentar|tener|con)|refiere|manifiesta)\s*[:]?\s*/i,
-        /\b(?:lesión|trauma|herida|signos\s*vitales|glasgow|gcs|se\s+administró|se\s+colocó|se\s+puso)/i,
-        /\b(dolor|fiebre|trauma|accidente|caída|náuseas|vómito|hemorragia|disnea|dificultad\s+respiratoria)\s+[^.]+/i
+  if (seccionesCrudas.demografia || seccionesCrudas.general) {
+    const acumulado = [
+      ...(seccionesCrudas.demografia || []),
+      ...(seccionesCrudas.general || [])
+    ].join(' ');
+    secciones.demografia = extraerDemografia(acumulado);
+  }
+
+  if (seccionesCrudas.intervenciones) {
+    const acumulado = seccionesCrudas.intervenciones.join(' ');
+    secciones.intervenciones = extraerIntervenciones(acumulado);
+  }
+
+  if (seccionesCrudas.motivo) {
+    const acumulado = seccionesCrudas.motivo.join(' ');
+    secciones.motivo = extraerMotivo(acumulado);
+  }
+
+  if (seccionesCrudas.lesiones) {
+    const acumulado = seccionesCrudas.lesiones.join(' ');
+    secciones.lesiones = extraerLesiones(acumulado);
+  }
+
+  if (seccionesCrudas.destino) {
+    secciones.destino = { texto: seccionesCrudas.destino.join(' ') };
+  }
+
+  // Detectar qué secciones urgentes tienen datos
+  const seccionesCompletas = [];
+  for (const id of SECCIONES_URGENTES) {
+    const sec = secciones[id];
+    if (!sec) continue;
+    const tieneDatos = Object.values(sec).some(v =>
+      v !== '' && v !== null && v !== undefined && !(Array.isArray(v) && v.length === 0)
     );
-    if (motivo) {
-        const cleanPatterns = [
-            /\b(?:signos\s*vitales|frecuencia\s*card[ií]aca|fc|pulso|frecuencia\s*respiratoria|fr|presi[oó]n\s*arterial|ta|saturaci[oó]n|spo2|temperatura|temp)\b/i,
-            /\b(?:glasgow|gcs|escala\s+de\s+glasgow|ocular|verbal|motor)\b/i
-        ];
-        for (const pattern of cleanPatterns) {
-            const idx = motivo.search(pattern);
-            if (idx !== -1) motivo = motivo.substring(0, idx);
-        }
-        result.motivo_urgencia = motivo.trim();
-    }
+    if (tieneDatos) seccionesCompletas.push(id);
+  }
 
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // DESCRIPCIÓN DE LESIÓN
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    
-    let lesion = extractBetween(
-        text,
-        /\b(?:lesión|trauma|herida|fractura|quemadura|golpe|contusión)\s+(?:de|en|por)\s*/i,
-        /\b(?:signos\s*vitales|glasgow|gcs|se\s+administró|se\s+colocó|se\s+puso|y\s+se)/i,
-        /\b(?:trauma|lesión|herida|fractura|contusión)\s+[^.]*/i
-    );
-    if (lesion) {
-        const cleanPatterns = [
-            /\b(?:signos\s*vitales|frecuencia\s*card[ií]aca|fc|pulso|frecuencia\s*respiratoria|fr|presi[oó]n\s*arterial|ta|saturaci[oó]n|spo2|temperatura|temp)\b/i,
-            /\b(?:glasgow|gcs|escala\s+de\s+glasgow|ocular|verbal|motor)\b/i
-        ];
-        for (const pattern of cleanPatterns) {
-            const idx = lesion.search(pattern);
-            if (idx !== -1) lesion = lesion.substring(0, idx);
-        }
-        result.descripcion_lesion = lesion.trim();
-    }
-
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // SIGNOS VITALES
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    
-    const fcMatch = text.match(/\b(?:fc|frecuencia\s*card[ií]aca|pulso)\s*[:]?\s*(\d{2,3})\b/i);
-    if (fcMatch) result.signos_vitales.frecuencia_cardiaca = fcMatch[1];
-    const frMatch = text.match(/\b(?:fr|frecuencia\s*respiratoria|respiración)\s*[:]?\s*(\d{2,3})\b/i);
-    if (frMatch) result.signos_vitales.frecuencia_respiratoria = frMatch[1];
-    const taMatch = text.match(/\b(?:ta|tensi[oó]n\s*(?:arterial)?|presi[oó]n\s*(?:arterial)?|presión|tensión)\s*[:]?\s*(\d{2,3})\s*[\/\-\s]+(?:sobre\s*)?(\d{2,3})\b/i);
-    if (taMatch) result.signos_vitales.tension_arterial = `${taMatch[1]}/${taMatch[2]}`;
-    const spo2Match = text.match(/\b(?:spo2|saturaci[oó]n|o2\s*sat)\s*[:]?\s*(\d{2,3})\b/i);
-    if (spo2Match) result.signos_vitales.saturacion_oxigeno = spo2Match[1];
-    const tempMatch = text.match(/\b(?:temperatura|temp)\s*[:]?\s*(\d{2,3}\.?\d*)\b/i);
-    if (tempMatch) result.signos_vitales.temperatura = tempMatch[1];
-
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // ESCALA DE GLASGOW
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    
-    const numberMap = {
-        'uno': 1, 'dos': 2, 'tres': 3, 'cuatro': 4, 'cinco': 5,
-        'seis': 6, 'siete': 7, 'ocho': 8, 'nueve': 9, 'diez': 10
-    };
-    function toNumber(str) {
-        if (!str) return null;
-        const lower = str.toLowerCase().trim();
-        if (numberMap[lower]) return numberMap[lower];
-        const num = parseInt(str, 10);
-        return isNaN(num) ? null : num;
-    }
-
-    let gcsFound = false;
-    const gcsMatch = text.match(/\b(?:glasgow|gcs|escala\s+de\s+glasgow)\s*[:]?\s*(\d{1,2})\b/i);
-    if (gcsMatch) {
-        const total = toNumber(gcsMatch[1]);
-        if (total !== null && total >= 3 && total <= 15) {
-            result.glasgow.total = total;
-            gcsFound = true;
-            if (result.glasgow.ocular === null) result.glasgow.ocular = 4;
-            if (result.glasgow.verbal === null) result.glasgow.verbal = 5;
-            if (result.glasgow.motor === null) result.glasgow.motor = 6;
-        }
-    }
-
-    if (!gcsFound) {
-        const ocularMatch = text.match(/\b(?:ocular|ojos|apertura\s+ocular)\s*[:]?\s*([\w]+)\b/i);
-        if (ocularMatch) result.glasgow.ocular = toNumber(ocularMatch[1]);
-        const verbalMatch = text.match(/\b(?:verbal|respuesta\s+verbal)\s*[:]?\s*([\w]+)\b/i);
-        if (verbalMatch) result.glasgow.verbal = toNumber(verbalMatch[1]);
-        const motorMatch = text.match(/\b(?:motor|respuesta\s+motora)\s*[:]?\s*([\w]+)\b/i);
-        if (motorMatch) result.glasgow.motor = toNumber(motorMatch[1]);
-        if (result.glasgow.ocular !== null && result.glasgow.verbal !== null && result.glasgow.motor !== null) {
-            result.glasgow.total = result.glasgow.ocular + result.glasgow.verbal + result.glasgow.motor;
-        }
-    }
-
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // INTERVENCIONES
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    
-    const treatmentMap = {
-        'oxigenoterapia': { nombre: 'oxigenoterapia', sinonimos: ['oxigenoterapia', 'oxígeno', 'oxigeno', 'o2', 'mascarilla'] },
-        'vía intravenosa': { nombre: 'vía intravenosa', sinonimos: ['vía intravenosa', 'iv', 'catéter', 'suero', 'bien travenosa', 'travenosa'] },
-        'intubación': { nombre: 'intubación', sinonimos: ['intubación', 'intubar'] },
-        'ventilación': { nombre: 'ventilación', sinonimos: ['ventilación', 'ventilar'] },
-        'desfibrilación': { nombre: 'desfibrilación', sinonimos: ['desfibrilación', 'desfibrilar', 'choque'] },
-        'masaje cardiaco': { nombre: 'masaje cardiaco', sinonimos: ['masaje cardiaco', 'rcp', 'compresiones'] },
-        'vendaje': { nombre: 'vendaje', sinonimos: ['vendaje', 'vendar'] },
-        'inmovilización': { nombre: 'inmovilización', sinonimos: ['inmovilización', 'inmovilizar', 'férula'] },
-        'medicación': { nombre: 'medicación', sinonimos: ['medicación', 'medicar', 'analgesia', 'anestesia'] }
-    };
-
-    const found = [];
-    const lowerText = text.toLowerCase();
-
-    for (const [key, data] of Object.entries(treatmentMap)) {
-        for (const synonym of data.sinonimos) {
-            const idx = lowerText.indexOf(synonym);
-            if (idx !== -1) {
-                let descripcion = '';
-                const startIdx = idx + synonym.length;
-                let endIdx = text.length;
-                const searchSpace = text.substring(startIdx, Math.min(startIdx + 150, text.length));
-                const nextIntervention = searchSpace.search(/\b(?:oxigenoterapia|oxígeno|iv|suero|catéter|vendaje|inmovilización|medicación|rcp|intubación|ventilación|desfibrilación|masaje)\b/i);
-                if (nextIntervention !== -1 && nextIntervention < 50) {
-                    endIdx = startIdx + nextIntervention;
-                } else {
-                    const dotIdx = text.indexOf('.', startIdx);
-                    const commaIdx = text.indexOf(',', startIdx);
-                    if (dotIdx !== -1 && dotIdx < endIdx) endIdx = dotIdx + 1;
-                    if (commaIdx !== -1 && commaIdx < endIdx) endIdx = commaIdx + 1;
-                }
-                descripcion = text.substring(startIdx, endIdx).trim();
-                // Limpiar descripción
-                const cutPatterns = ['oxigenoterapia', 'oxígeno', 'iv', 'suero', 'catéter', 'vendaje', 'inmovilización', 'medicación', 'rcp'];
-                for (const cp of cutPatterns) {
-                    const cpIdx = descripcion.toLowerCase().indexOf(cp);
-                    if (cpIdx !== -1 && cpIdx < 20) {
-                        descripcion = descripcion.substring(0, cpIdx).trim();
-                    }
-                }
-                // Limpiar texto de otras secciones
-                const badPatterns = [/\bmotivo\s+de\s+urgencia\b/i, /\blesión\b/i, /\btrauma\b/i, /\bsignos\s*vitales\b/i, /\bglasgow\b/i];
-                for (const bp of badPatterns) {
-                    const idx2 = descripcion.search(bp);
-                    if (idx2 !== -1 && idx2 < 20) {
-                        descripcion = descripcion.substring(0, idx2).trim();
-                    }
-                }
-                if (descripcion.length > 50) {
-                    const cutIdx = descripcion.search(/[,.;]|\s+y\s+/);
-                    if (cutIdx !== -1 && cutIdx < 40) {
-                        descripcion = descripcion.substring(0, cutIdx).trim();
-                    }
-                }
-                found.push({
-                    tipo_intervencion: data.nombre,
-                    descripcion: descripcion,
-                    hora_intervencion: ''
-                });
-                break;
-            }
-        }
-    }
-
-    const seen = new Set();
-    const unique = [];
-    for (const iv of found) {
-        if (!seen.has(iv.tipo_intervencion)) {
-            seen.add(iv.tipo_intervencion);
-            unique.push(iv);
-        }
-    }
-    result.intervenciones = unique;
-
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // HORA ACTUAL
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    
-    const ahora = new Date();
-    const horas = String(ahora.getHours()).padStart(2, '0');
-    const minutos = String(ahora.getMinutes()).padStart(2, '0');
-    const horaActual = `${horas}:${minutos}`;
-    for (const iv of result.intervenciones) {
-        iv.hora_intervencion = horaActual;
-    }
-    result.hora_estimada = horaActual;
-
-    return result;
+  return {
+    secciones,
+    acciones,
+    seccionesCompletas,
+    textoNormalizado,
+    textoOriginal: rawText
+  };
 }

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Outlet, useNavigate } from 'react-router-dom';
 import VoiceAssistant from '../pln/VoiceAssistant';
 import { useGlasgow } from '../hooks/useGlasgow';
@@ -8,6 +8,8 @@ const WS_URL = resolveWsUrl();
 
 const API_URL = (import.meta.env.VITE_API || 'https://emergencity-morelia-v2.onrender.com').replace(/\/+$/, '');
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
+
+
 
 import { readLocal, saveLocal } from '../../helpers/persistence.js';
 
@@ -350,22 +352,104 @@ useEffect(() => {
     setTimeout(() => setMensajeNotificacion({ texto: '', tipo: '' }), 4000);
   };
 
-  const handleNLPData = (data) => {
-    // Mapeo simple: si VoiceAssistant envía datos estructurados, se fusionan
-    if (data && typeof data === 'object') {
-      setReporte(prev => {
-        const updated = { ...prev };
-        Object.entries(data).forEach(([key, value]) => {
-          if (key.includes('.')) {
-            const [section, field] = key.split('.');
-            if (updated[section]) updated[section] = { ...updated[section], [field]: value };
-          }
-        });
-        return updated;
-      });
+  const handleNLPData = useCallback((parsed, meta = {}) => {
+  if (!parsed) return;
+
+  const { secciones = {}, seccionesCompletas = [], acciones = [] } = parsed;
+
+  // === Fusión de secciones al reporte ===
+  setReporte(prev => {
+    const actualizado = { ...prev };
+
+    // Signos vitales
+    if (secciones.signos) {
+      actualizado.seccionI = {
+        ...actualizado.seccionI,
+        fc: secciones.signos.frecuencia_cardiaca ?? actualizado.seccionI.fc,
+        fr: secciones.signos.frecuencia_respiratoria ?? actualizado.seccionI.fr,
+        ta: secciones.signos.tension_arterial ?? actualizado.seccionI.ta,
+        spo2: secciones.signos.saturacion_oxigeno ?? actualizado.seccionI.spo2,
+        temp: secciones.signos.temperatura ?? actualizado.seccionI.temp,
+        glucemia: secciones.signos.glucemia ?? actualizado.seccionI.glucemia,
+        hora_toma: new Date().toTimeString().slice(0, 5)
+      };
     }
-    mostrarNotificacion('Datos de voz procesados', 'success');
-  };
+
+    // Glasgow: sincronizar con el hook useGlasgow
+    if (secciones.glasgow) {
+      if (secciones.glasgow.ocular) setOcular(secciones.glasgow.ocular);
+      if (secciones.glasgow.verbal) setVerbal(secciones.glasgow.verbal);
+      if (secciones.glasgow.motor) setMotor(secciones.glasgow.motor);
+    }
+
+    // Demografía
+    if (secciones.demografia) {
+      actualizado.seccionD = {
+        ...actualizado.seccionD,
+        nombre: secciones.demografia.nombre || actualizado.seccionD.nombre,
+        edad: secciones.demografia.edad ?? actualizado.seccionD.edad,
+        sexo: secciones.demografia.sexo || actualizado.seccionD.sexo
+      };
+    }
+
+    // Motivo
+    if (secciones.motivo?.motivo_urgencia) {
+      actualizado.seccionF = {
+        ...actualizado.seccionF,
+        motivo_principal: actualizado.seccionF.motivo_principal
+          ? `${actualizado.seccionF.motivo_principal} ${secciones.motivo.motivo_urgencia}`.trim()
+          : secciones.motivo.motivo_urgencia
+      };
+    }
+
+    // Lesiones
+    if (secciones.lesiones?.descripcion_lesion) {
+      actualizado.seccionH = {
+        ...actualizado.seccionH,
+        lesiones_exposicion: secciones.lesiones.descripcion_lesion
+      };
+    }
+
+    // Intervenciones: evitar duplicados por tipo
+    if (Array.isArray(secciones.intervenciones) && secciones.intervenciones.length > 0) {
+      const existentes = new Set(actualizado.intervenciones.map(i => i.tipo_intervencion));
+      const nuevas = secciones.intervenciones
+        .filter(i => !existentes.has(i.tipo_intervencion))
+        .map(i => ({
+          ...i,
+          hora_intervencion: i.hora_intervencion || new Date().toTimeString().slice(0, 5)
+        }));
+      actualizado.intervenciones = [...actualizado.intervenciones, ...nuevas];
+    }
+
+    return actualizado;
+  });
+
+  // === Comandos de acción ===
+  const accion = meta.action || (acciones.includes('enviar_urgente') ? 'enviar_urgente'
+    : acciones.includes('enviar_completo') ? 'enviar_completo'
+    : null);
+
+  if (accion === 'enviar_urgente') {
+    if (hospitalAceptado) {
+      setTimeout(() => enviarVersion(true), 800);
+    } else {
+      mostrarNotificacion('Aún no hay hospital asignado.', 'warning');
+    }
+  } else if (accion === 'enviar_completo') {
+    if (hospitalAceptado) {
+      setTimeout(() => enviarVersion(false), 800);
+    } else {
+      mostrarNotificacion('Aún no hay hospital asignado.', 'warning');
+    }
+  }
+
+  // === Auto-envío cuando se completa una sección urgente ===
+  // (solo si no es un análisis en vivo, para no saturar el WS)
+  if (!meta.live && hospitalAceptado && seccionesCompletas.length >= 3) {
+    setTimeout(() => enviarVersion(true), 1200);
+  }
+}, [hospitalAceptado, setOcular, setVerbal, setMotor]);
 
 
 const solicitarMedico = () => {
@@ -922,10 +1006,12 @@ const solicitarMedico = () => {
 {/* ⬅️ NUEVO: micrófono como FAB flotante arriba de la barra */}
 <div className="voice-fab">
   <VoiceAssistant
-    onDataExtracted={handleNLPData}
-    onError={(msg) => mostrarNotificacion(msg, 'error')}
-    onRecordingComplete={() => mostrarNotificacion('Grabación completada', 'success')}
-  />
+  onDataExtracted={handleNLPData}
+  onError={(msg) => mostrarNotificacion(msg, 'error')}
+  onRecordingComplete={(parsed) => {
+    mostrarNotificacion('Dictado finalizado', 'success');
+  }}
+/>
 </div>
     </div>
   );
