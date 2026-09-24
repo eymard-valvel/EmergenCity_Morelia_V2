@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { parseText } from './nlpService';
+import { parseTextConBert } from './nlpService';
 
 const SpeechRecorder = ({ onDataExtracted, onError }) => {
   const [isRecording, setIsRecording] = useState(false);
@@ -56,7 +56,7 @@ const SpeechRecorder = ({ onDataExtracted, onError }) => {
 
   const handleProcessText = async (text) => {
     try {
-      const parsedData = await parseText(text);
+      const parsedData = await parseTextConBert(text);
       // Llamar al callback para llenar el formulario
       onDataExtracted(parsedData);
     } catch (error) {

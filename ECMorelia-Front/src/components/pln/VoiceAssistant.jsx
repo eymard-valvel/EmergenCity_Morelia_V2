@@ -5,7 +5,7 @@
 // procesado y solo leemos desde ahí en adelante.
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { parseText } from './nlpService';
+import { parseText, parseTextConBert, getEstadoBert, setBertOpcion } from './nlpService';
 import './VoiceAssistant.css';
 
 const MicIcon = () => (
@@ -25,6 +25,9 @@ const VoiceAssistant = ({ onDataExtracted, onError, onRecordingComplete }) => {
   const [processing, setProcessing] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [lastAction, setLastAction] = useState(null);
+  const [bertOpcion, setBertOpcionLocal] = useState(() => getEstadoBert().habilitado);
+  const [bertEstado, setBertEstado] = useState(() => getEstadoBert());
+  const [bertInfo, setBertInfo] = useState(null);
 
   const recognitionRef = useRef(null);
   const fullTextRef = useRef('');
@@ -166,7 +169,11 @@ const VoiceAssistant = ({ onDataExtracted, onError, onRecordingComplete }) => {
   const procesarTextoFinal = useCallback(async (texto) => {
     setProcessing(true);
     try {
-      const parsed = await parseText(texto);
+      const parsed = bertOpcion
+        ? await parseTextConBert(texto)
+        : await parseText(texto);
+      setBertEstado(getEstadoBert());
+      setBertInfo(parsed.bert || null);
       if (onDataExtracted) onDataExtracted(parsed, { live: false, final: true });
       if (onRecordingComplete) onRecordingComplete(parsed);
     } catch (e) {
@@ -175,7 +182,7 @@ const VoiceAssistant = ({ onDataExtracted, onError, onRecordingComplete }) => {
     } finally {
       setProcessing(false);
     }
-  }, [onDataExtracted, onRecordingComplete, onError]);
+  }, [onDataExtracted, onRecordingComplete, onError, bertOpcion]);
 
   const iniciarCaptura = useCallback(() => {
     if (!recognitionRef.current) return;
@@ -185,6 +192,7 @@ const VoiceAssistant = ({ onDataExtracted, onError, onRecordingComplete }) => {
     setInterimTranscript('');
     setErrorMessage('');
     setLastAction(null);
+    setBertInfo(null);
     keepListeningRef.current = true;
     try {
       recognitionRef.current.start();
@@ -224,6 +232,14 @@ const VoiceAssistant = ({ onDataExtracted, onError, onRecordingComplete }) => {
     detenerCaptura();
   };
 
+  const alternarBert = () => {
+    const nuevo = !bertOpcion;
+    setBertOpcion(nuevo);
+    setBertOpcionLocal(nuevo);
+    setBertEstado(getEstadoBert());
+    setBertInfo(null);
+  };
+
   return (
     <>
       <button
@@ -260,6 +276,50 @@ const VoiceAssistant = ({ onDataExtracted, onError, onRecordingComplete }) => {
                   )}
                 </p>
               </div>
+
+              <div className="voice-bert-bar">
+                <label className="voice-bert-toggle">
+                  <input
+                    type="checkbox"
+                    checked={bertOpcion}
+                    onChange={alternarBert}
+                  />
+                  BERT / RoBERTa
+                </label>
+                <span
+                  className={`voice-bert-badge ${
+                    bertOpcion ? (bertEstado.listo ? 'active' : 'loading') : ''
+                  }`}
+                >
+                  {bertOpcion
+                    ? bertEstado.listo
+                      ? 'modelos activos'
+                      : Object.keys(bertEstado.fallos).length > 0
+                        ? 'modelos indisponibles: se usa regex'
+                        : 'pesos en caché del navegador (0 uso en Render)'
+                    : 'desactivada'}
+                </span>
+              </div>
+
+              {bertOpcion && bertInfo && (
+                <div className="voice-bert-results">
+                  {bertInfo.sentimiento && (
+                    <span className={`voice-chip ${bertInfo.sentimiento.valor}`}>
+                      Sentimiento: {bertInfo.sentimiento.valor} ({bertInfo.sentimiento.confianza})
+                    </span>
+                  )}
+                  {bertInfo.seccionPrincipal && (
+                    <span className="voice-chip">
+                      Sección: {bertInfo.seccionPrincipal}
+                    </span>
+                  )}
+                  {bertInfo.entidades?.medicas?.length > 0 && (
+                    <span className="voice-chip">
+                      Entidades: {bertInfo.entidades.medicas.slice(0, 5).join(', ')}
+                    </span>
+                  )}
+                </div>
+              )}
 
               {errorMessage && <div className="voice-error">{errorMessage}</div>}
 

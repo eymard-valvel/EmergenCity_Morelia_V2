@@ -4,6 +4,9 @@
 // El backend (si existe) se usa para enriquecer el resultado.
 
 import { parseTextLocal } from './localParser';
+import { enriquecer } from './bertNlp';
+
+export { getEstadoBert, setBertOpcion } from './bertNlp';
 
 const API_URL = import.meta.env.VITE_API || 'http://localhost:3000/api';
 
@@ -14,7 +17,8 @@ export async function parseText(text) {
       acciones: [],
       seccionesCompletas: [],
       textoNormalizado: '',
-      textoOriginal: ''
+      textoOriginal: '',
+      nlpFuentes: []
     };
   }
 
@@ -48,13 +52,19 @@ export async function parseText(text) {
   return local;
 }
 
+export async function parseTextConBert(text, opciones) {
+  const base = await parseText(text);
+  return enriquecer(base.textoNormalizado || text, base, opciones);
+}
+
 function fusionarResultados(local, backend) {
   const fusionado = {
     secciones: { ...local.secciones },
     acciones: [...new Set([...local.acciones, ...(backend.acciones || [])])],
     seccionesCompletas: [...new Set([...local.seccionesCompletas, ...(backend.seccionesCompletas || [])])],
     textoNormalizado: local.textoNormalizado,
-    textoOriginal: local.textoOriginal
+    textoOriginal: local.textoOriginal,
+    nlpFuentes: ['local', 'backend']
   };
 
   // Fusionar secciones específicas si el backend trajo datos que el local no
