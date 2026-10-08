@@ -19,7 +19,7 @@ export default defineConfig({
     // Headers para permisos de geolocalización
     headers: {
       "Permissions-Policy": "geolocation=*",
-      "Feature-Policy": "geolocation *"
+      //"Feature-Policy": "geolocation *"
     }
   },
   // Para definir variables globales

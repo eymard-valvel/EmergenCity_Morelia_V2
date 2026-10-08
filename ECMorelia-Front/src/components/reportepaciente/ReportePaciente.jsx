@@ -849,7 +849,7 @@ const solicitarMedico = () => {
 
           <form onSubmit={handleSubmit}>
             <details className="priority-red" open>
-              <summary>A y F. Datos y Motivo</summary>
+              <summary>Datos y Motivo</summary>
               <div className="section-content">
                 <div className="grid-2">
                   <div><label>Folio</label><input type="text" readOnly value={reporte.seccionA.folio || 'Pendiente'} disabled /></div>
@@ -890,7 +890,7 @@ const solicitarMedico = () => {
             </details>
 
             <details className="priority-yellow">
-              <summary>C y D. Localización y Paciente</summary>
+              <summary>Localización y Paciente</summary>
               <div className="section-content">
                 <div>
                   <label>Dirección del Incidente</label>
@@ -916,13 +916,13 @@ const solicitarMedico = () => {
             </details>
 
             <details className="priority-yellow">
-              <summary>H. Evaluación Primaria y Glasgow</summary>
+              <summary>Evaluación Primaria y Glasgow</summary>
               <div className="section-content">
                 <div className="grid-2">
                   <div><label>Vía Aérea</label><select value={reporte.seccionH.via_aerea} onChange={e => handleChange(['seccionH', 'via_aerea'], e.target.value)}><option>Libre</option><option>Comprometida</option></select></div>
                   <div><label>Ventilación</label><select value={reporte.seccionH.ventilacion} onChange={e => handleChange(['seccionH', 'ventilacion'], e.target.value)}><option>Adecuada</option><option>Dificultosa</option></select></div>
                 </div>
-                <div style={{ padding: '14px', background: 'var(--bg-light)', borderRadius: '8px', border: '1px solid var(--border-light)' }}>
+                <div style={{ padding: '14px', background: '#1e293b', borderRadius: '8px', border: '1px solid var(--border-light)' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}>
                     <span style={{ fontWeight: 700, fontSize: '0.9rem' }}>Total Glasgow: {total}</span>
                   </div>
@@ -936,7 +936,7 @@ const solicitarMedico = () => {
             </details>
 
             <details className="priority-yellow">
-              <summary>I. Signos Vitales</summary>
+              <summary>Signos Vitales</summary>
               <div className="section-content">
                 <div className="grid-3">
                   <div><label>FC</label><input type="number" value={reporte.seccionI.fc} onChange={e => handleChange(['seccionI', 'fc'], e.target.value)} /></div>
@@ -954,7 +954,7 @@ const solicitarMedico = () => {
             </details>
 
             <details className="priority-green">
-              <summary>N y O. Destino y Cierre</summary>
+              <summary>Destino y Cierre</summary>
               <div className="section-content">
                 <div className="grid-2">
                   <div style={{ gridColumn: 'span 2' }}>
