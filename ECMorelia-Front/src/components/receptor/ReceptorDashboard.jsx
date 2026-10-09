@@ -549,55 +549,82 @@ useEffect(() => { saveLocal('receptor', 'serviceHistory', serviceHistory); }, [s
 };
 
 // ---------- SUB-COMPONENTES ----------
-const EmergencyCard = ({ emergency: em }) => {
+const EmergencyCard = ({ emergency: em, onComplete }) => {
   const statusColor = EMERGENCY_STATUS_COLORS[em.status] || '#64748b';
   const statusLabel = EMERGENCY_STATUS_LABELS[em.status] || (em.status || '').toUpperCase();
+  const isOperatorCase = em.callId?.startsWith('OP-');
+
   return (
     <Box p={4} borderRadius="xl" bg="#18181b" border="1px solid #27272a" borderLeft="6px solid" borderLeftColor={statusColor}>
+      {/* ── FILA DEL FOLIO + BADGE ESTADO + CHIP ORIGEN ── */}
       <Flex justify="space-between" align="center" mb={2}>
-        <Text fontWeight="900" color="#f8fafc" fontSize="16px">{em.callId}</Text>
-        
-        <Badge fontSize="10px" fontWeight="900" px={2} py={1} borderRadius="md" bg={statusColor} color="white">{statusLabel}</Badge>
+        <HStack spacing={2} minW={0}>
+          <Text fontWeight="900" color="#f8fafc" fontSize="16px" noOfLines={1}>
+            {em.callId}
+          </Text>
+          {isOperatorCase && (
+            <Badge
+              fontSize="9px"
+              fontWeight="900"
+              px={2}
+              py={0.5}
+              borderRadius="sm"
+              bg="#7c3aed"
+              color="white"
+            >
+              OPERADOR
+            </Badge>
+          )}
+        </HStack>
+        <Badge fontSize="10px" fontWeight="900" px={2} py={1} borderRadius="md" bg={statusColor} color="white">
+          {statusLabel}
+        </Badge>
       </Flex>
+
       <Text fontSize="14px" fontWeight="800" color="#38bdf8" mb={1}>{em.emergencyType}</Text>
       {em.address && <Text fontSize="12px" color="#a1a1aa" noOfLines={1} mb={2}>📍 {em.address}</Text>}
+
       {em.status === 'assigned' && (
         <HStack spacing={2} mt={3} pt={3} borderTop="1px solid #27272a">
           <Icon as={FaAmbulance} color="#10b981" />
-          <Text fontSize="13px" fontWeight="800" color="#10b981">{em.assignedAmbulanceName || em.assignedAmbulanceId}</Text>
+          <Text fontSize="13px" fontWeight="800" color="#10b981">
+            {em.assignedAmbulanceName || em.assignedAmbulanceId}
+          </Text>
         </HStack>
       )}
+
       {em.status === 'pending' && em.lastAssignedAmbulanceName && (
-  <HStack spacing={2} mt={3} pt={3} borderTop="1px solid #27272a">
-    <Icon as={FaAmbulance} color="#f59e0b" />
-    <VStack align="start" spacing={0}>
-      <Text fontSize="11px" color="#a1a1aa" fontWeight="800">ÚLTIMA UNIDAD ASIGNADA</Text>
-      <Text fontSize="13px" fontWeight="800" color="#f59e0b">
-        {em.lastAssignedAmbulanceName}
-      </Text>
-      {em.unassignedReason === 'ambulance_disconnected' && (
-        <Text fontSize="10px" color="#71717a">Se desconectó del sistema</Text>
+        <HStack spacing={2} mt={3} pt={3} borderTop="1px solid #27272a">
+          <Icon as={FaAmbulance} color="#f59e0b" />
+          <VStack align="start" spacing={0}>
+            <Text fontSize="11px" color="#a1a1aa" fontWeight="800">ÚLTIMA UNIDAD ASIGNADA</Text>
+            <Text fontSize="13px" fontWeight="800" color="#f59e0b">
+              {em.lastAssignedAmbulanceName}
+            </Text>
+            {em.unassignedReason === 'ambulance_disconnected' && (
+              <Text fontSize="10px" color="#71717a">Se desconectó del sistema</Text>
+            )}
+          </VStack>
+        </HStack>
       )}
-    </VStack>
-  </HStack>
-)}
+
       {em.status === 'assigned' && (
-  <Button
-    mt={3}
-    w="100%"
-    h="50px"
-    bg="transparent"
-    color="#ef4444"
-    border="1px solid #ef4444"
-    fontWeight="800"
-    fontSize="13px"
-    letterSpacing="0.5px"
-    _hover={{ bg: 'rgba(239,68,68,0.15)' }}
-    onClick={() => onComplete(em.callId)}
-  >
-    MARCAR COMO FINALIZADO
-  </Button>
-)}
+        <Button
+          mt={3}
+          w="100%"
+          h="50px"
+          bg="transparent"
+          color="#ef4444"
+          border="1px solid #ef4444"
+          fontWeight="800"
+          fontSize="13px"
+          letterSpacing="0.5px"
+          _hover={{ bg: 'rgba(239,68,68,0.15)' }}
+          onClick={() => onComplete && onComplete(em.callId)}
+        >
+          MARCAR COMO FINALIZADO
+        </Button>
+      )}
     </Box>
   );
 };

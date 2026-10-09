@@ -8,6 +8,15 @@ import { readLocal, saveLocal } from '../../helpers/persistence.js';
 const WS_URL = resolveWsUrl();
 const HEARTBEAT_INTERVAL_MS = 20000;
 
+const PASOS_TIEMPO = [
+  { key: 'activacion',        label: 'ACTIVACIÓN',           short: 'ACT' },
+  { key: 'salida_base',       label: 'SALÍ DE BASE',         short: 'BASE' },
+  { key: 'llegada_escena',    label: 'LLEGUÉ A ESCENA',      short: 'ESCENA' },
+  { key: 'primer_contacto',   label: 'CONTACTO PACIENTE',    short: 'CONTACTO' },
+  { key: 'salida_escena',     label: 'SALIENDO DE ESCENA',   short: 'SALIDA' },
+  { key: 'llegada_hospital',  label: 'LLEGUÉ AL HOSPITAL',   short: 'HOSPITAL' },
+];
+
 const API_URL = (import.meta.env.VITE_API || 'https://emergencity-morelia-v2.onrender.com').replace(/\/+$/, '');
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
 
@@ -380,8 +389,8 @@ const ReportePaciente = () => {
 
         // Caso cerrado
         if (parsed.type === 'emergency_case_closed') {
-          setCasoFinalizado(true);
-          mostrarNotificacion('Servicio cerrado por el centro regulador. Puede enviar el reporte final.', 'info');
+  setCasoFinalizado(true);
+  mostrarNotificacion('Servicio cerrado. Puede enviar reporte final antes de reiniciar.', 'info');
         }
       } catch (e) { console.error('WS error:', e); }
     };
@@ -960,32 +969,71 @@ const ReportePaciente = () => {
 
                 <div>
                   <label style={{ marginBottom: 10 }}>MARCAS DE TIEMPO RÁPIDAS</label>
-                  <div className="quick-times">
-                    <button type="button" className={`quick-btn ${reporte.seccionB.activacion ? 'done' : ''}`}
-                      onClick={() => marcarHora('activacion')}>
-                      ACTIVACIÓN {reporte.seccionB.activacion && `· ${reporte.seccionB.activacion}`}
-                    </button>
-                    <button type="button" className={`quick-btn ${reporte.seccionB.salida_base ? 'done' : ''}`}
-                      onClick={() => marcarHora('salida_base')}>
-                      SALÍ DE BASE {reporte.seccionB.salida_base && `· ${reporte.seccionB.salida_base}`}
-                    </button>
-                    <button type="button" className={`quick-btn ${reporte.seccionB.llegada_escena ? 'done' : ''}`}
-                      onClick={() => marcarHora('llegada_escena')}>
-                      LLEGUÉ A ESCENA {reporte.seccionB.llegada_escena && `· ${reporte.seccionB.llegada_escena}`}
-                    </button>
-                    <button type="button" className={`quick-btn ${reporte.seccionB.primer_contacto ? 'done' : ''}`}
-                      onClick={() => marcarHora('primer_contacto')}>
-                      CONTACTO PACIENTE {reporte.seccionB.primer_contacto && `· ${reporte.seccionB.primer_contacto}`}
-                    </button>
-                    <button type="button" className={`quick-btn ${reporte.seccionB.salida_escena ? 'done' : ''}`}
-                      onClick={() => marcarHora('salida_escena')}>
-                      SALIENDO DE ESCENA {reporte.seccionB.salida_escena && `· ${reporte.seccionB.salida_escena}`}
-                    </button>
-                    <button type="button" className={`quick-btn ${reporte.seccionB.llegada_hospital ? 'done' : ''}`}
-                      onClick={() => marcarHora('llegada_hospital')}>
-                      LLEGUÉ AL HOSPITAL {reporte.seccionB.llegada_hospital && `· ${reporte.seccionB.llegada_hospital}`}
-                    </button>
-                  </div>
+                  <div>
+  <label style={{ marginBottom: 10 }}>MARCAS DE TIEMPO (flujo)</label>
+  {(() => {
+    const idxActual = PASOS_TIEMPO.findIndex(p => !reporte.seccionB[p.key]);
+    const completo = idxActual === -1;
+    const pasoActual = completo ? null : PASOS_TIEMPO[idxActual];
+    return (
+      <>
+        <button
+          type="button"
+          disabled={completo}
+          onClick={() => {
+            if (pasoActual) {
+              const hora = ahoraHHMM();
+              handleChange(['seccionB', pasoActual.key], hora);
+              mostrarNotificacion(`${pasoActual.label}: ${hora}`, 'success');
+            }
+          }}
+          style={{
+            width: '100%',
+            padding: '18px 14px',
+            borderRadius: '12px',
+            background: completo ? 'rgba(16,185,129,0.15)' : 'rgba(14,165,233,0.15)',
+            border: `2px solid ${completo ? '#10b981' : '#0ea5e9'}`,
+            color: completo ? '#10b981' : '#0ea5e9',
+            fontWeight: 900,
+            fontSize: '0.95rem',
+            letterSpacing: '1px',
+            cursor: completo ? 'default' : 'pointer',
+            transition: 'all 0.15s',
+          }}
+        >
+          {completo
+            ? '✓ TODAS LAS MARCAS REGISTRADAS'
+            : `▶ MARCAR: ${pasoActual.label}`}
+        </button>
+
+        <div style={{
+          marginTop: 12,
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 6
+        }}>
+          {PASOS_TIEMPO.map((p) => {
+            const hecho = !!reporte.seccionB[p.key];
+            return (
+              <span key={p.key} style={{
+                padding: '4px 10px',
+                borderRadius: 20,
+                fontSize: '0.7rem',
+                fontWeight: 900,
+                letterSpacing: '0.5px',
+                background: hecho ? 'rgba(16,185,129,0.15)' : 'rgba(100,116,139,0.15)',
+                border: `1px solid ${hecho ? '#10b981' : '#475569'}`,
+                color: hecho ? '#10b981' : '#94a3b8',
+              }}>
+                {hecho ? '✓ ' : '○ '}{p.short} {hecho && reporte.seccionB[p.key]}
+              </span>
+            );
+          })}
+        </div>
+      </>
+    );
+  })()}
+</div>
                 </div>
 
                 <div className="grid-3">
@@ -1104,59 +1152,112 @@ const ReportePaciente = () => {
           <Outlet />
         </div>
 
-        <div className="bottom-action-area">
-          <div className="btn-row">
-            <button
-              onClick={() => enviarVersion(true)}
-              className="btn-urgent"
-              disabled={!puedeEnviar}
-            >
-              URGENTE
-            </button>
-            <button
-              onClick={handleSubmit}
-              className={`btn-sync ${isReportComplete ? 'btn-complete' : ''}`}
-              disabled={!puedeEnviar || !isReportComplete}
-              title={!isReportComplete ? 'Complete los campos obligatorios para enviar informe completo' : ''}
-            >
-              {!puedeEnviar
-                ? 'ESPERANDO HOSPITAL'
-                : isReportComplete
-                  ? 'ENVIAR INFORME COMPLETO'
-                  : 'ENVIAR VERSIÓN PARCIAL'}
-            </button>
-          </div>
+<div className="bottom-action-area">
+  <div className="btn-row">
+    <button
+      onClick={() => enviarVersion(true)}
+      className="btn-urgent"
+      disabled={!puedeEnviar || casoFinalizado}
+      title={casoFinalizado ? 'Servicio cerrado por el CRUM' : ''}
+    >
+      URGENTE
+    </button>
+    <button
+      onClick={handleSubmit}
+      className={`btn-sync ${isReportComplete ? 'btn-complete' : ''}`}
+      disabled={!puedeEnviar || !isReportComplete || casoFinalizado}
+      title={!isReportComplete ? 'Complete los campos obligatorios para enviar hoja final' : ''}
+    >
+      {!puedeEnviar
+        ? 'ESPERANDO HOSPITAL'
+        : casoFinalizado
+          ? 'SERVICIO CERRADO'
+          : isReportComplete
+            ? 'ENVIAR HOJA DE ATENCIÓN'
+            : 'ENVIAR VERSIÓN PARCIAL'}
+    </button>
+  </div>
 
-          {!isReportComplete && puedeEnviar && (
-            <button
-              onClick={() => enviarVersion(false)}
-              style={{
-                width: '100%', padding: '14px',
-                background: 'transparent', color: '#94a3b8',
-                border: '1px dashed #334155', borderRadius: '12px',
-                fontSize: '0.85rem', fontWeight: 700, cursor: 'pointer',
-                textTransform: 'uppercase', letterSpacing: '0.5px'
-              }}
-            >
-              ENVIAR VERSIÓN PARCIAL AL HOSPITAL
-            </button>
-          )}
+  {puedeEnviar && !isReportComplete && !casoFinalizado && (
+    <button
+      onClick={() => enviarVersion(false)}
+      style={{
+        width: '100%', padding: '14px',
+        background: 'transparent', color: '#94a3b8',
+        border: '1px dashed #334155', borderRadius: '12px',
+        fontSize: '0.85rem', fontWeight: 700, cursor: 'pointer',
+        textTransform: 'uppercase', letterSpacing: '0.5px'
+      }}
+    >
+      ENVIAR VERSIÓN PARCIAL AL HOSPITAL
+    </button>
+  )}
 
-          {puedeEnviar && (
-            <button
-              onClick={solicitarMedico}
-              style={{
-                width: '100%', padding: '14px',
-                background: '#0ea5e9', color: 'white',
-                border: 'none', borderRadius: '12px',
-                fontSize: '0.95rem', fontWeight: 900, letterSpacing: '1px',
-                cursor: 'pointer', textTransform: 'uppercase', marginTop: '4px'
-              }}
-            >
-              SOLICITAR MÉDICO
-            </button>
-          )}
-        </div>
+  {puedeEnviar && (
+    <button
+      onClick={solicitarMedico}
+      style={{
+        width: '100%', padding: '14px',
+        background: '#0ea5e9', color: 'white',
+        border: 'none', borderRadius: '12px',
+        fontSize: '0.95rem', fontWeight: 900, letterSpacing: '1px',
+        cursor: 'pointer', textTransform: 'uppercase', marginTop: '4px'
+      }}
+    >
+      SOLICITAR MÉDICO
+    </button>
+  )}
+
+  {/* Botón manual para cerrar el servicio (fallback) */}
+{/* Botón manual para cerrar el servicio (fallback) */}
+{reporte.callId && (
+  <button
+    onClick={() => {
+      if (!window.confirm('¿Confirmar cierre del servicio? El folio se liberará del sistema.')) return;
+
+      // 1) Avisar al servidor que el servicio terminó
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({
+          type: 'emergency_completed',
+          ambulanceId: configInicial.ambulanciaId,
+          callId: reporte.callId,
+          completedBy: 'paramedico'
+        }));
+      }
+
+      // 2) Marcar visualmente como cerrado
+      setCasoFinalizado(true);
+      mostrarNotificacion('Servicio cerrado manualmente', 'info');
+
+      // 3) Tras 400ms, limpiar el estado local para dejar la interfaz
+      //    "en blanco" lista para una nueva emergencia
+      setTimeout(() => {
+        setReporte(prev => ({
+          ...REPORTE_INICIAL,
+          id_ambulancia: prev.id_ambulancia,
+          tripulacion: prev.tripulacion
+        }));
+        setHospitalAceptado(null);
+        setHospitalSeleccionado('');
+        setCasoFinalizado(false);
+      }, 400);
+    }}
+    disabled={casoFinalizado}
+    style={{
+      width: '100%', padding: '12px',
+      background: 'transparent',
+      color: casoFinalizado ? '#52525b' : '#ef4444',
+      border: `1px solid ${casoFinalizado ? '#334155' : '#ef4444'}`,
+      borderRadius: '10px',
+      fontSize: '0.75rem', fontWeight: 900, letterSpacing: '0.5px',
+      cursor: casoFinalizado ? 'not-allowed' : 'pointer',
+      textTransform: 'uppercase', marginTop: '4px'
+    }}
+  >
+    {casoFinalizado ? '✓ SERVICIO CONCLUIDO' : 'DAR CONCLUIDO EL SERVICIO'}
+  </button>
+)}
+</div>
       </div>
 
       <VoiceAssistant

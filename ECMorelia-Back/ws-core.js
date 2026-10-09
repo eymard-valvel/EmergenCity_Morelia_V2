@@ -736,21 +736,23 @@ function handleRegisterDoctor(ws, data) {
   ws._doctorId = doctorId;
   console.log(`👨‍⚕️ Doctor ${doctorId} (${record.especialidad})`);
 
-  const recentReports = [];
-  prehospitalReports.forEach((record2, callId) => {
-    const last = record2.versions[record2.versions.length - 1];
-    if (last) {
-      recentReports.push({
-        callId,
-        version: record2.currentVersion,
-        report: last.report,
-        patientInfo: record2.patientInfo,
-        hospitalId: record2.hospitalId,
-        ambulanceId: record2.ambulanceId,
-        timestamp: last.timestamp
-      });
-    }
-  });
+const recentReports = [];
+prehospitalReports.forEach((record, callId) => {
+  const latest = record.latest;
+  if (latest) {
+    recentReports.push({
+      callId,
+      version: latest.version,
+      isFinal: latest.isFinal,
+      urgentOnly: latest.urgentOnly,
+      report: latest.report,
+      patientInfo: record.patientInfo,
+      hospitalId: record.hospitalId,
+      ambulanceId: record.ambulanceId,
+      timestamp: latest.timestamp
+    });
+  }
+});
 
   sendMessage(ws, {
     type: 'doctor_registered',
@@ -1825,90 +1827,132 @@ function handleHospitalNote(data) {
 }
 
 function handlePrehospitalReportUpdate(data) {
-  const { callId, report, version, urgentOnly, hospitalId, ambulanceId, patientInfo } = data;
+  const { callId, report, urgentOnly, hospitalId, ambulanceId, patientInfo } = data;
   if (!callId) return;
+
   let record = prehospitalReports.get(callId);
   if (!record) {
     record = {
-      callId, versions: [], currentVersion: 0,
+      callId,
+      currentVersion: 0,
+      latest: null,           // SOLO guardamos la última
+      versions: [],           // historial compacto para auditoría
       hospitalId: hospitalId ? String(hospitalId) : null,
       ambulanceId: ambulanceId ? String(ambulanceId) : null,
       patientInfo: patientInfo || {},
       createdAt: new Date().toISOString()
     };
   }
+
   record.currentVersion += 1;
-  record.versions.push({
-    version: record.currentVersion, report, urgentOnly: !!urgentOnly,
-    timestamp: new Date().toISOString()
+  const version = record.currentVersion;
+
+  // Determinar si es versión final (no urgente Y reporte completo)
+  const CAMPOS_FINALES = [
+    ['seccionD', 'nombre'], ['seccionD', 'edad'], ['seccionD', 'sexo'],
+    ['seccionF', 'tipo_urgencia'], ['seccionF', 'motivo_principal'],
+    ['seccionI', 'fc'], ['seccionI', 'fr'], ['seccionI', 'spo2'], ['seccionI', 'ta'],
+    ['seccionN', 'diagnostico_presuntivo'],
+  ];
+  const completo = CAMPOS_FINALES.every(([sec, key]) => {
+    const v = report?.[sec]?.[key];
+    return v !== undefined && v !== null && String(v).trim() !== '';
   });
+
+  const isFinal = !urgentOnly && completo;
+
+  const entry = {
+    version,
+    report,
+    urgentOnly: !!urgentOnly,
+    isFinal,
+    timestamp: new Date().toISOString()
+  };
+
+  record.latest = entry;
+  record.versions.push({
+    version,
+    isFinal,
+    urgentOnly: !!urgentOnly,
+    timestamp: entry.timestamp,
+    report
+  });
+  // Mantener solo las últimas 20 versiones por auditoría
+  if (record.versions.length > 20) record.versions = record.versions.slice(-20);
+
   if (hospitalId) record.hospitalId = String(hospitalId);
   if (ambulanceId) record.ambulanceId = String(ambulanceId);
   if (patientInfo) record.patientInfo = { ...record.patientInfo, ...patientInfo };
+
   prehospitalReports.set(callId, record);
+  console.log(`📝 Reporte ${callId} v${version} · ${isFinal ? 'FINAL' : 'URGENTE'}`);
 
-  console.log(`📝 Reporte prehospitalario ${callId} v${record.currentVersion}`);
-
-  if (record.hospitalId) {
-    const h = activeHospitals.get(record.hospitalId);
-    if (h?.ws?.readyState === WebSocket.OPEN) {
-      sendMessage(h.ws, {
-        type: 'prehospital_report_update',
-        callId, version: record.currentVersion, urgentOnly: !!urgentOnly,
-        report, patientInfo: record.patientInfo,
-        timestamp: new Date().toISOString()
-      });
-    }
-  }
-
-  const em = activeEmergencies.get(callId);
-  if (em?.doctorId) {
-    const doc = activeDoctors.get(em.doctorId);
-    if (doc?.ws?.readyState === WebSocket.OPEN) {
-      sendMessage(doc.ws, {
-        type: 'prehospital_report_update',
-        callId,
-        version: record.currentVersion,
-        urgentOnly: !!urgentOnly,
-        report,
-        patientInfo: record.patientInfo,
-        hospitalId: record.hospitalId,
-        ambulanceId: record.ambulanceId,
-        triage: report?.triaje,
-        timestamp: new Date().toISOString()
-      });
-    }
-  }
-
-  broadcastToDoctors({
-    type: 'prehospital_report_broadcast',
+  const broadcastPayload = {
+    type: 'prehospital_report_update',
     callId,
-    version: record.currentVersion,
+    version,
     urgentOnly: !!urgentOnly,
+    isFinal,
+    report,
     patientInfo: record.patientInfo,
     hospitalId: record.hospitalId,
     ambulanceId: record.ambulanceId,
     triage: report?.triaje,
-    timestamp: new Date().toISOString()
+    timestamp: entry.timestamp
+  };
+
+  // Hospital
+  if (record.hospitalId) {
+    const h = activeHospitals.get(record.hospitalId);
+    if (h?.ws?.readyState === WebSocket.OPEN) sendMessage(h.ws, broadcastPayload);
+  }
+
+  // Doctor asignado
+  const em = activeEmergencies.get(callId);
+  if (em?.doctorId) {
+    const doc = activeDoctors.get(em.doctorId);
+    if (doc?.ws?.readyState === WebSocket.OPEN) sendMessage(doc.ws, broadcastPayload);
+  }
+
+  // Broadcast general a doctores (por si no hay uno asignado)
+  broadcastToDoctors({
+    type: 'prehospital_report_broadcast',
+    ...broadcastPayload
   });
 
+  // ACK al paramédico
   broadcastToParamedics({
     type: 'prehospital_report_ack',
-    callId, version: record.currentVersion, urgentOnly: !!urgentOnly,
+    callId,
+    version,
+    urgentOnly: !!urgentOnly,
+    isFinal,
     timestamp: new Date().toISOString()
   });
 }
+
+
 
 function handlePrehospitalReportGet(ws, data) {
   const { callId } = data;
   if (!callId) return sendError(ws, 'callId requerido', 'BAD_PAYLOAD');
   const record = prehospitalReports.get(callId);
   if (!record) return sendError(ws, 'Reporte no encontrado', 'NOT_FOUND');
+
+  // Solo devolvemos la ÚLTIMA versión al cliente
+  const latest = record.latest || (record.versions.length ? record.versions[record.versions.length - 1] : null);
+
   sendMessage(ws, {
-    type: 'prehospital_report_history',
-    callId, versions: record.versions, currentVersion: record.currentVersion,
-    patientInfo: record.patientInfo, hospitalId: record.hospitalId,
-    timestamp: new Date().toISOString()
+    type: 'prehospital_report_snapshot',
+    callId,
+    version: latest?.version || 0,
+    isFinal: latest?.isFinal || false,
+    urgentOnly: latest?.urgentOnly || false,
+    report: latest?.report || null,
+    patientInfo: record.patientInfo,
+    hospitalId: record.hospitalId,
+    ambulanceId: record.ambulanceId,
+    timestamp: latest?.timestamp || record.createdAt
   });
 }
 
@@ -2144,7 +2188,7 @@ async function handleMessage(ws, data) {
     case 'location_update':             return handleLocationUpdate(data);
     case 'auto_request_hospital':        return autoRequestHospital(ws, data);
     case 'operator_initiated_emergency': return handleOperatorInitiatedEmergency(ws, data);
-    case 'receptor_complete_service':   return handleReceptorCompleteService(ws, data);
+    case 'receptor_complete_service': return handleReceptorCompleteService(ws, data);
     case 'request_ranked_hospitals':    return handleRequestRankedHospitals(ws, data);
     case 'ambulance_status_update':     return handleAmbulanceStatusUpdate(ws, data);
     case 'emergency_call':              return handleEmergencyCall(ws, data);
@@ -2161,7 +2205,7 @@ async function handleMessage(ws, data) {
     case 'hospital_accept_patient':     return handleHospitalAcceptPatient(data);
     case 'hospital_reject_patient':     return handleHospitalRejectPatient(data);
     case 'prehospital_report_update':   return handlePrehospitalReportUpdate(data);
-    case 'prehospital_report_get':      return handlePrehospitalReportGet(ws, data);
+    case 'prehospital_report_get':    return handlePrehospitalReportGet(ws, data);
     case 'request_doctors_list':        return handleRequestDoctorsList(ws);
     case 'assign_doctor':               return handleAssignDoctor(data);
     case 'doctor_ack':                  return handleDoctorAck(data);

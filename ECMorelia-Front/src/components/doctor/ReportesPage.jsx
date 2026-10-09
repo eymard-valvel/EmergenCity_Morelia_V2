@@ -79,49 +79,93 @@ const ReportesPage = () => {
       try {
         const data = JSON.parse(event.data);
 
-        if (data.type === 'doctor_reports_history') {
-          const historical = (data.reports || []).map(r => ({
-            callId: r.callId,
-            paciente: r.report?.seccionD ? {
-              nombre: r.report.seccionD.nombre || 'Paciente',
-              edad: r.report.seccionD.edad,
-              sexo: r.report.seccionD.sexo,
-              motivo_urgencia: r.report.seccionF?.motivo_principal,
-              descripcion_lesion: r.report.seccionH?.lesiones_exposicion,
-              observaciones: r.report.seccionN?.diagnostico_presuntivo
-            } : null,
-            signos_vitales: r.report?.seccionI ? {
-              frecuencia_cardiaca: r.report.seccionI.fc,
-              saturacion_oxigeno: r.report.seccionI.spo2,
-              tension_arterial: r.report.seccionI.ta,
-              nivel_glucosa: r.report.seccionI.glucemia
-            } : null,
-            intervenciones: r.report?.intervenciones || [],
-            codigo_prioridad_color: r.report?.triaje?.color || '#ef4444',
-            codigo_prioridad: r.report?.triaje?.label || 'TRIAGE',
-            hora_estimada_llegada: r.report?.seccionN?.eta,
-            id_ambulancia: r.ambulanceId,
-            ubicacion_actual: r.report?.seccionC?.direccion,
-            triaje: r.report?.triaje,
-            glasgow: r.report?.glasgow,
-            _live: true
-          }));
-          if (historical.length > 0) {
-            setReports(prev => {
-              const merged = [...historical];
-              prev.forEach(p => {
-                if (!merged.some(m => m.callId === p.callId)) merged.push(p);
-              });
-              return merged;
-            });
-          }
-        }
+if (data.type === 'doctor_reports_history') {
+  const historical = (data.reports || []).map(r => ({
+    callId: r.callId,
+    version: r.version,
+    isFinal: r.isFinal,
+    urgentOnly: r.urgentOnly,
+    paciente: r.report?.seccionD ? {
+      nombre: r.report.seccionD.nombre || 'Paciente',
+      edad: r.report.seccionD.edad,
+      sexo: r.report.seccionD.sexo,
+      motivo_urgencia: r.report.seccionF?.motivo_principal,
+      descripcion_lesion: r.report.seccionH?.lesiones_exposicion,
+      observaciones: r.report.seccionN?.diagnostico_presuntivo
+    } : null,
+    signos_vitales: r.report?.seccionI ? {
+      frecuencia_cardiaca: r.report.seccionI.fc,
+      frecuencia_respiratoria: r.report.seccionI.fr,
+      saturacion_oxigeno: r.report.seccionI.spo2,
+      tension_arterial: r.report.seccionI.ta,
+      temperatura: r.report.seccionI.temp,
+      nivel_glucosa: r.report.seccionI.glucemia
+    } : null,
+    intervenciones: r.report?.intervenciones || [],
+    codigo_prioridad_color: r.report?.triaje?.color || '#ef4444',
+    codigo_prioridad: r.report?.triaje?.label || 'TRIAGE',
+    hora_estimada_llegada: r.report?.seccionN?.eta,
+    id_ambulancia: r.ambulanceId,
+    ubicacion_actual: r.report?.seccionC?.direccion,
+    triaje: r.report?.triaje,
+    glasgow: r.report?.glasgow,
+    _live: true
+  }));
 
-        if (data.type === 'prehospital_report_broadcast') {
-          setLiveUpdates(prev => [data, ...prev].slice(0, 50));
-          showToast('info', `Reporte v${data.version} recibido`, `Folio ${data.callId}`);
-          fetchReports();
-        }
+  // SOLO la última por folio (dedupe por callId, quedarse con version más alta)
+  setReports(prev => {
+    const map = new Map();
+    [...historical, ...prev].forEach(r => {
+      const key = r.callId;
+      if (!key) return;
+      const existing = map.get(key);
+      if (!existing || (r.version || 0) > (existing.version || 0)) map.set(key, r);
+    });
+    return Array.from(map.values()).sort((a, b) => (b.version || 0) - (a.version || 0));
+  });
+}
+
+if (data.type === 'prehospital_report_broadcast' || data.type === 'prehospital_report_update') {
+  const incoming = {
+    callId: data.callId,
+    version: data.version,
+    isFinal: data.isFinal,
+    urgentOnly: data.urgentOnly,
+    paciente: data.report?.seccionD ? {
+      nombre: data.report.seccionD.nombre || 'Paciente',
+      edad: data.report.seccionD.edad,
+      sexo: data.report.seccionD.sexo,
+      motivo_urgencia: data.report.seccionF?.motivo_principal,
+      descripcion_lesion: data.report.seccionH?.lesiones_exposicion,
+      observaciones: data.report.seccionN?.diagnostico_presuntivo
+    } : null,
+    signos_vitales: data.report?.seccionI ? {
+      frecuencia_cardiaca: data.report.seccionI.fc,
+      frecuencia_respiratoria: data.report.seccionI.fr,
+      saturacion_oxigeno: data.report.seccionI.spo2,
+      tension_arterial: data.report.seccionI.ta,
+      temperatura: data.report.seccionI.temp,
+      nivel_glucosa: data.report.seccionI.glucemia
+    } : null,
+    intervenciones: data.report?.intervenciones || [],
+    codigo_prioridad_color: data.report?.triaje?.color || '#ef4444',
+    codigo_prioridad: data.report?.triaje?.label || 'TRIAGE',
+    hora_estimada_llegada: data.report?.seccionN?.eta,
+    id_ambulancia: data.ambulanceId,
+    ubicacion_actual: data.report?.seccionC?.direccion,
+    triaje: data.report?.triaje,
+    glasgow: data.report?.glasgow,
+    _live: true
+  };
+
+  setReports(prev => {
+    const filtered = prev.filter(r => r.callId !== incoming.callId);
+    return [incoming, ...filtered].sort((a, b) => (b.version || 0) - (a.version || 0));
+  });
+
+  showToast('info', `Actualización v${data.version}`, `Folio ${data.callId}`);
+  // NO forzamos fetchReports aquí para evitar duplicados
+}
 
         if (data.type === 'doctor_assigned') {
           showToast('success', 'Paciente asignado', `Folio ${data.callId}`);
@@ -234,59 +278,87 @@ const ReportesPage = () => {
         ) : (
           <Box bg="#18181b" borderRadius="xl" border="1px solid #27272a" overflow="hidden">
             <Box as="table" w="100%">
-              <Box as="thead" bg="#0f0f10" borderBottom="1px solid #27272a">
-                <Box as="tr">
-                  <Box as="th" p={4} textAlign="left" fontSize="11px" fontWeight="900" color="#a1a1aa" letterSpacing="1px">FOLIO</Box>
-                  <Box as="th" p={4} textAlign="left" fontSize="11px" fontWeight="900" color="#a1a1aa" letterSpacing="1px">PACIENTE</Box>
-                  <Box as="th" p={4} textAlign="left" fontSize="11px" fontWeight="900" color="#a1a1aa" letterSpacing="1px">EDAD/SEXO</Box>
-                  <Box as="th" p={4} textAlign="left" fontSize="11px" fontWeight="900" color="#a1a1aa" letterSpacing="1px">MOTIVO</Box>
-                  <Box as="th" p={4} textAlign="left" fontSize="11px" fontWeight="900" color="#a1a1aa" letterSpacing="1px">PRIORIDAD</Box>
-                  <Box as="th" p={4} textAlign="center" fontSize="11px" fontWeight="900" color="#a1a1aa" letterSpacing="1px">ACCIONES</Box>
-                </Box>
-              </Box>
+
+          <Box as="thead" bg="#0f0f10" borderBottom="1px solid #27272a">
+  <Box as="tr">
+    <Box as="th" p={4} textAlign="left" fontSize="11px" fontWeight="900" color="#a1a1aa" letterSpacing="1px">FOLIO</Box>
+    <Box as="th" p={4} textAlign="left" fontSize="11px" fontWeight="900" color="#a1a1aa" letterSpacing="1px">VERSIÓN</Box>
+    <Box as="th" p={4} textAlign="left" fontSize="11px" fontWeight="900" color="#a1a1aa" letterSpacing="1px">PACIENTE</Box>
+    <Box as="th" p={4} textAlign="left" fontSize="11px" fontWeight="900" color="#a1a1aa" letterSpacing="1px">EDAD/SEXO</Box>
+    <Box as="th" p={4} textAlign="left" fontSize="11px" fontWeight="900" color="#a1a1aa" letterSpacing="1px">MOTIVO</Box>
+    <Box as="th" p={4} textAlign="left" fontSize="11px" fontWeight="900" color="#a1a1aa" letterSpacing="1px">PRIORIDAD</Box>
+    <Box as="th" p={4} textAlign="center" fontSize="11px" fontWeight="900" color="#a1a1aa" letterSpacing="1px">ACCIONES</Box>
+  </Box>
+</Box>
+
               <Box as="tbody">
-                {reports.length === 0 ? (
-                  <Box as="tr">
-                    <Box as="td" colSpan={6} p={10} textAlign="center">
-                      <Icon as={FaFolderOpen} boxSize={10} color="#52525b" mb={3} />
-                      <Text color="#a1a1aa" fontWeight="800">Sin expedientes pendientes.</Text>
-                    </Box>
-                  </Box>
-                ) : reports.map((report, idx) => (
-                  <Box as="tr" key={idx} borderBottom="1px solid #27272a" _hover={{ bg: '#1f1f23' }}>
-                    <Box as="td" p={4}>
-                      <Text fontWeight="900" color="#38bdf8" fontSize="13px">
-                        {report.callId || report.id_reporte || 'S/F'}
-                      </Text>
-                    </Box>
-                    <Box as="td" p={4}>
-                      <Text fontWeight="800" color="white">{report.paciente?.nombre || 'Desconocido'}</Text>
-                    </Box>
-                    <Box as="td" p={4}>
-                      <Text color="#d4d4d8" fontSize="13px">
-                        {report.paciente?.edad || '--'} años / {report.paciente?.sexo || '--'}
-                      </Text>
-                    </Box>
-                    <Box as="td" p={4}>
-                      <Text color="#d4d4d8" fontSize="13px" noOfLines={1} maxW="200px">
-                        {report.paciente?.motivo_urgencia || 'General'}
-                      </Text>
-                    </Box>
-                    <Box as="td" p={4}>
-                      <Badge bg={report.codigo_prioridad_color || '#ef4444'} color="white" px={3} py={1} borderRadius="md" fontSize="11px" fontWeight="900">
-                        {report.codigo_prioridad || 'TRIAGE'}
-                      </Badge>
-                    </Box>
-                    <Box as="td" p={4} textAlign="center">
-                      <Button size="sm" h="45px" px={4} bg="#0284c7" color="white"
-                        fontSize="12px" fontWeight="900" _hover={{ bg: '#0369a1' }}
-                        onClick={() => verDetalles(report)}>
-                        VER EXPEDIENTE
-                      </Button>
-                    </Box>
-                  </Box>
-                ))}
-              </Box>
+  {reports.length === 0 ? (
+    <Box as="tr">
+      <Box as="td" colSpan={7} p={10} textAlign="center">
+        <Icon as={FaFolderOpen} boxSize={10} color="#52525b" mb={3} />
+        <Text color="#a1a1aa" fontWeight="800">Sin expedientes pendientes.</Text>
+      </Box>
+    </Box>
+  ) : reports.map((report, idx) => (
+    <Box as="tr" key={report.callId || idx} borderBottom="1px solid #27272a" _hover={{ bg: '#1f1f23' }}>
+
+      {/* COLUMNA 1: FOLIO */}
+      <Box as="td" p={4}>
+        <Text fontWeight="900" color="#38bdf8" fontSize="13px">
+          {report.callId || report.id_reporte || 'S/F'}
+        </Text>
+      </Box>
+
+      {/* COLUMNA 2: VERSIÓN (nueva) */}
+      <Box as="td" p={4}>
+        <Badge
+          bg={report.isFinal ? '#10b981' : '#f59e0b'}
+          color="white"
+          px={2} py={1} borderRadius="md"
+          fontSize="10px" fontWeight="900"
+        >
+          {report.isFinal ? `REPORTE FINAL v${report.version || 1}` : `URGENTE v${report.version || 1}`}
+        </Badge>
+      </Box>
+
+      {/* COLUMNA 3: PACIENTE */}
+      <Box as="td" p={4}>
+        <Text fontWeight="800" color="white">{report.paciente?.nombre || 'Desconocido'}</Text>
+      </Box>
+
+      {/* COLUMNA 4: EDAD / SEXO */}
+      <Box as="td" p={4}>
+        <Text color="#d4d4d8" fontSize="13px">
+          {report.paciente?.edad || '--'} años / {report.paciente?.sexo || '--'}
+        </Text>
+      </Box>
+
+      {/* COLUMNA 5: MOTIVO */}
+      <Box as="td" p={4}>
+        <Text color="#d4d4d8" fontSize="13px" noOfLines={1} maxW="200px">
+          {report.paciente?.motivo_urgencia || 'General'}
+        </Text>
+      </Box>
+
+      {/* COLUMNA 6: PRIORIDAD */}
+      <Box as="td" p={4}>
+        <Badge bg={report.codigo_prioridad_color || '#ef4444'} color="white" px={3} py={1} borderRadius="md" fontSize="11px" fontWeight="900">
+          {report.codigo_prioridad || 'TRIAGE'}
+        </Badge>
+      </Box>
+
+      {/* COLUMNA 7: ACCIONES */}
+      <Box as="td" p={4} textAlign="center">
+        <Button size="sm" h="45px" px={4} bg="#0284c7" color="white"
+          fontSize="12px" fontWeight="900" _hover={{ bg: '#0369a1' }}
+          onClick={() => verDetalles(report)}>
+          VER EXPEDIENTE
+        </Button>
+      </Box>
+    </Box>
+  ))}
+</Box>
+
             </Box>
           </Box>
         )}
@@ -325,9 +397,7 @@ const ReportesPage = () => {
                           <Text fontSize="12px" fontWeight="800" color="#0284c7" letterSpacing="1px">
                             REPORTE DE ATENCIÓN PREHOSPITALARIA
                           </Text>
-                          <Text fontSize="11px" color="#64748b" mt={0.5}>
-                            Centro Regulador de Urgencias Médicas (CRUM)
-                          </Text>
+                          
                         </Box>
                       </HStack>
                       <VStack align="end" spacing={1}>
@@ -499,9 +569,6 @@ const ReportesPage = () => {
                     {/* FOOTER */}
                     <Box borderTop="2px solid #e2e8f0" pt={3} mt={2}>
                       <Flex justify="space-between" align="center">
-                        <Text fontSize="9px" color="#64748b" fontWeight="700">
-                          Documento generado por EmergenCity Morelia · CRUM
-                        </Text>
                         <Text fontSize="9px" color="#64748b" fontWeight="700">
                           {new Date().toLocaleString('es-MX')}
                         </Text>

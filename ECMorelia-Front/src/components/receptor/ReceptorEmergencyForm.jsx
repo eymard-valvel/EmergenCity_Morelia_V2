@@ -48,6 +48,16 @@ const createEmptyPaciente = () => ({
   sexo: '', edad: '', consciente: '', respira: '', sangrado: '', atrapado: ''
 });
 
+const validarEdad = (raw) => {
+  if (raw === '' || raw === null || raw === undefined) return { ok: false, value: '', msg: '' };
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return { ok: false, value: raw, msg: 'Edad debe ser numérica' };
+  if (n < 0) return { ok: false, value: raw, msg: 'Edad no puede ser menor a 0' };
+  if (n > 100) return { ok: false, value: raw, msg: 'Edad no puede superar 100' };
+  if (!Number.isInteger(n)) return { ok: false, value: raw, msg: 'Edad debe ser entera' };
+  return { ok: true, value: String(n), msg: '' };
+};
+
 const formatResumenPaciente = (p, idx) => {
   const parts = [`P${idx + 1}`];
   if (p.sexo) parts.push(p.sexo);
@@ -820,51 +830,99 @@ const searchAddresses = useCallback((query) => {
 
 // ==================== SUB-COMPONENTES ====================
 
-const PacienteFields = ({ paciente, onChange }) => (
-  <SimpleGrid columns={2} spacingX={6} spacingY={6}>
-    <Box>
-      <Text fontSize="12px" color="#a1a1aa" mb={2} fontWeight="800">SEXO</Text>
-      <Select size="lg" bg="#18181b" borderColor="#3f3f46" color="white" _focus={{ borderColor: '#38bdf8' }} value={paciente.sexo} onChange={e => onChange('sexo', e.target.value)}>
-        <option style={{ background: '#18181b' }} value="">Seleccionar...</option>
-        <option style={{ background: '#18181b' }} value="Hombre">Hombre</option>
-        <option style={{ background: '#18181b' }} value="Mujer">Mujer</option>
-        <option style={{ background: '#18181b' }} value="N/S">No se sabe</option>
-      </Select>
-    </Box>
-    <Box>
-      <Text fontSize="12px" color="#a1a1aa" mb={2} fontWeight="800">EDAD APARENTE</Text>
-      <Input size="lg" bg="#18181b" border="1px solid #3f3f46" color="white" type="number" placeholder="Ej. 35" value={paciente.edad} onChange={e => onChange('edad', e.target.value)} _focus={{ borderColor: '#38bdf8', boxShadow: 'none' }} />
-    </Box>
-    <Box>
-      <Text fontSize="12px" color="#a1a1aa" mb={2} fontWeight="800">¿CONSCIENTE?</Text>
-      <Select size="lg" bg="#18181b" borderColor="#3f3f46" color="white" _focus={{ borderColor: '#38bdf8' }} value={paciente.consciente} onChange={e => onChange('consciente', e.target.value)}>
-        <option style={{ background: '#18181b' }} value="">Seleccionar...</option>
-        {OPCIONES_SINO_NS.map(o => <option key={o} style={{ background: '#18181b' }} value={o}>{o === 'N/S' ? 'No se sabe' : o}</option>)}
-      </Select>
-    </Box>
-    <Box>
-      <Text fontSize="12px" color="#a1a1aa" mb={2} fontWeight="800">¿RESPIRA?</Text>
-      <Select size="lg" bg="#18181b" borderColor="#3f3f46" color="white" _focus={{ borderColor: '#38bdf8' }} value={paciente.respira} onChange={e => onChange('respira', e.target.value)}>
-        <option style={{ background: '#18181b' }} value="">Seleccionar...</option>
-        {OPCIONES_SINO_NS.map(o => <option key={o} style={{ background: '#18181b' }} value={o}>{o === 'N/S' ? 'No se sabe' : o}</option>)}
-      </Select>
-    </Box>
-    <Box>
-      <Text fontSize="12px" color="#a1a1aa" mb={2} fontWeight="800">¿SANGRADO?</Text>
-      <Select size="lg" bg="#18181b" borderColor="#3f3f46" color="white" _focus={{ borderColor: '#38bdf8' }} value={paciente.sangrado} onChange={e => onChange('sangrado', e.target.value)}>
-        <option style={{ background: '#18181b' }} value="">Seleccionar...</option>
-        {OPCIONES_SINO_NS.map(o => <option key={o} style={{ background: '#18181b' }} value={o}>{o === 'N/S' ? 'No se sabe' : o}</option>)}
-      </Select>
-    </Box>
-    <Box>
-      <Text fontSize="12px" color="#a1a1aa" mb={2} fontWeight="800">¿ATRAPADO / PRENSADO?</Text>
-      <Select size="lg" bg="#18181b" borderColor="#3f3f46" color="white" _focus={{ borderColor: '#38bdf8' }} value={paciente.atrapado} onChange={e => onChange('atrapado', e.target.value)}>
-        <option style={{ background: '#18181b' }} value="">Seleccionar...</option>
-        {OPCIONES_SINO.map(o => <option key={o} style={{ background: '#18181b' }} value={o}>{o}</option>)}
-      </Select>
-    </Box>
-  </SimpleGrid>
-);
+const PacienteFields = ({ paciente, onChange }) => {
+  const [edadError, setEdadError] = React.useState('');
+
+  const handleEdadChange = (valor) => {
+    // Permitir vacío y solo dígitos hasta 3 caracteres
+    if (valor === '') { setEdadError(''); onChange('edad', ''); return; }
+    if (!/^\d{1,3}$/.test(valor)) return;
+    const n = Number(valor);
+    if (n > 100) { setEdadError('Máximo 100 años'); return; }
+    setEdadError('');
+    onChange('edad', valor);
+  };
+
+  return (
+    <SimpleGrid columns={2} spacingX={6} spacingY={6}>
+      <Box>
+        <Text fontSize="12px" color="#a1a1aa" mb={2} fontWeight="800">SEXO</Text>
+        <Select size="lg" bg="#18181b" borderColor="#3f3f46" color="white"
+          _focus={{ borderColor: '#38bdf8' }}
+          value={paciente.sexo} onChange={e => onChange('sexo', e.target.value)}>
+          <option style={{ background: '#18181b' }} value="">Seleccionar...</option>
+          <option style={{ background: '#18181b' }} value="Hombre">Hombre</option>
+          <option style={{ background: '#18181b' }} value="Mujer">Mujer</option>
+          <option style={{ background: '#18181b' }} value="N/S">No se sabe</option>
+        </Select>
+      </Box>
+      <Box>
+        <Text fontSize="12px" color="#a1a1aa" mb={2} fontWeight="800">EDAD APARENTE (0-100)</Text>
+        <Input size="lg" bg="#18181b" border="1px solid"
+          borderColor={edadError ? '#ef4444' : '#3f3f46'}
+          color="white" type="text" inputMode="numeric" maxLength={3}
+          placeholder="Ej. 35"
+          value={paciente.edad}
+          onChange={e => handleEdadChange(e.target.value)}
+          _focus={{ borderColor: edadError ? '#ef4444' : '#38bdf8', boxShadow: 'none' }}
+        />
+        {edadError && (
+          <Text fontSize="10px" color="#ef4444" mt={1} fontWeight="800">{edadError}</Text>
+        )}
+      </Box>
+      <Box>
+        <Text fontSize="12px" color="#a1a1aa" mb={2} fontWeight="800">¿CONSCIENTE?</Text>
+        <Select size="lg" bg="#18181b" borderColor="#3f3f46" color="white"
+          _focus={{ borderColor: '#38bdf8' }}
+          value={paciente.consciente} onChange={e => onChange('consciente', e.target.value)}>
+          <option style={{ background: '#18181b' }} value="">Seleccionar...</option>
+          {OPCIONES_SINO_NS.map(o => (
+            <option key={o} style={{ background: '#18181b' }} value={o}>
+              {o === 'N/S' ? 'No se sabe' : o}
+            </option>
+          ))}
+        </Select>
+      </Box>
+      <Box>
+        <Text fontSize="12px" color="#a1a1aa" mb={2} fontWeight="800">¿RESPIRA?</Text>
+        <Select size="lg" bg="#18181b" borderColor="#3f3f46" color="white"
+          _focus={{ borderColor: '#38bdf8' }}
+          value={paciente.respira} onChange={e => onChange('respira', e.target.value)}>
+          <option style={{ background: '#18181b' }} value="">Seleccionar...</option>
+          {OPCIONES_SINO_NS.map(o => (
+            <option key={o} style={{ background: '#18181b' }} value={o}>
+              {o === 'N/S' ? 'No se sabe' : o}
+            </option>
+          ))}
+        </Select>
+      </Box>
+      <Box>
+        <Text fontSize="12px" color="#a1a1aa" mb={2} fontWeight="800">¿SANGRADO?</Text>
+        <Select size="lg" bg="#18181b" borderColor="#3f3f46" color="white"
+          _focus={{ borderColor: '#38bdf8' }}
+          value={paciente.sangrado} onChange={e => onChange('sangrado', e.target.value)}>
+          <option style={{ background: '#18181b' }} value="">Seleccionar...</option>
+          {OPCIONES_SINO_NS.map(o => (
+            <option key={o} style={{ background: '#18181b' }} value={o}>
+              {o === 'N/S' ? 'No se sabe' : o}
+            </option>
+          ))}
+        </Select>
+      </Box>
+      <Box>
+        <Text fontSize="12px" color="#a1a1aa" mb={2} fontWeight="800">¿ATRAPADO / PRENSADO?</Text>
+        <Select size="lg" bg="#18181b" borderColor="#3f3f46" color="white"
+          _focus={{ borderColor: '#38bdf8' }}
+          value={paciente.atrapado} onChange={e => onChange('atrapado', e.target.value)}>
+          <option style={{ background: '#18181b' }} value="">Seleccionar...</option>
+          {OPCIONES_SINO.map(o => (
+            <option key={o} style={{ background: '#18181b' }} value={o}>{o}</option>
+          ))}
+        </Select>
+      </Box>
+    </SimpleGrid>
+  );
+};
 
 const PacienteCardCompacto = ({ idx, paciente, onChange, defaultOpen }) => {
   const [open, setOpen] = useState(!!defaultOpen);
