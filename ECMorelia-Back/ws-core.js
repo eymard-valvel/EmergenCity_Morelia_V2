@@ -1503,6 +1503,7 @@ async function handlePatientTransferNotification(data) {
       }
     }
   }
+
   const amb = activeAmbulances.get(String(data.ambulanceId));
   if (amb?.ws) {
     sendMessage(amb.ws, {
@@ -1512,8 +1513,11 @@ async function handlePatientTransferNotification(data) {
     });
   }
 
-
-  
+  // ============ NUEVO: actualizar la lista de casos activos del hospital ============
+  if (data.hospitalId) {
+    sendHospitalActiveCases(data.hospitalId);
+  }
+  // ==================================================================================
 }
 
 async function autoRequestHospital(ws, data) {

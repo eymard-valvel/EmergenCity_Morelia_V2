@@ -715,12 +715,33 @@ const ReportePaciente = () => {
     };
   }, [reporte.callId, casoFinalizado, puedeEnviar, isReportComplete]);
 
-  const buttonStyles = {
-    waiting: { bg: '#1e293b', color: '#94a3b8', border: '2px solid #334155' },
-    closed: { bg: 'rgba(100,116,139,0.15)', color: '#64748b', border: '2px solid #475569' },
-    urgent: { bg: '#f59e0b', color: '#000', border: '2px solid #f59e0b' },
-    final: { bg: '#10b981', color: '#fff', border: '2px solid #10b981' },
-  };
+const buttonStyles = {
+  waiting: {
+    background: 'linear-gradient(135deg, #1e293b, #0f172a)',
+    color: '#94a3b8',
+    border: '2px solid #334155',
+    boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+  },
+  closed: {
+    background: 'linear-gradient(135deg, #334155, #1e293b)',
+    color: '#94a3b8',
+    border: '2px solid #475569',
+    boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+  },
+  urgent: {
+    background: 'linear-gradient(135deg, #fbbf24, #f59e0b)',
+    color: '#000000',
+    border: '2px solid #d97706',
+    boxShadow: '0 8px 24px rgba(251, 191, 36, 0.6), 0 0 0 4px rgba(251, 191, 36, 0.15)',
+  },
+  final: {
+    background: 'linear-gradient(135deg, #10b981, #059669)',
+    color: '#ffffff',
+    border: '2px solid #047857',
+    boxShadow: '0 8px 24px rgba(16, 185, 129, 0.6), 0 0 0 4px rgba(16, 185, 129, 0.15)',
+  },
+};
+
   const buttonStyle = buttonStyles[buttonState.variant] || buttonStyles.waiting;
 
   // ==================== VISTA 1: VINCULACIÓN ====================
@@ -881,6 +902,14 @@ const ReportePaciente = () => {
           .chip { display: inline-flex; align-items: center; padding: 4px 10px; border-radius: 6px; font-size: 0.7rem; font-weight: 900; letter-spacing: 0.5px; }
           .chip-op { background: #7c3aed; color: white; }
           .chip-f { background: #0ea5e9; color: white; }
+
+          @keyframes pulseUrgent {
+    0%, 100% { box-shadow: 0 8px 24px rgba(251, 191, 36, 0.6), 0 0 0 4px rgba(251, 191, 36, 0.15); }
+    50%      { box-shadow: 0 8px 28px rgba(251, 191, 36, 0.9), 0 0 0 6px rgba(251, 191, 36, 0.25); }
+  }
+  .main-btn.urgent {
+    animation: pulseUrgent 2.2s ease-in-out infinite;
+  }
 
           @media (max-width: 480px) {
             .grid-3 { grid-template-columns: 1fr 1fr; }
@@ -1190,16 +1219,17 @@ const ReportePaciente = () => {
 
         {/* ==================== BOTONERA ÚNICA DINÁMICA ==================== */}
         <div className="bottom-action-area">
-          <button
-            type="button"
-            onClick={buttonState.action || undefined}
-            disabled={buttonState.disabled}
-            className="main-btn"
-            style={buttonStyle}
-            title={buttonState.title}
-          >
-            {buttonState.label}
-          </button>
+          
+        <button
+  type="button"
+  onClick={buttonState.action || undefined}
+  disabled={buttonState.disabled}
+  className={`main-btn ${buttonState.variant === 'urgent' ? 'urgent' : ''}`}
+  style={buttonStyle}
+  title={buttonState.title}
+>
+  {buttonState.label}
+</button>
 
           {puedeEnviar && !casoFinalizado && (
             <button

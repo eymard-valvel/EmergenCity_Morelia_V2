@@ -877,6 +877,7 @@ case 'doctor_reports_history':
     }
 
     onNotificationOpen();
+  
   };
 
   const acceptPatient = () => {
