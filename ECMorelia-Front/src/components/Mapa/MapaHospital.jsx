@@ -306,6 +306,49 @@ export default function MapaHospitalOptimizado() {
               showToast('info', `Reporte v${data.version} ${data.isFinal ? 'FINAL' : 'URGENTE'}`, `Folio ${data.callId}`);
               break;
 
+
+              case 'hospital_active_cases_update':
+  setActiveCases(data.cases || []);
+  break;
+
+case 'doctor_reports_history':
+  if (data.reports && data.reports.length > 0) {
+    setHistorialExpedientes(prev => {
+      const map = new Map(prev.map(e => [e.callId, e]));
+      data.reports.forEach(r => {
+        const existing = map.get(r.callId);
+        if (!existing || (r.version || 0) > (existing.version || 0)) {
+          map.set(r.callId, {
+            callId: r.callId,
+            version: r.version,
+            urgentOnly: r.urgentOnly,
+            isFinal: r.isFinal,
+            report: r.report,
+            patientInfo: r.patientInfo,
+            fecha: r.timestamp ? new Date(r.timestamp).toLocaleString() : new Date().toLocaleString(),
+            paciente: r.report?.seccionD ? {
+              nombre: r.report.seccionD.nombre || 'Paciente',
+              edad: r.report.seccionD.edad,
+              sexo: r.report.seccionD.sexo,
+              motivo_urgencia: r.report.seccionF?.motivo_principal,
+              descripcion_lesion: r.report.seccionH?.lesiones_exposicion,
+              observaciones: r.report.seccionN?.diagnostico_presuntivo
+            } : null,
+            signos_vitales: r.report?.seccionI ? {
+              frecuencia_cardiaca: r.report.seccionI.fc,
+              saturacion_oxigeno: r.report.seccionI.spo2,
+              tension_arterial: r.report.seccionI.ta,
+              nivel_glucosa: r.report.seccionI.glucemia
+            } : null,
+            intervenciones: r.report?.intervenciones || []
+          });
+        }
+      });
+      return Array.from(map.values());
+    });
+  }
+  break;
+
             case 'prehospital_report_snapshot':
               setCurrentSheet({
                 callId: data.callId,

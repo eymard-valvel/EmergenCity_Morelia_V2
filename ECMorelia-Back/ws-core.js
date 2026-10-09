@@ -174,6 +174,59 @@ function getPendingNotificationForAmbulance(ambulanceId) {
   return null;
 }
 
+// ============ HELPERS DE HOSPITAL ============
+/** Devuelve los casos activos de un hospital (pendientes + ya aceptados). */
+function getHospitalActiveCases(hospitalId) {
+  const cases = [];
+  const seen = new Set();
+
+  // Casos pendientes (notificaciones sin aceptar)
+  for (const [, n] of pendingNotifications) {
+    if (String(n.hospitalId) === String(hospitalId)) {
+      cases.push({
+        callId: n.callId,
+        ambulanceId: n.ambulanceId,
+        ambulanceName: n.ambulanceName,
+        emergencyType: n.emergencyType,
+        patientInfo: n.patientInfo,
+        distanceKm: n.distanceKm,
+        isFinal: false,
+        status: 'pending'
+      });
+      seen.add(n.callId);
+    }
+  }
+
+  // Casos ya aceptados (rutas activas hacia este hospital)
+  for (const [, r] of activeRoutes) {
+    if (String(r.hospitalId) === String(hospitalId) && !seen.has(r.callId)) {
+      cases.push({
+        callId: r.callId,
+        ambulanceId: r.ambulanceId,
+        hospitalId: r.hospitalId,
+        distance: r.distance,
+        duration: r.duration,
+        isFinal: false,
+        status: 'accepted'
+      });
+      seen.add(r.callId);
+    }
+  }
+
+  return cases;
+}
+
+/** Envía la lista completa de casos activos a un hospital. */
+function sendHospitalActiveCases(hospitalId) {
+  const h = activeHospitals.get(String(hospitalId));
+  if (!h?.ws || h.ws.readyState !== WebSocket.OPEN) return;
+  sendMessage(h.ws, {
+    type: 'hospital_active_cases_update',
+    cases: getHospitalActiveCases(hospitalId),
+    timestamp: new Date().toISOString()
+  });
+}
+
 // ============ GEOCODING ============
 async function geocodeAddress(address) {
   if (!address || address.trim() === '') return null;
@@ -595,8 +648,38 @@ async function handleRegisterHospital(ws, data) {
       sendMessage(ws, { type: 'active_routes_update', routes: relevantRoutes });
     }
 
-    // === NOTIFICACIONES PENDIENTES ===
-    // Reenviar notificaciones pendientes a este hospital (recuperación).
+    // ============ NUEVO: CASOS ACTIVOS DEL HOSPITAL ============
+    sendHospitalActiveCases(info.id);
+
+    // ============ NUEVO: HISTORIAL DE REPORTES DEL HOSPITAL ============
+    const recentReports = [];
+    prehospitalReports.forEach((record, callId) => {
+      const latest = record.latest;
+      if (latest && String(record.hospitalId) === String(info.id)) {
+        recentReports.push({
+          callId,
+          version: latest.version,
+          isFinal: latest.isFinal,
+          urgentOnly: latest.urgentOnly,
+          report: latest.report,
+          patientInfo: record.patientInfo,
+          hospitalId: record.hospitalId,
+          ambulanceId: record.ambulanceId,
+          timestamp: latest.timestamp
+        });
+      }
+    });
+    if (recentReports.length > 0) {
+      sendMessage(ws, {
+        type: 'doctor_reports_history',
+        reports: recentReports,
+        timestamp: new Date().toISOString()
+      });
+      console.log(`📋 Enviados ${recentReports.length} reportes históricos a hospital ${info.id}`);
+    }
+    // ============================================================
+
+    // Notificaciones pendientes (recuperación)
     const pending = getPendingNotificationsForHospital(info.id);
     if (pending.length > 0) {
       pending.forEach(n => {
@@ -1255,6 +1338,10 @@ function handleEmergencyCompleted(data) {
     }
   }
 
+    for (const [hid] of activeHospitals) {
+    sendHospitalActiveCases(hid);
+  }
+
   broadcastToHospitals({
     type: 'route_cleared',
     ambulanceId: assignedId,
@@ -1424,6 +1511,9 @@ async function handlePatientTransferNotification(data) {
       message: 'Notificación enviada'
     });
   }
+
+
+  
 }
 
 async function autoRequestHospital(ws, data) {
@@ -1671,6 +1761,9 @@ async function handleHospitalAcceptPatient(data) {
   pendingEmergencyRoutes.delete(data.notificationId);
   pendingNotifications.delete(data.notificationId);
   broadcastActiveAmbulances();
+
+   sendHospitalActiveCases(data.hospitalId);
+
 }
 
 async function handleHospitalRejectPatient(data) {
@@ -1738,6 +1831,9 @@ async function handleHospitalRejectPatient(data) {
   }
   pendingNotifications.delete(data.notificationId);
   broadcastActiveAmbulances();
+
+sendHospitalActiveCases(data.hospitalId);
+
 }
 
 function handleCancelEmergencyMarker(data) {
