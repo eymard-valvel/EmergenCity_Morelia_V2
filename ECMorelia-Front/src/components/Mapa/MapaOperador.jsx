@@ -20,7 +20,7 @@ import {
   FaAmbulance, FaHospital, FaMapMarkerAlt,
   FaSignOutAlt, FaLocationArrow, FaArrowLeft, FaMap,
   FaArrowRight, FaPlus, FaMinus, FaSearch, FaTimes, FaUndo, FaArrowUp, FaTimesCircle,
-  FaSyncAlt
+  FaSyncAlt, FaCheckCircle
 } from 'react-icons/fa';
 import { MdCenterFocusStrong } from 'react-icons/md';
 import { resolveWsUrl } from '../../helpers/wsUrl.js';
@@ -149,6 +149,7 @@ export default function MapaOperador() {
   const gpsHeading = useRef(0);
   const isInitialMapCentered = useRef(false);
   const [myLocation, setMyLocation] = useState(null);
+  const myLocationRef = useRef(null);
   const [mySpeed, setMySpeed] = useState(0);
   const [myHeading, setMyHeading] = useState(0);
 
@@ -218,6 +219,7 @@ export default function MapaOperador() {
 
   // ==================== EFECTOS DE SINCRONIZACIÓN ====================
   useEffect(() => { isNavigatingRef.current = isNavigating; }, [isNavigating]);
+  useEffect(() => { myLocationRef.current = myLocation; }, [myLocation]);
 
   useEffect(() => { saveLocal('operador', 'assignedEmergency', assignedEmergency); }, [assignedEmergency]);
   useEffect(() => { saveLocal('operador', 'hospitalRequest', hospitalRequest); }, [hospitalRequest]);
@@ -274,7 +276,7 @@ export default function MapaOperador() {
             id: ambulancia.id, placa: ambulancia.placa,
             nombre: ambulancia.nombre, tipo: ambulancia.tipo,
             status: ambulanceStatus,
-            location: myLocation || DEFAULT_CENTER
+            location: myLocationRef.current || DEFAULT_CENTER
           }
         }));
         ws.send(JSON.stringify({ type: 'request_hospitals_list' }));
@@ -289,15 +291,61 @@ export default function MapaOperador() {
             case 'active_hospitals_update': setHospitals(data.hospitals || []); break;
             case 'emergency_offer': handleEmergencyOffer(data); break;
 
-            case 'operator_emergency_created':
+            case 'operator_emergency_created': {
               setAssignedEmergency(prev => ({
                 ...(prev || {}),
                 callId: data.callId,
                 emergencyType: prev?.emergencyType || 'Iniciada por operador',
                 address: prev?.address || 'Atención en campo',
                 patientInfo: prev?.patientInfo || {},
-                createdBy: 'operator'
+                createdBy: 'operator',
+                hospitalInfo: data.hospitalInfo || prev?.hospitalInfo || null
               }));
+
+              // === Si el server ya trazó ruta al hospital, activar navegación ===
+              if (data.hospitalInfo?.lat && data.hospitalInfo?.lng) {
+                const dest = { lat: data.hospitalInfo.lat, lng: data.hospitalInfo.lng };
+                activeDestination.current = {
+                  ...dest,
+                  mode: 'transfer',
+                  address: data.hospitalInfo.nombre || 'Hospital'
+                };
+                placeDestinationMarker(dest);
+
+                if (data.routeGeometry) {
+                  drawRoute(data.routeGeometry, '#ef4444');
+                  currentRouteGeometry.current = data.routeGeometry;
+                  setRouteProgress({
+                    distanceRemaining: data.distance,
+                    durationRemaining: data.duration
+                  });
+                  lastRouteCalcRef.current = {
+                    loc: myLocationRef.current ? { ...myLocationRef.current } : null,
+                    time: Date.now()
+                  };
+                }
+
+                setIsNavigating(true);
+                setCancelStep('idle');
+                changeStatus('en_ruta');
+                setIsFollowing(true);
+
+                setHospitalRequest({
+                  hospitalName: data.hospitalInfo.nombre || 'Hospital',
+                  hospitalId: data.hospitalInfo.id,
+                  distanceKm: data.distanceKm ?? (data.distance ? data.distance / 1000 : null),
+                  callId: data.callId,
+                  sentAt: new Date().toISOString()
+                });
+
+                if (map.current && myLocationRef.current) {
+                  map.current.flyTo({
+                    center: [myLocationRef.current.lng, myLocationRef.current.lat],
+                    zoom: 18, pitch: 60, bearing: myHeading, duration: 1200
+                  });
+                }
+              }
+
               toast({
                 title: 'Folio generado',
                 description: data.callId,
@@ -306,6 +354,7 @@ export default function MapaOperador() {
                 position: 'bottom'
               });
               break;
+            }
 
             case 'auto_hospital_request_sent':
               setSearchingHospital(false);
@@ -327,13 +376,14 @@ export default function MapaOperador() {
 
             case 'hospital_request_sent':
               setSearchingHospital(false);
-              setHospitalRequest({
+              setHospitalRequest(prev => ({
+                ...(prev || {}),
                 hospitalName: data.hospitalName,
                 hospitalId: data.hospitalId,
                 distanceKm: data.distanceKm,
                 callId: data.callId,
                 sentAt: new Date().toISOString()
-              });
+              }));
               toast({
                 title: 'Solicitud enviada',
                 description: `${data.hospitalName} · ${data.distanceKm} km`,
@@ -408,8 +458,10 @@ export default function MapaOperador() {
                   });
                 }
 
-                if (myLocation) {
-                  const route = await computeRoute(myLocation, dest);
+                // Recalcular localmente con GPS actual para afinar maniobras
+                const currentLoc = myLocationRef.current;
+                if (currentLoc) {
+                  const route = await computeRoute(currentLoc, dest);
                   if (route) {
                     drawRoute(route.geometry, '#ef4444');
                     currentRouteGeometry.current = route.geometry;
@@ -418,7 +470,7 @@ export default function MapaOperador() {
                       distanceRemaining: route.distance,
                       durationRemaining: route.duration
                     });
-                    lastRouteCalcRef.current = { loc: { ...myLocation }, time: Date.now() };
+                    lastRouteCalcRef.current = { loc: { ...currentLoc }, time: Date.now() };
                   }
                 }
 
@@ -427,11 +479,11 @@ export default function MapaOperador() {
                 changeStatus('en_ruta');
                 setHospitalRequest(null);
 
-                if (map.current && myLocation) {
+                if (map.current && currentLoc) {
                   setIsGpsMode(true);
                   setIsFollowing(true);
                   map.current.flyTo({
-                    center: [myLocation.lng, myLocation.lat],
+                    center: [currentLoc.lng, currentLoc.lat],
                     zoom: 18, pitch: 60, bearing: myHeading, duration: 1200
                   });
                 }
@@ -508,6 +560,7 @@ export default function MapaOperador() {
         const loc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
         if (!isValidCoord(loc)) return;
         setMyLocation(loc);
+        myLocationRef.current = loc;
         if (map.current && !isInitialMapCentered.current) {
           map.current.jumpTo({ center: [loc.lng, loc.lat], zoom: 18, pitch: 60 });
           isInitialMapCentered.current = true;
@@ -574,6 +627,7 @@ export default function MapaOperador() {
 
         if (spd >= 5) { gpsHeading.current = hdg; setMyHeading(hdg); updateMarkerRotation(hdg); }
         setMyLocation(loc);
+        myLocationRef.current = loc;
         setMySpeed(spd);
         updateAmbulanceMarker(loc, hdg);
 
@@ -709,11 +763,11 @@ export default function MapaOperador() {
   }, []);
 
   const recalcRoute = useCallback(async (silent = false) => {
-    if (!activeDestination.current || !myLocation) return;
+    if (!activeDestination.current || !myLocationRef.current) return;
     if (isRecalculating) return;
     setIsRecalculating(true);
     try {
-      const route = await computeRoute(myLocation, activeDestination.current);
+      const route = await computeRoute(myLocationRef.current, activeDestination.current);
       if (route) {
         const color = activeDestination.current.mode === 'emergency' ? '#ef4444' : '#0ea5e9';
         drawRoute(route.geometry, color);
@@ -722,16 +776,16 @@ export default function MapaOperador() {
         const stepsPendientes = route.steps.filter((s, idx) => idx === 0 || s.distance > 5);
         if (stepsPendientes.length > 0) setCurrentManeuver(stepsPendientes[0]);
         setRouteProgress({ distanceRemaining: route.distance, durationRemaining: route.duration });
-        lastRouteCalcRef.current = { loc: { ...myLocation }, time: Date.now() };
+        lastRouteCalcRef.current = { loc: { ...myLocationRef.current }, time: Date.now() };
         if (!silent) toast({ title: 'Ruta actualizada', status: 'info', duration: 2000, position: 'bottom' });
       }
     } finally {
       setIsRecalculating(false);
     }
-  }, [myLocation, computeRoute, drawRoute, isRecalculating, toast]);
+  }, [computeRoute, drawRoute, isRecalculating, toast]);
 
   const startNavigationEngine = async (targetLoc, mode = 'manual', address = '') => {
-    let loc = myLocation;
+    let loc = myLocationRef.current;
     if (!loc) {
       try {
         loc = await new Promise((resolve, reject) => {
@@ -740,8 +794,10 @@ export default function MapaOperador() {
             err => reject(err), { enableHighAccuracy: true, timeout: 5000 }
           );
         });
-        if (isValidCoord(loc)) setMyLocation(loc);
-        else loc = null;
+        if (isValidCoord(loc)) {
+          setMyLocation(loc);
+          myLocationRef.current = loc;
+        } else loc = null;
       } catch {
         toast({ title: 'Sin GPS', description: 'No se pudo obtener ubicación. La ruta visual no está disponible.', status: 'warning', duration: 5000, position: 'bottom' });
         loc = null;
@@ -784,22 +840,24 @@ export default function MapaOperador() {
   useEffect(() => {
     if (!isNavigating || !activeDestination.current) return;
     routeIntervalRef.current = setInterval(async () => {
-      if (!myLocation || !activeDestination.current) return;
+      const cur = myLocationRef.current;
+      if (!cur || !activeDestination.current) return;
       const last = lastRouteCalcRef.current;
       const moved = last.loc
-        ? calcDistance(last.loc.lat, last.loc.lng, myLocation.lat, myLocation.lng) * 1000
+        ? calcDistance(last.loc.lat, last.loc.lng, cur.lat, cur.lng) * 1000
         : Infinity;
       if (moved < MIN_MOVE_FOR_POLL) return;
       await recalcRoute(true);
     }, ROUTE_POLL_INTERVAL);
     return () => { if (routeIntervalRef.current) clearInterval(routeIntervalRef.current); };
-  }, [isNavigating, myLocation, recalcRoute]);
+  }, [isNavigating, recalcRoute]);
 
   useEffect(() => {
     if (!isNavigating) return;
     offRouteCheckRef.current = setInterval(() => {
-      if (!myLocation || !currentRouteGeometry.current) return;
-      const distM = distanceToRouteMeters(myLocation, currentRouteGeometry.current);
+      const cur = myLocationRef.current;
+      if (!cur || !currentRouteGeometry.current) return;
+      const distM = distanceToRouteMeters(cur, currentRouteGeometry.current);
       const now = Date.now();
       if (distM > OFF_ROUTE_THRESHOLD_M && now - lastOffRouteRecalcRef.current > OFF_ROUTE_RECALC_COOLDOWN) {
         lastOffRouteRecalcRef.current = now;
@@ -808,7 +866,7 @@ export default function MapaOperador() {
       }
     }, OFF_ROUTE_CHECK_INTERVAL);
     return () => { if (offRouteCheckRef.current) clearInterval(offRouteCheckRef.current); };
-  }, [isNavigating, myLocation, recalcRoute]);
+  }, [isNavigating, recalcRoute]);
 
   // ==================== BÚSQUEDA ====================
   const searchAddresses = useCallback((query) => {
@@ -824,7 +882,7 @@ export default function MapaOperador() {
 
       try {
         const results = await searchPlaces(query, {
-          proximity: myLocation || DEFAULT_CENTER,
+          proximity: myLocationRef.current || DEFAULT_CENTER,
           mapboxToken: mapboxgl.accessToken,
           foursquareKey: import.meta.env.VITE_FOURSQUARE_KEY,
           signal: controller.signal,
@@ -834,7 +892,7 @@ export default function MapaOperador() {
         if (e.name !== 'AbortError') setSearchResults([]);
       }
     }, 250);
-  }, [myLocation]);
+  }, []);
 
   const selectSearchResult = async (result) => {
     setSearchQuery(''); setSearchResults([]);
@@ -926,7 +984,7 @@ export default function MapaOperador() {
   // ==================== TRANSFERENCIA Y SOLICITUD HOSPITAL ====================
   const handleSendTransfer = async () => {
     const hospital = hospitals.find(h => h.id === selectedHospitalId);
-    if (!hospital || !myLocation) return;
+    if (!hospital || !myLocationRef.current) return;
     setIsSending(true);
     sendWS({
       type: 'patient_transfer_notification',
@@ -941,7 +999,7 @@ export default function MapaOperador() {
         sexo: patientData.sexo,
         condition: patientData.diagnostico
       },
-      ambulanceLocation: myLocation,
+      ambulanceLocation: myLocationRef.current,
       emergencyMode: 'trasladar_paciente'
     });
     toast({ title: 'Solicitud enviada', description: `Esperando confirmación de ${hospital.nombre}`, status: 'success', duration: 4000, position: 'bottom' });
@@ -979,7 +1037,7 @@ export default function MapaOperador() {
 
   // ==================== CREACIÓN DE EMERGENCIA POR OPERADOR ====================
   const handleCreateOperatorEmergency = useCallback(async () => {
-    if (!myLocation) {
+    if (!myLocationRef.current) {
       toast({
         title: 'Sin ubicación GPS',
         description: 'Esperando señal para registrar la emergencia.',
@@ -1004,7 +1062,7 @@ export default function MapaOperador() {
     sendWS({
       type: 'operator_initiated_emergency',
       ambulanceId: ambulancia.id,
-      location: myLocation,
+      location: myLocationRef.current,
       address: 'Emergencia iniciada por operador',
       emergencyType: operatorPatientData.diagnostico || 'Atención en campo',
       patientInfo: {
@@ -1023,13 +1081,13 @@ export default function MapaOperador() {
 
     toast({
       title: 'Emergencia registrada',
-      description: 'Notificando al hospital más cercano.',
+      description: 'Trazando ruta al hospital más cercano.',
       status: 'success', duration: 4000, position: 'bottom',
     });
     setIsCreatingEmergency(false);
     onDrawerClose();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [myLocation, operatorPatientData, ambulancia, sendWS, toast, onDrawerClose]);
+  }, [operatorPatientData, ambulancia, sendWS, toast, onDrawerClose]);
 
   // ==================== CONFIRMACIONES Y OFERTAS ====================
   const confirmAction = useCallback((action, title, body) => {
@@ -1073,9 +1131,9 @@ export default function MapaOperador() {
 
   const centerMapAction = () => {
     setIsFollowing(true);
-    if (map.current && myLocation) {
+    if (map.current && myLocationRef.current) {
       map.current.flyTo({
-        center: [myLocation.lng, myLocation.lat],
+        center: [myLocationRef.current.lng, myLocationRef.current.lat],
         zoom: isGpsMode ? 18 : 14,
         pitch: isGpsMode ? 60 : 0,
         bearing: isGpsMode ? myHeading : 0,
@@ -1087,9 +1145,9 @@ export default function MapaOperador() {
   const toggleCameraAction = () => {
     setIsGpsMode(!isGpsMode);
     setIsFollowing(true);
-    if (map.current && myLocation) {
+    if (map.current && myLocationRef.current) {
       map.current.flyTo({
-        center: [myLocation.lng, myLocation.lat],
+        center: [myLocationRef.current.lng, myLocationRef.current.lat],
         zoom: !isGpsMode ? 18 : 14,
         pitch: !isGpsMode ? 60 : 0,
         bearing: !isGpsMode ? myHeading : 0,
@@ -1121,7 +1179,11 @@ export default function MapaOperador() {
 
   const wsDotColor = wsStatus === 'connected' ? '#4CAF50' : wsStatus === 'connecting' ? '#FFC107' : '#F44336';
 
-  // Constantes de layout derivadas del XML
+  // -- Habilitación del botón de hospital --
+  const hasEmergencyContext = !!(assignedEmergency?.callId || activeDestination.current);
+  const hospitalButtonDisabled = !hasEmergencyContext || !!hospitalRequest;
+
+  // -- Constantes de layout derivadas del XML --
   const TRIP_PANEL_HEIGHT = 88;
   const ABOVE_PANEL = TRIP_PANEL_HEIGHT + 16;
 
@@ -1134,13 +1196,10 @@ export default function MapaOperador() {
       bg="#1E1E1E"
       overflow="hidden"
     >
-      {/* -- Capa base del mapa (MapView) -- */}
       <Box ref={mapContainer} position="absolute" top={0} left={0} right={0} bottom={0} zIndex={0} />
 
-      {/* ==================== MODO NAVEGACIÓN ==================== */}
       {isNavigating && (
         <>
-          {/* -- topNavCard -- */}
           <Box
             position="absolute"
             top="16px"
@@ -1153,41 +1212,50 @@ export default function MapaOperador() {
             boxShadow="0 4px 16px rgba(0,0,0,0.45)"
           >
             <Flex align="center">
-              <Flex
-                w="48px"
-                h="48px"
-                minW="48px"
-                align="center"
-                justify="center"
-                color="#FFFFFF"
-                fontSize="30px"
-              >
+              <Flex w="48px" h="48px" minW="48px" align="center" justify="center" color="#FFFFFF" fontSize="30px">
                 {getManeuverIcon(nextStep)}
               </Flex>
               <Box ml="16px" minW={0} flex={1}>
-                <Text
-                  fontSize="28px"
-                  fontWeight="900"
-                  color="#FFFFFF"
-                  lineHeight="1.15"
-                  noOfLines={1}
-                >
+                <Text fontSize="28px" fontWeight="900" color="#FFFFFF" lineHeight="1.15" noOfLines={1}>
                   {nextStepDistance != null ? fmtDist(nextStepDistance / 1000) : '—'}
                 </Text>
-                <Text
-                  fontSize="18px"
-                  color="#FFFFFF"
-                  lineHeight="1.2"
-                  noOfLines={1}
-                  opacity={0.92}
-                >
+                <Text fontSize="18px" color="#FFFFFF" lineHeight="1.2" noOfLines={1} opacity={0.92}>
                   {nextStepName || 'Continúe por la ruta'}
                 </Text>
               </Box>
             </Flex>
           </Box>
 
-          {/* -- speedLimitCard -- */}
+          {hospitalRequest && (
+            <Box
+              position="absolute"
+              top="112px"
+              left="16px"
+              right="16px"
+              bg="rgba(76,175,80,0.18)"
+              border="1px solid #4CAF50"
+              borderRadius="12px"
+              px="14px"
+              py="8px"
+              zIndex={19}
+              boxShadow="0 2px 10px rgba(0,0,0,0.35)"
+            >
+              <HStack spacing="10px" align="center">
+                <Icon as={FaCheckCircle} color="#4CAF50" boxSize="16px" flexShrink={0} />
+                <Box minW={0} flex={1}>
+                  <Text fontSize="12px" fontWeight="900" color="#4CAF50" noOfLines={1}>
+                    {assignedEmergency?.callId ? `${assignedEmergency.callId} · ` : ''}SOLICITUD ENVIADA · {hospitalRequest.hospitalName || 'Hospital'}
+                  </Text>
+                  {hospitalRequest.distanceKm != null && (
+                    <Text fontSize="10px" fontWeight="700" color="#B0B0B0" noOfLines={1}>
+                      Distancia {fmtDist(hospitalRequest.distanceKm)} · Esperando confirmación
+                    </Text>
+                  )}
+                </Box>
+              </HStack>
+            </Box>
+          )}
+
           <Box
             position="absolute"
             left="16px"
@@ -1211,7 +1279,6 @@ export default function MapaOperador() {
             </Text>
           </Box>
 
-          {/* -- fabRecenter -- */}
           <IconButton
             aria-label="Centrar"
             icon={<MdCenterFocusStrong />}
@@ -1220,9 +1287,7 @@ export default function MapaOperador() {
             left="50%"
             bottom={`${ABOVE_PANEL}px`}
             transform="translateX(-50%)"
-            w="56px"
-            h="56px"
-            minW="56px"
+            w="56px" h="56px" minW="56px"
             borderRadius="full"
             bg="#2C2C2C"
             color={isFollowing ? '#0ea5e9' : '#FFFFFF'}
@@ -1233,21 +1298,12 @@ export default function MapaOperador() {
             _active={{ bg: '#454545' }}
           />
 
-          {/* -- rightControls -- */}
-          <VStack
-            position="absolute"
-            right="16px"
-            bottom={`${ABOVE_PANEL}px`}
-            spacing="12px"
-            zIndex={20}
-          >
+          <VStack position="absolute" right="16px" bottom={`${ABOVE_PANEL}px`} spacing="12px" zIndex={20}>
             <IconButton
               aria-label="Alternar vista"
               icon={isGpsMode ? <FaMap /> : <FaLocationArrow />}
               onClick={toggleCameraAction}
-              w="56px"
-              h="56px"
-              minW="56px"
+              w="56px" h="56px" minW="56px"
               borderRadius="full"
               bg="#2C2C2C"
               color={isGpsMode ? '#0ea5e9' : '#FFFFFF'}
@@ -1260,9 +1316,7 @@ export default function MapaOperador() {
               aria-label="Recalcular ruta"
               icon={<FaSyncAlt />}
               onClick={() => recalcRoute(false)}
-              w="56px"
-              h="56px"
-              minW="56px"
+              w="56px" h="56px" minW="56px"
               borderRadius="full"
               bg="#2C2C2C"
               color="#FFFFFF"
@@ -1274,7 +1328,6 @@ export default function MapaOperador() {
             />
           </VStack>
 
-          {/* -- bottomTripPanel -- */}
           <Box
             position="absolute"
             bottom="0"
@@ -1294,32 +1347,65 @@ export default function MapaOperador() {
                   variant="ghost"
                   color="#FFFFFF"
                   fontSize="18px"
-                  w="44px"
-                  h="44px"
-                  minW="44px"
+                  w="44px" h="44px" minW="44px"
                   borderRadius="full"
                   _hover={{ bg: '#3A3A3A' }}
                 />
-                <VStack spacing="2px" flex={1} align="center" justify="center" minW={0}>
-                  <Text
-                    fontSize="20px"
-                    fontWeight="900"
-                    color="#4CAF50"
-                    lineHeight="1.2"
-                    noOfLines={1}
-                  >
+                <VStack spacing="2px" flex={1} align="center" justify="center" minW={0} px="8px">
+                  <Text fontSize="20px" fontWeight="900" color="#4CAF50" lineHeight="1.2" noOfLines={1}>
                     {etaSummary}
                   </Text>
-                  <Text
-                    fontSize="14px"
-                    color="#B0B0B0"
-                    lineHeight="1.2"
-                    noOfLines={1}
-                  >
+                  <Text fontSize="14px" color="#B0B0B0" lineHeight="1.2" noOfLines={1}>
                     Llegada estimada {arrivalStr}
                   </Text>
                 </VStack>
-                <Box w="44px" h="44px" minW="44px" />
+
+                <Tooltip
+                  label={
+                    !hasEmergencyContext
+                      ? 'Sin emergencia activa'
+                      : hospitalRequest
+                        ? `Solicitud enviada a ${hospitalRequest.hospitalName || 'hospital'}`
+                        : searchingHospital
+                          ? 'Buscando hospital...'
+                          : 'Notificar al hospital'
+                  }
+                  placement="top"
+                  hasArrow
+                  bg="#18181b"
+                  color="white"
+                  fontSize="11px"
+                  fontWeight="700"
+                >
+                  <IconButton
+                    aria-label="Notificar hospital"
+                    icon={hospitalRequest ? <FaCheckCircle /> : <FaHospital />}
+                    onClick={requestHospitalNow}
+                    isDisabled={hospitalButtonDisabled}
+                    isLoading={searchingHospital}
+                    loadingText=""
+                    variant="ghost"
+                    color={
+                      hospitalRequest
+                        ? '#4CAF50'
+                        : searchingHospital
+                          ? '#f59e0b'
+                          : hasEmergencyContext
+                            ? '#0ea5e9'
+                            : '#52525b'
+                    }
+                    fontSize="20px"
+                    w="44px" h="44px" minW="44px"
+                    borderRadius="full"
+                    _hover={{
+                      bg: hasEmergencyContext && !hospitalRequest ? 'rgba(14,165,233,0.15)' : '#3A3A3A'
+                    }}
+                    _disabled={{
+                      opacity: 0.4,
+                      cursor: 'not-allowed'
+                    }}
+                  />
+                </Tooltip>
               </Flex>
             )}
 
@@ -1330,26 +1416,18 @@ export default function MapaOperador() {
                 </Text>
                 <HStack w="100%" spacing="12px">
                   <Button
-                    flex={1}
-                    h="52px"
-                    bg="#3A3A3A"
-                    color="#FFFFFF"
-                    fontSize="15px"
-                    fontWeight="900"
-                    borderRadius="12px"
+                    flex={1} h="52px"
+                    bg="#3A3A3A" color="#FFFFFF"
+                    fontSize="15px" fontWeight="900" borderRadius="12px"
                     _hover={{ bg: '#454545' }}
                     onClick={() => setCancelStep('idle')}
                   >
                     VOLVER
                   </Button>
                   <Button
-                    flex={1}
-                    h="52px"
-                    bg="#ef4444"
-                    color="#FFFFFF"
-                    fontSize="15px"
-                    fontWeight="900"
-                    borderRadius="12px"
+                    flex={1} h="52px"
+                    bg="#ef4444" color="#FFFFFF"
+                    fontSize="15px" fontWeight="900" borderRadius="12px"
                     _hover={{ bg: '#dc2626' }}
                     onClick={() => setCancelStep('reason')}
                   >
@@ -1367,48 +1445,32 @@ export default function MapaOperador() {
                 <SimpleGrid columns={2} spacing="8px" w="100%">
                   <Button
                     h="50px"
-                    bg="rgba(76,175,80,0.15)"
-                    color="#4CAF50"
-                    border="2px solid #4CAF50"
-                    fontSize="11px"
-                    fontWeight="900"
-                    borderRadius="10px"
+                    bg="rgba(76,175,80,0.15)" color="#4CAF50" border="2px solid #4CAF50"
+                    fontSize="11px" fontWeight="900" borderRadius="10px"
                     _hover={{ bg: 'rgba(76,175,80,0.25)' }}
                     onClick={() => handleCancelWithReason('completed')}
                   >
                     SERVICIO COMPLETADO
                   </Button>
                   <Button
-                    h="50px"
-                    bg="#3A3A3A"
-                    color="#FFFFFF"
-                    fontSize="11px"
-                    fontWeight="900"
-                    borderRadius="10px"
+                    h="50px" bg="#3A3A3A" color="#FFFFFF"
+                    fontSize="11px" fontWeight="900" borderRadius="10px"
                     _hover={{ bg: '#454545' }}
                     onClick={() => handleCancelWithReason('averia')}
                   >
                     AVERÍA MECÁNICA
                   </Button>
                   <Button
-                    h="50px"
-                    bg="#3A3A3A"
-                    color="#FFFFFF"
-                    fontSize="11px"
-                    fontWeight="900"
-                    borderRadius="10px"
+                    h="50px" bg="#3A3A3A" color="#FFFFFF"
+                    fontSize="11px" fontWeight="900" borderRadius="10px"
                     _hover={{ bg: '#454545' }}
                     onClick={() => handleCancelWithReason('pinchadura')}
                   >
                     LLANTA PONCHADA
                   </Button>
                   <Button
-                    h="50px"
-                    bg="#3A3A3A"
-                    color="#FFFFFF"
-                    fontSize="11px"
-                    fontWeight="900"
-                    borderRadius="10px"
+                    h="50px" bg="#3A3A3A" color="#FFFFFF"
+                    fontSize="11px" fontWeight="900" borderRadius="10px"
                     _hover={{ bg: '#454545' }}
                     onClick={() => handleCancelWithReason('trafico_pesado')}
                   >
@@ -1430,19 +1492,14 @@ export default function MapaOperador() {
         </>
       )}
 
-      {/* ==================== MODO IDLE (SIN NAVEGACIÓN) ==================== */}
       {!isNavigating && (
         <>
-          {/* -- Barra superior compacta -- */}
           <Box
             position="absolute"
-            top="16px"
-            left="16px"
-            right="16px"
+            top="16px" left="16px" right="16px"
             bg="#2C2C2C"
             borderRadius="16px"
-            px="16px"
-            py="10px"
+            px="16px" py="10px"
             zIndex={10}
             boxShadow="0 4px 16px rgba(0,0,0,0.45)"
           >
@@ -1450,24 +1507,10 @@ export default function MapaOperador() {
               <HStack spacing="10px" minW={0} flex={1}>
                 <Box w="10px" h="10px" borderRadius="full" bg={wsDotColor} flexShrink={0} />
                 <Box minW={0} flex={1}>
-                  <Text
-                    color="#FFFFFF"
-                    fontSize="15px"
-                    fontWeight="900"
-                    letterSpacing="0.3px"
-                    lineHeight="1.15"
-                    noOfLines={1}
-                  >
+                  <Text color="#FFFFFF" fontSize="15px" fontWeight="900" letterSpacing="0.3px" lineHeight="1.15" noOfLines={1}>
                     {ambulancia.id}
                   </Text>
-                  <Text
-                    color="#B0B0B0"
-                    fontSize="10px"
-                    fontWeight="700"
-                    letterSpacing="0.4px"
-                    lineHeight="1.15"
-                    noOfLines={1}
-                  >
+                  <Text color="#B0B0B0" fontSize="10px" fontWeight="700" letterSpacing="0.4px" lineHeight="1.15" noOfLines={1}>
                     {ambulancia.tipo}
                   </Text>
                 </Box>
@@ -1503,9 +1546,7 @@ export default function MapaOperador() {
                   bg="transparent"
                   color="#B0B0B0"
                   borderRadius="10px"
-                  w="34px"
-                  h="34px"
-                  minW="34px"
+                  w="34px" h="34px" minW="34px"
                   fontSize="14px"
                   _hover={{ bg: 'rgba(239,68,68,0.2)', color: '#ef4444' }}
                 />
@@ -1513,22 +1554,13 @@ export default function MapaOperador() {
             </Flex>
           </Box>
 
-          {/* -- Controles laterales flotantes -- */}
           {!isDrawerOpen && (
-            <VStack
-              position="absolute"
-              right="16px"
-              top="88px"
-              spacing="12px"
-              zIndex={5}
-            >
+            <VStack position="absolute" right="16px" top="88px" spacing="12px" zIndex={5}>
               <IconButton
                 aria-label="Centrar GPS"
                 icon={<MdCenterFocusStrong />}
                 onClick={centerMapAction}
-                w="48px"
-                h="48px"
-                minW="48px"
+                w="48px" h="48px" minW="48px"
                 borderRadius="full"
                 bg="#2C2C2C"
                 color={isFollowing ? '#0ea5e9' : '#FFFFFF'}
@@ -1540,9 +1572,7 @@ export default function MapaOperador() {
                 aria-label="Alternar vista"
                 icon={isGpsMode ? <FaMap /> : <FaLocationArrow />}
                 onClick={toggleCameraAction}
-                w="48px"
-                h="48px"
-                minW="48px"
+                w="48px" h="48px" minW="48px"
                 borderRadius="full"
                 bg="#2C2C2C"
                 color={isGpsMode ? '#0ea5e9' : '#FFFFFF'}
@@ -1553,23 +1583,12 @@ export default function MapaOperador() {
             </VStack>
           )}
 
-          {/* -- Botón inferior de emergencia -- */}
           {!isDrawerOpen && (
-            <Box
-              position="absolute"
-              bottom="20px"
-              left="16px"
-              right="16px"
-              zIndex={10}
-            >
+            <Box position="absolute" bottom="20px" left="16px" right="16px" zIndex={10}>
               <Button
-                w="100%"
-                h="68px"
-                bg="#ef4444"
-                color="#FFFFFF"
-                fontSize="17px"
-                fontWeight="900"
-                letterSpacing="1px"
+                w="100%" h="68px"
+                bg="#ef4444" color="#FFFFFF"
+                fontSize="17px" fontWeight="900" letterSpacing="1px"
                 borderRadius="18px"
                 boxShadow="0 8px 24px rgba(239,68,68,0.4)"
                 _hover={{ bg: '#dc2626' }}
@@ -1584,7 +1603,6 @@ export default function MapaOperador() {
         </>
       )}
 
-      {/* ==================== DRAWER DE PROTOCOLO ==================== */}
       <Drawer isOpen={isDrawerOpen} placement="bottom" onClose={onDrawerClose} size="full">
         <DrawerOverlay backdropFilter="blur(5px)" bg="rgba(0,0,0,0.6)" />
         <DrawerContent
@@ -1601,8 +1619,7 @@ export default function MapaOperador() {
 
           <DrawerHeader
             bg="#1E1E1E"
-            py="6px"
-            px="20px"
+            py="6px" px="20px"
             display="flex"
             justifyContent="space-between"
             alignItems="center"
@@ -1623,7 +1640,6 @@ export default function MapaOperador() {
           <DrawerBody p="16px" bg="#1E1E1E" overflowY="auto">
             {drawerMode === 'operator-emergency' && (
               <VStack spacing="16px" align="stretch" pb="120px">
-                {/* -- Cantidad de pacientes -- */}
                 <Box bg="#2C2C2C" p="16px" borderRadius="16px" border="1px solid #3f3f46">
                   <Text fontSize="11px" fontWeight="900" color="#B0B0B0" mb="12px" letterSpacing="0.5px">
                     1. CANTIDAD DE PACIENTES
@@ -1642,24 +1658,16 @@ export default function MapaOperador() {
                             : prev.pacientes.slice(0, next)
                         };
                       })}
-                      w="56px"
-                      h="56px"
-                      minW="56px"
-                      bg="#3A3A3A"
-                      color="#FFFFFF"
-                      fontSize="18px"
-                      borderRadius="12px"
+                      w="56px" h="56px" minW="56px"
+                      bg="#3A3A3A" color="#FFFFFF"
+                      fontSize="18px" borderRadius="12px"
                       _hover={{ bg: '#454545' }}
                       isDisabled={operatorPatientData.cantidad <= 1}
                     />
                     <Flex
-                      flex={1}
-                      bg="#1E1E1E"
-                      h="56px"
-                      border="2px solid #3f3f46"
-                      borderRadius="12px"
-                      align="center"
-                      justify="center"
+                      flex={1} bg="#1E1E1E" h="56px"
+                      border="2px solid #3f3f46" borderRadius="12px"
+                      align="center" justify="center"
                     >
                       <Text fontSize="26px" fontWeight="900" color="#FFFFFF">
                         {operatorPatientData.cantidad}
@@ -1678,19 +1686,14 @@ export default function MapaOperador() {
                             : prev.pacientes
                         };
                       })}
-                      w="56px"
-                      h="56px"
-                      minW="56px"
-                      bg="#3A3A3A"
-                      color="#FFFFFF"
-                      fontSize="18px"
-                      borderRadius="12px"
+                      w="56px" h="56px" minW="56px"
+                      bg="#3A3A3A" color="#FFFFFF"
+                      fontSize="18px" borderRadius="12px"
                       _hover={{ bg: '#454545' }}
                     />
                   </HStack>
                 </Box>
 
-                {/* -- Datos de pacientes -- */}
                 <Box bg="#2C2C2C" p="16px" borderRadius="16px" border="1px solid #3f3f46">
                   <Text fontSize="11px" fontWeight="900" color="#B0B0B0" mb="12px" letterSpacing="0.5px">
                     2. DATOS DE PACIENTES
@@ -1710,11 +1713,8 @@ export default function MapaOperador() {
                               return { ...prev, pacientes: copy };
                             })}
                             placeholder="Sexo"
-                            bg="#2C2C2C"
-                            borderColor="#3f3f46"
-                            color="#FFFFFF"
-                            size="lg"
-                            borderRadius="10px"
+                            bg="#2C2C2C" borderColor="#3f3f46" color="#FFFFFF"
+                            size="lg" borderRadius="10px"
                           >
                             <option value="Hombre" style={{ background: '#2C2C2C' }}>Hombre</option>
                             <option value="Mujer" style={{ background: '#2C2C2C' }}>Mujer</option>
@@ -1729,11 +1729,8 @@ export default function MapaOperador() {
                               return { ...prev, pacientes: copy };
                             })}
                             placeholder="Edad"
-                            bg="#2C2C2C"
-                            border="2px solid #3f3f46"
-                            color="#FFFFFF"
-                            size="lg"
-                            borderRadius="10px"
+                            bg="#2C2C2C" border="2px solid #3f3f46" color="#FFFFFF"
+                            size="lg" borderRadius="10px"
                           />
                           <Select
                             value={p.consciente}
@@ -1743,11 +1740,8 @@ export default function MapaOperador() {
                               return { ...prev, pacientes: copy };
                             })}
                             placeholder="Conciencia"
-                            bg="#2C2C2C"
-                            borderColor="#3f3f46"
-                            color="#FFFFFF"
-                            size="lg"
-                            borderRadius="10px"
+                            bg="#2C2C2C" borderColor="#3f3f46" color="#FFFFFF"
+                            size="lg" borderRadius="10px"
                           >
                             <option value="Sí" style={{ background: '#2C2C2C' }}>Consciente</option>
                             <option value="No" style={{ background: '#2C2C2C' }}>Inconsciente</option>
@@ -1761,11 +1755,8 @@ export default function MapaOperador() {
                               return { ...prev, pacientes: copy };
                             })}
                             placeholder="Respira"
-                            bg="#2C2C2C"
-                            borderColor="#3f3f46"
-                            color="#FFFFFF"
-                            size="lg"
-                            borderRadius="10px"
+                            bg="#2C2C2C" borderColor="#3f3f46" color="#FFFFFF"
+                            size="lg" borderRadius="10px"
                           >
                             <option value="Sí" style={{ background: '#2C2C2C' }}>Respira</option>
                             <option value="No" style={{ background: '#2C2C2C' }}>No respira</option>
@@ -1779,11 +1770,8 @@ export default function MapaOperador() {
                               return { ...prev, pacientes: copy };
                             })}
                             placeholder="Sangrado"
-                            bg="#2C2C2C"
-                            borderColor="#3f3f46"
-                            color="#FFFFFF"
-                            size="lg"
-                            borderRadius="10px"
+                            bg="#2C2C2C" borderColor="#3f3f46" color="#FFFFFF"
+                            size="lg" borderRadius="10px"
                           >
                             <option value="Sí" style={{ background: '#2C2C2C' }}>Sangrado</option>
                             <option value="No" style={{ background: '#2C2C2C' }}>Sin sangrado</option>
@@ -1797,11 +1785,8 @@ export default function MapaOperador() {
                               return { ...prev, pacientes: copy };
                             })}
                             placeholder="Atrapado"
-                            bg="#2C2C2C"
-                            borderColor="#3f3f46"
-                            color="#FFFFFF"
-                            size="lg"
-                            borderRadius="10px"
+                            bg="#2C2C2C" borderColor="#3f3f46" color="#FFFFFF"
+                            size="lg" borderRadius="10px"
                           >
                             <option value="Sí" style={{ background: '#2C2C2C' }}>Atrapado</option>
                             <option value="No" style={{ background: '#2C2C2C' }}>No atrapado</option>
@@ -1812,7 +1797,6 @@ export default function MapaOperador() {
                   </VStack>
                 </Box>
 
-                {/* -- Impresión diagnóstica -- */}
                 <Box bg="#2C2C2C" p="16px" borderRadius="16px" border="1px solid #3f3f46">
                   <Text fontSize="11px" fontWeight="900" color="#B0B0B0" mb="12px" letterSpacing="0.5px">
                     3. IMPRESIÓN DIAGNÓSTICA
@@ -1820,13 +1804,8 @@ export default function MapaOperador() {
                   <Select
                     value={operatorPatientData.diagnostico}
                     onChange={(e) => setOperatorPatientData(prev => ({ ...prev, diagnostico: e.target.value }))}
-                    h="56px"
-                    fontSize="15px"
-                    fontWeight="900"
-                    bg="#1E1E1E"
-                    color="#FFFFFF"
-                    border="2px solid #3f3f46"
-                    borderRadius="10px"
+                    h="56px" fontSize="15px" fontWeight="900"
+                    bg="#1E1E1E" color="#FFFFFF" border="2px solid #3f3f46" borderRadius="10px"
                   >
                     {DIAGNOSTICOS_RAPIDOS.map(d => (
                       <option key={d} value={d} style={{ background: '#1E1E1E' }}>{d}</option>
@@ -1834,7 +1813,6 @@ export default function MapaOperador() {
                   </Select>
                 </Box>
 
-                {/* -- Notas adicionales -- */}
                 <Box bg="#2C2C2C" p="16px" borderRadius="16px" border="1px solid #3f3f46">
                   <Text fontSize="11px" fontWeight="900" color="#B0B0B0" mb="12px" letterSpacing="0.5px">
                     4. NOTAS ADICIONALES
@@ -1843,12 +1821,8 @@ export default function MapaOperador() {
                     value={operatorPatientData.notas}
                     onChange={(e) => setOperatorPatientData(prev => ({ ...prev, notas: e.target.value }))}
                     placeholder="Observaciones breves..."
-                    bg="#1E1E1E"
-                    border="2px solid #3f3f46"
-                    color="#FFFFFF"
-                    h="56px"
-                    fontSize="15px"
-                    borderRadius="10px"
+                    bg="#1E1E1E" border="2px solid #3f3f46" color="#FFFFFF"
+                    h="56px" fontSize="15px" borderRadius="10px"
                   />
                 </Box>
               </VStack>
@@ -1865,13 +1839,9 @@ export default function MapaOperador() {
               w="100%"
             >
               <Button
-                w="100%"
-                h="64px"
-                bg="#ef4444"
-                color="#FFFFFF"
-                fontSize="17px"
-                fontWeight="900"
-                letterSpacing="1px"
+                w="100%" h="64px"
+                bg="#ef4444" color="#FFFFFF"
+                fontSize="17px" fontWeight="900" letterSpacing="1px"
                 borderRadius="16px"
                 _hover={{ bg: '#dc2626' }}
                 isLoading={isCreatingEmergency}
@@ -1885,7 +1855,6 @@ export default function MapaOperador() {
         </DrawerContent>
       </Drawer>
 
-      {/* ==================== MODAL DE OFERTA ==================== */}
       <Modal isOpen={!!pendingOffer} onClose={() => {}} size="xl" isCentered closeOnOverlayClick={false} closeOnEsc={false}>
         <ModalOverlay bg="rgba(0,0,0,0.92)" backdropFilter="blur(8px)" />
         <ModalContent bg="#1E1E1E" border="3px solid #ef4444" borderRadius="20px" overflow="hidden" mx="16px">
@@ -1910,9 +1879,7 @@ export default function MapaOperador() {
               </HStack>
               <Progress
                 value={(offerTimeLeft / 20) * 100}
-                h="8px"
-                borderRadius="full"
-                bg="#2C2C2C"
+                h="8px" borderRadius="full" bg="#2C2C2C"
                 sx={{
                   '& > div': {
                     background: offerTimeLeft <= 5 ? '#ef4444' : '#f59e0b',
@@ -1980,27 +1947,19 @@ export default function MapaOperador() {
             {!offerRejecting ? (
               <HStack w="100%" spacing="12px">
                 <Button
-                  flex={1}
-                  h="72px"
-                  bg="#2C2C2C"
-                  color="#ef4444"
+                  flex={1} h="72px"
+                  bg="#2C2C2C" color="#ef4444"
                   border="2px solid #ef4444"
-                  fontSize="16px"
-                  fontWeight="900"
-                  borderRadius="16px"
+                  fontSize="16px" fontWeight="900" borderRadius="16px"
                   _hover={{ bg: '#3A3A3A' }}
                   onClick={() => setOfferRejecting(true)}
                 >
                   RECHAZAR
                 </Button>
                 <Button
-                  flex={1.5}
-                  h="72px"
-                  bg="#10b981"
-                  color="#FFFFFF"
-                  fontSize="20px"
-                  fontWeight="900"
-                  letterSpacing="1px"
+                  flex={1.5} h="72px"
+                  bg="#10b981" color="#FFFFFF"
+                  fontSize="20px" fontWeight="900" letterSpacing="1px"
                   borderRadius="16px"
                   _hover={{ bg: '#059669' }}
                   onClick={acceptOffer}
@@ -2041,7 +2000,6 @@ export default function MapaOperador() {
         </ModalContent>
       </Modal>
 
-      {/* ==================== ALERTA DE CONFIRMACIÓN ==================== */}
       <Modal isOpen={isAlertOpen} onClose={onAlertClose} isCentered blockScrollOnMount={false} trapFocus={false}>
         <ModalOverlay bg="rgba(0,0,0,0.7)" backdropFilter="blur(3px)" />
         <ModalContent bg="#1E1E1E" border="2px solid #ef4444" borderRadius="20px" p="16px" mx="16px">
@@ -2053,26 +2011,18 @@ export default function MapaOperador() {
           </ModalBody>
           <ModalFooter mt="12px" gap="12px" display="flex" p={0}>
             <Button
-              flex={1}
-              h="52px"
-              bg="#2C2C2C"
-              color="#FFFFFF"
-              fontSize="15px"
-              fontWeight="900"
-              borderRadius="12px"
+              flex={1} h="52px"
+              bg="#2C2C2C" color="#FFFFFF"
+              fontSize="15px" fontWeight="900" borderRadius="12px"
               _hover={{ bg: '#3A3A3A' }}
               onClick={onAlertClose}
             >
               VOLVER
             </Button>
             <Button
-              flex={1}
-              h="52px"
-              bg="#ef4444"
-              color="#FFFFFF"
-              fontSize="15px"
-              fontWeight="900"
-              borderRadius="12px"
+              flex={1} h="52px"
+              bg="#ef4444" color="#FFFFFF"
+              fontSize="15px" fontWeight="900" borderRadius="12px"
               _hover={{ bg: '#dc2626' }}
               onClick={executeConfirmed}
             >
@@ -2085,7 +2035,6 @@ export default function MapaOperador() {
   );
 }
 
-// ==================== REGISTRO INICIAL ====================
 const RegistrationModal = ({ onRegister }) => {
   const [form, setForm] = useState({ id: '', placa: '', nombre: '', tipo: 'UVI Móvil' });
   const [error, setError] = useState('');
@@ -2117,14 +2066,8 @@ const RegistrationModal = ({ onRegister }) => {
             <FormControl>
               <FormLabel color="#B0B0B0" fontWeight="900" fontSize="11px">ID OPERATIVO *</FormLabel>
               <Input
-                bg="#2C2C2C"
-                border="2px solid #3f3f46"
-                color="#FFFFFF"
-                h="50px"
-                fontSize="17px"
-                fontWeight="900"
-                textAlign="center"
-                textTransform="uppercase"
+                bg="#2C2C2C" border="2px solid #3f3f46" color="#FFFFFF"
+                h="50px" fontSize="17px" fontWeight="900" textAlign="center" textTransform="uppercase"
                 borderRadius="12px"
                 value={form.id}
                 onChange={e => setForm(p => ({ ...p, id: e.target.value }))}
@@ -2133,14 +2076,8 @@ const RegistrationModal = ({ onRegister }) => {
             <FormControl>
               <FormLabel color="#B0B0B0" fontWeight="900" fontSize="11px">PLACA *</FormLabel>
               <Input
-                bg="#2C2C2C"
-                border="2px solid #3f3f46"
-                color="#FFFFFF"
-                h="50px"
-                fontSize="17px"
-                fontWeight="900"
-                textAlign="center"
-                textTransform="uppercase"
+                bg="#2C2C2C" border="2px solid #3f3f46" color="#FFFFFF"
+                h="50px" fontSize="17px" fontWeight="900" textAlign="center" textTransform="uppercase"
                 borderRadius="12px"
                 value={form.placa}
                 onChange={e => setForm(p => ({ ...p, placa: e.target.value }))}
@@ -2149,13 +2086,8 @@ const RegistrationModal = ({ onRegister }) => {
             <FormControl>
               <FormLabel color="#B0B0B0" fontWeight="900" fontSize="11px">NOMBRE BASE *</FormLabel>
               <Input
-                bg="#2C2C2C"
-                border="2px solid #3f3f46"
-                color="#FFFFFF"
-                h="50px"
-                fontSize="15px"
-                fontWeight="900"
-                textAlign="center"
+                bg="#2C2C2C" border="2px solid #3f3f46" color="#FFFFFF"
+                h="50px" fontSize="15px" fontWeight="900" textAlign="center"
                 borderRadius="12px"
                 value={form.nombre}
                 onChange={e => setForm(p => ({ ...p, nombre: e.target.value }))}
@@ -2164,12 +2096,8 @@ const RegistrationModal = ({ onRegister }) => {
             <FormControl>
               <FormLabel color="#B0B0B0" fontWeight="900" fontSize="11px">TIPO DE UNIDAD</FormLabel>
               <Select
-                bg="#2C2C2C"
-                border="2px solid #3f3f46"
-                color="#FFFFFF"
-                h="50px"
-                fontSize="14px"
-                fontWeight="900"
+                bg="#2C2C2C" border="2px solid #3f3f46" color="#FFFFFF"
+                h="50px" fontSize="14px" fontWeight="900"
                 borderRadius="12px"
                 value={form.tipo}
                 onChange={e => setForm(p => ({ ...p, tipo: e.target.value }))}
@@ -2188,13 +2116,9 @@ const RegistrationModal = ({ onRegister }) => {
         </ModalBody>
         <ModalFooter>
           <Button
-            w="100%"
-            h="56px"
-            bg="#0ea5e9"
-            color="#FFFFFF"
-            fontSize="15px"
-            fontWeight="900"
-            borderRadius="14px"
+            w="100%" h="56px"
+            bg="#0ea5e9" color="#FFFFFF"
+            fontSize="15px" fontWeight="900" borderRadius="14px"
             _hover={{ bg: '#0284c7' }}
             onClick={handleSubmit}
           >

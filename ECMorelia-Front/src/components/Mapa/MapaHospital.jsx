@@ -350,9 +350,32 @@ useEffect(() => {
               break;
 
             case 'emergency_created_by_operator_broadcast':
-              showToast('info', 'Emergencia iniciada por operador',
-                `Unidad ${data.ambulanceName || data.ambulanceId} · ${data.emergencyType || ''}`);
-              break;
+  showToast('info', 'Emergencia iniciada por operador',
+    `Unidad ${data.ambulanceName || data.ambulanceId} · ${data.emergencyType || ''}`);
+  // Si el server ya trazó la ruta operador → hospital, pintarla en el mapa
+  if (data.routeGeometry && data.ambulanceId) {
+    drawAmbulanceRoute(data.ambulanceId, data.routeGeometry);
+    setActiveRoutes(prev => {
+      const idx = prev.findIndex(r => r.ambulanceId === data.ambulanceId);
+      const newRoute = {
+        ambulanceId: data.ambulanceId,
+        hospitalId: data.hospitalInfo?.id || hospitalInfo?.id,
+        distance: data.distance,
+        duration: data.duration,
+        geometry: data.routeGeometry,
+        updatedAt: new Date().toISOString(),
+        origin: 'operator'
+      };
+      if (idx >= 0) {
+        const copy = [...prev];
+        copy[idx] = newRoute;
+        return copy;
+      }
+      return [...prev, newRoute];
+    });
+  }
+  break;
+
 
               case 'doctor_connected':
   if (data.doctor) {
