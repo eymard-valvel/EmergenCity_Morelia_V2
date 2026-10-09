@@ -1205,6 +1205,31 @@ function handleEmergencyCompleted(data) {
 
   resetAmbulanceState(assignedId);
 
+  // ==================== CLEANUP DE HOJA PREHOSPITALARIA ====================
+  // Reglas:
+  //  1. Si el reporte tiene versión FINAL → conservar 30 min de gracia para
+  //     que hospital/doctor puedan seguir consultándolo tras un refresh.
+  //  2. Si solo hay versiones URGENTES → eliminar de inmediato.
+  const report = prehospitalReports.get(callId);
+  if (report) {
+    const tieneFinal = !!report.latest?.isFinal;
+    if (tieneFinal) {
+      console.log(`📋 Reporte final ${callId} conservado 30 min tras cierre`);
+      setTimeout(() => {
+        const rec = prehospitalReports.get(callId);
+        // Solo eliminar si sigue siendo el mismo y sigue siendo final
+        if (rec && rec.latest?.isFinal) {
+          prehospitalReports.delete(callId);
+          console.log(`📋 Reporte final ${callId} eliminado tras periodo de gracia`);
+        }
+      }, 30 * 60 * 1000);
+    } else {
+      prehospitalReports.delete(callId);
+      console.log(`📋 Reporte ${callId} eliminado (solo tenía versiones urgentes)`);
+    }
+  }
+  // =====================================================================
+
   broadcastActiveEmergencies();
   broadcastActiveAmbulances();
 

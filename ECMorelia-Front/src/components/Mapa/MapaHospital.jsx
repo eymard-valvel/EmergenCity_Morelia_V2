@@ -6,11 +6,8 @@ import html2canvas from "html2canvas";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../auth/useAuth.js";
 import { deleteCookie } from "../../helpers/cookies.js";
-const [activeCases, setActiveCases] = useState([]);
-const [selectedCaseId, setSelectedCaseId] = useState('');
-const [currentSheet, setCurrentSheet] = useState(null); // última versión de la hoja por folio
-const sheetRef = useRef(null);
 import { resolveWsUrl } from "../../helpers/wsUrl.js";
+import logo from "../img/Logo.png";
 import {
   ChakraProvider, Box, Button, VStack, Text, HStack, Badge, Modal, ModalOverlay, ModalContent,
   ModalHeader, ModalBody, ModalFooter, useDisclosure, useToast, Spinner, SimpleGrid, Divider,
@@ -71,6 +68,7 @@ export default function MapaHospitalOptimizado() {
     navigate("/login");
   };
 
+  // ==================== REFS ====================
   const mapContainer = useRef(null);
   const map = useRef(null);
   const ws = useRef(null);
@@ -82,7 +80,13 @@ export default function MapaHospitalOptimizado() {
   const connectionAttempts = useRef(0);
   const isMounted = useRef(true);
   const reportRef = useRef(null);
+  const sheetRef = useRef(null);
   const isConnectingRef = useRef(false);
+
+  // ==================== ESTADOS ====================
+  const [activeCases, setActiveCases] = useState([]);
+  const [selectedCaseId, setSelectedCaseId] = useState('');
+  const [currentSheet, setCurrentSheet] = useState(null);
 
   const [isMobile] = useMediaQuery("(max-width: 768px)");
   const [isTablet] = useMediaQuery("(max-width: 1024px) and (min-width: 769px)");
@@ -114,10 +118,10 @@ export default function MapaHospitalOptimizado() {
   const { isOpen: isExpedientesOpen, onOpen: onExpedientesOpen, onClose: onExpedientesClose } = useDisclosure();
 
   const [setupStep, setSetupStep] = useState(() => {
-  const setupDone = localStorage.getItem('hospitalSetupComplete');
-  return setupDone ? 'ready' : 'beds';
-});
-const [setupBeds, setSetupBeds] = useState(10);
+    const setupDone = localStorage.getItem('hospitalSetupComplete');
+    return setupDone ? 'ready' : 'beds';
+  });
+  const [setupBeds, setSetupBeds] = useState(10);
 
   const toast = useToast();
 
@@ -126,105 +130,99 @@ const [setupBeds, setSetupBeds] = useState(10);
   }, [toast]);
 
   const geocodeHospitalAddress = useCallback(async (address) => {
-  if (!address || address.trim() === '') return null;
-  try {
-    const q = encodeURIComponent(`${address.trim()}, Morelia, Michoacán, México`);
-    const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${q}.json?access_token=${mapboxgl.accessToken}&country=mx&types=address,poi,place&limit=1&language=es`;
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    const data = await res.json();
-    const feature = data.features?.[0];
-    if (!feature) return null;
-    return {
-      lat: feature.center[1],
-      lng: feature.center[0],
-      place_name: feature.place_name
-    };
-  } catch (err) {
-    console.warn('Geocoding falló:', err.message);
-    return null;
-  }
-}, []);
+    if (!address || address.trim() === '') return null;
+    try {
+      const q = encodeURIComponent(`${address.trim()}, Morelia, Michoacán, México`);
+      const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${q}.json?access_token=${mapboxgl.accessToken}&country=mx&types=address,poi,place&limit=1&language=es`;
+      const res = await fetch(url);
+      if (!res.ok) return null;
+      const data = await res.json();
+      const feature = data.features?.[0];
+      if (!feature) return null;
+      return {
+        lat: feature.center[1],
+        lng: feature.center[0],
+        place_name: feature.place_name
+      };
+    } catch (err) {
+      console.warn('Geocoding falló:', err.message);
+      return null;
+    }
+  }, []);
 
   // ==================== CARGA INICIAL ====================
   useEffect(() => {
-  if (hospitalInfo) {
-    localStorage.setItem('hospitalBeds', JSON.stringify({
-      camasEmergencia,
-      camasDisponibles
-    }));
-  }
-}, [camasEmergencia, camasDisponibles, hospitalInfo]);
-
-useEffect(() => {
-  if (!mapLoaded || !map.current) return;
-  if (ambulances.length > 0) {
-    updateAmbulanceMarkers(ambulances);
-  }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [ambulances, mapLoaded]);
-
-// ==================== CARGA INICIAL DEL HOSPITAL ====================
-// ==================== CARGA INICIAL DEL HOSPITAL ====================
-useEffect(() => {
-  isMounted.current = true;
-
-  const loadHospital = async () => {
-    try {
-      const stored = JSON.parse(localStorage.getItem('hospitalInfo') || 'null');
-      if (!stored || !stored.id) {
-        showToast('error', 'Configuración requerida', 'Complete los datos del hospital');
-        return;
-      }
-
-      const beds = JSON.parse(localStorage.getItem('hospitalBeds') || 'null');
-
-      const h = {
-        id: stored.id,
-        nombre: stored.nombre || 'Hospital Base',
-        direccion: stored.direccion || '',
-        lat: stored.lat ?? null,
-        lng: stored.lng ?? null,
-        especialidades: stored.especialidades || ['General'],
-        camasDisponibles: beds?.camasDisponibles ?? stored.camasDisponibles ?? 10,
-        camasEmergencia: beds?.camasEmergencia ?? stored.camasEmergencia ?? stored.camasDisponibles ?? 10,
-        telefono: stored.telefono || ''
-      };
-
-      // Si no hay coordenadas pero hay dirección, geocodificar
-      if ((!h.lat || !h.lng) && h.direccion) {
-        const geo = await geocodeHospitalAddress(h.direccion);
-        if (geo) {
-          h.lat = geo.lat;
-          h.lng = geo.lng;
-          // Persistir para no geocodificar cada vez
-          const updated = { ...stored, lat: geo.lat, lng: geo.lng, direccion: geo.place_name || stored.direccion };
-          localStorage.setItem('hospitalInfo', JSON.stringify(updated));
-        }
-      }
-
-      // Último fallback si de plano no hay dirección ni coordenadas
-      if (!h.lat || !h.lng) {
-        h.lat = 19.7024;
-        h.lng = -101.1969;
-      }
-
-      if (isMounted.current) {
-        setHospitalInfo(h);
-        setCamasDisponibles(h.camasDisponibles);
-        setCamasEmergencia(h.camasEmergencia);
-      }
-    } catch (err) {
-      console.error('Error cargando hospital:', err);
-      showToast('error', 'Error de configuración', 'No se pudieron cargar los datos');
+    if (hospitalInfo) {
+      localStorage.setItem('hospitalBeds', JSON.stringify({
+        camasEmergencia,
+        camasDisponibles
+      }));
     }
-  };
+  }, [camasEmergencia, camasDisponibles, hospitalInfo]);
 
-  loadHospital();
+  useEffect(() => {
+    if (!mapLoaded || !map.current) return;
+    if (ambulances.length > 0) {
+      updateAmbulanceMarkers(ambulances);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ambulances, mapLoaded]);
 
-  return () => { isMounted.current = false; };
-}, [geocodeHospitalAddress, showToast]);
-  
+  useEffect(() => {
+    isMounted.current = true;
+
+    const loadHospital = async () => {
+      try {
+        const stored = JSON.parse(localStorage.getItem('hospitalInfo') || 'null');
+        if (!stored || !stored.id) {
+          showToast('error', 'Configuración requerida', 'Complete los datos del hospital');
+          return;
+        }
+
+        const beds = JSON.parse(localStorage.getItem('hospitalBeds') || 'null');
+
+        const h = {
+          id: stored.id,
+          nombre: stored.nombre || 'Hospital Base',
+          direccion: stored.direccion || '',
+          lat: stored.lat ?? null,
+          lng: stored.lng ?? null,
+          especialidades: stored.especialidades || ['General'],
+          camasDisponibles: beds?.camasDisponibles ?? stored.camasDisponibles ?? 10,
+          camasEmergencia: beds?.camasEmergencia ?? stored.camasEmergencia ?? stored.camasDisponibles ?? 10,
+          telefono: stored.telefono || ''
+        };
+
+        if ((!h.lat || !h.lng) && h.direccion) {
+          const geo = await geocodeHospitalAddress(h.direccion);
+          if (geo) {
+            h.lat = geo.lat;
+            h.lng = geo.lng;
+            const updated = { ...stored, lat: geo.lat, lng: geo.lng, direccion: geo.place_name || stored.direccion };
+            localStorage.setItem('hospitalInfo', JSON.stringify(updated));
+          }
+        }
+
+        if (!h.lat || !h.lng) {
+          h.lat = 19.7024;
+          h.lng = -101.1969;
+        }
+
+        if (isMounted.current) {
+          setHospitalInfo(h);
+          setCamasDisponibles(h.camasDisponibles);
+          setCamasEmergencia(h.camasEmergencia);
+        }
+      } catch (err) {
+        console.error('Error cargando hospital:', err);
+        showToast('error', 'Error de configuración', 'No se pudieron cargar los datos');
+      }
+    };
+
+    loadHospital();
+
+    return () => { isMounted.current = false; };
+  }, [geocodeHospitalAddress, showToast]);
 
   useEffect(() => {
     const cargarDoctores = async () => {
@@ -290,50 +288,48 @@ useEffect(() => {
               break;
 
             case 'prehospital_report_update':
-case 'prehospital_report_broadcast':
-  // Guardar solo la última versión
-  setCurrentSheet({
-    callId: data.callId,
-    version: data.version,
-    isFinal: data.isFinal,
-    urgentOnly: data.urgentOnly,
-    report: data.report,
-    patientInfo: data.patientInfo,
-    timestamp: data.timestamp
-  });
-  // Actualizar el caso activo con la versión
-  setActiveCases(prev => prev.map(c =>
-    c.callId === data.callId
-      ? { ...c, latestVersion: data.version, isFinal: data.isFinal }
-      : c
-  ));
-  showToast('info', `Reporte v${data.version} ${data.isFinal ? 'FINAL' : 'URGENTE'}`, `Folio ${data.callId}`);
-  break;
+            case 'prehospital_report_broadcast':
+              setCurrentSheet({
+                callId: data.callId,
+                version: data.version,
+                isFinal: data.isFinal,
+                urgentOnly: data.urgentOnly,
+                report: data.report,
+                patientInfo: data.patientInfo,
+                timestamp: data.timestamp
+              });
+              setActiveCases(prev => prev.map(c =>
+                c.callId === data.callId
+                  ? { ...c, latestVersion: data.version, isFinal: data.isFinal }
+                  : c
+              ));
+              showToast('info', `Reporte v${data.version} ${data.isFinal ? 'FINAL' : 'URGENTE'}`, `Folio ${data.callId}`);
+              break;
 
-case 'prehospital_report_snapshot':
-  setCurrentSheet({
-    callId: data.callId,
-    version: data.version,
-    isFinal: data.isFinal,
-    urgentOnly: data.urgentOnly,
-    report: data.report,
-    patientInfo: data.patientInfo,
-    timestamp: data.timestamp
-  });
-  break;
+            case 'prehospital_report_snapshot':
+              setCurrentSheet({
+                callId: data.callId,
+                version: data.version,
+                isFinal: data.isFinal,
+                urgentOnly: data.urgentOnly,
+                report: data.report,
+                patientInfo: data.patientInfo,
+                timestamp: data.timestamp
+              });
+              break;
 
             case 'hospital_registered':
               break;
 
             case 'hospital_beds_update':
-  if (data.hospitalId === hospitalInfo?.id) {
-    setCamasEmergencia(data.camasEmergencia ?? 0);
-    setCamasDisponibles(data.camasDisponibles ?? 0);
-    if (data.decrementedBy) {
-      showToast('info', 'Cama asignada', `Quedan ${data.camasEmergencia} camas de urgencia`);
-    }
-  }
-  break;
+              if (data.hospitalId === hospitalInfo?.id) {
+                setCamasEmergencia(data.camasEmergencia ?? 0);
+                setCamasDisponibles(data.camasDisponibles ?? 0);
+                if (data.decrementedBy) {
+                  showToast('info', 'Cama asignada', `Quedan ${data.camasEmergencia} camas de urgencia`);
+                }
+              }
+              break;
 
             case 'active_ambulances_update':
               setAmbulances(data.ambulances || []);
@@ -353,7 +349,6 @@ case 'prehospital_report_snapshot':
             case 'patient_accepted':
               if (data.hospitalId === hospitalInfo?.id) {
                 setPatientNotifications(prev => prev.filter(n => n.notificationId !== data.notificationId));
-
                 showToast('success', 'Paciente Aceptado', 'Traslado confirmado — preparar recepción');
               }
               break;
@@ -370,22 +365,17 @@ case 'prehospital_report_snapshot':
               handleRouteUpdated(data);
               break;
 
-              case 'route_cleared':
-  setActiveCases(prev => prev.filter(c => c.ambulanceId !== data.ambulanceId));
-  setCurrentSheet(null);
-  break;
+            case 'route_cleared':
+              setActiveCases(prev => prev.filter(c => c.ambulanceId !== data.ambulanceId));
+              setCurrentSheet(null);
+              break;
 
             case 'active_routes_update':
               (data.routes || []).forEach(handleRouteUpdated);
               break;
 
-case 'navigation_cancelled':
-  setActiveCases(prev => prev.filter(c => c.ambulanceId !== data.ambulanceId));
-  break;
-
-
-            case 'prehospital_report_update':
-              handlePrehospitalReportUpdate(data);
+            case 'navigation_cancelled':
+              setActiveCases(prev => prev.filter(c => c.ambulanceId !== data.ambulanceId));
               break;
 
             case 'prehospital_report_history':
@@ -396,54 +386,51 @@ case 'navigation_cancelled':
               break;
 
             case 'emergency_created_by_operator_broadcast':
-  showToast('info', 'Emergencia iniciada por operador',
-    `Unidad ${data.ambulanceName || data.ambulanceId} · ${data.emergencyType || ''}`);
-  // Si el server ya trazó la ruta operador → hospital, pintarla en el mapa
-  if (data.routeGeometry && data.ambulanceId) {
-    drawAmbulanceRoute(data.ambulanceId, data.routeGeometry);
-    setActiveRoutes(prev => {
-      const idx = prev.findIndex(r => r.ambulanceId === data.ambulanceId);
-      const newRoute = {
-        ambulanceId: data.ambulanceId,
-        hospitalId: data.hospitalInfo?.id || hospitalInfo?.id,
-        distance: data.distance,
-        duration: data.duration,
-        geometry: data.routeGeometry,
-        updatedAt: new Date().toISOString(),
-        origin: 'operator'
-      };
-      if (idx >= 0) {
-        const copy = [...prev];
-        copy[idx] = newRoute;
-        return copy;
-      }
-      return [...prev, newRoute];
-    });
-  }
-  break;
+              showToast('info', 'Emergencia iniciada por operador',
+                `Unidad ${data.ambulanceName || data.ambulanceId} · ${data.emergencyType || ''}`);
+              if (data.routeGeometry && data.ambulanceId) {
+                drawAmbulanceRoute(data.ambulanceId, data.routeGeometry);
+                setActiveRoutes(prev => {
+                  const idx = prev.findIndex(r => r.ambulanceId === data.ambulanceId);
+                  const newRoute = {
+                    ambulanceId: data.ambulanceId,
+                    hospitalId: data.hospitalInfo?.id || hospitalInfo?.id,
+                    distance: data.distance,
+                    duration: data.duration,
+                    geometry: data.routeGeometry,
+                    updatedAt: new Date().toISOString(),
+                    origin: 'operator'
+                  };
+                  if (idx >= 0) {
+                    const copy = [...prev];
+                    copy[idx] = newRoute;
+                    return copy;
+                  }
+                  return [...prev, newRoute];
+                });
+              }
+              break;
 
+            case 'doctor_connected':
+              if (data.doctor) {
+                setListaDoctores(prev => {
+                  const exists = prev.some(d => d.id_doctor === data.doctor.doctorId);
+                  return exists ? prev : [...prev, {
+                    id_doctor: data.doctor.doctorId,
+                    nombre: data.doctor.nombre,
+                    apellidos: '',
+                    licencia_medica: '',
+                    especialidad: data.doctor.especialidad
+                  }];
+                });
+              }
+              break;
 
-              case 'doctor_connected':
-  if (data.doctor) {
-    setListaDoctores(prev => {
-      const exists = prev.some(d => d.id_doctor === data.doctor.doctorId);
-      return exists ? prev : [...prev, {
-        id_doctor: data.doctor.doctorId,
-        nombre: data.doctor.nombre,
-        apellidos: '',
-        licencia_medica: '',
-        especialidad: data.doctor.especialidad
-      }];
-    });
-  }
-  break;
+            case 'doctor_disconnected':
+              setListaDoctores(prev => prev.filter(d => d.id_doctor !== data.doctorId));
+              break;
 
-case 'doctor_disconnected':
-  setListaDoctores(prev => prev.filter(d => d.id_doctor !== data.doctorId));
-  break;
-            
             case 'error':
-              // Silencioso — puede ser un mensaje transitorio
               break;
 
             default:
@@ -481,7 +468,6 @@ case 'doctor_disconnected':
     }
   }, [hospitalInfo, connectWebSocket]);
 
-  // Cuando cambian las camas manualmente, actualizar al server
   useEffect(() => {
     if (wsConnected && hospitalInfo) {
       const t = setTimeout(() => registerHospital(), 400);
@@ -508,7 +494,7 @@ case 'doctor_disconnected':
       placeHospitalMarker();
       if (trafficEnabled) addTrafficLayer();
       add3DBuildings();
-      setMapLoaded(true); 
+      setMapLoaded(true);
     });
 
     return () => {
@@ -580,111 +566,108 @@ case 'doctor_disconnected':
   };
 
   const placeHospitalMarker = () => {
-  if (!map.current || !hospitalInfo) return;
-  try {
-    if (hospitalMarker.current) hospitalMarker.current.remove();
+    if (!map.current || !hospitalInfo) return;
+    try {
+      if (hospitalMarker.current) hospitalMarker.current.remove();
 
-    const el = document.createElement('div');
-    el.style.cssText = `
-      width:70px; height:70px;
-      background:#09090b;
-      border:4px solid #38bdf8;
-      border-radius:50%;
-      display:flex; align-items:center; justify-content:center;
-      box-shadow:0 0 25px rgba(56,189,248,0.6);
-      cursor:pointer;
-    `;
-    const label = document.createElement('span');
-    label.style.cssText = 'color:#38bdf8; font-weight:900; font-size:28px;';
-    label.textContent = 'H';
-    el.appendChild(label);
+      const el = document.createElement('div');
+      el.style.cssText = `
+        width:70px; height:70px;
+        background:#09090b;
+        border:4px solid #38bdf8;
+        border-radius:50%;
+        display:flex; align-items:center; justify-content:center;
+        box-shadow:0 0 25px rgba(56,189,248,0.6);
+        cursor:pointer;
+      `;
+      const label = document.createElement('span');
+      label.style.cssText = 'color:#38bdf8; font-weight:900; font-size:28px;';
+      label.textContent = 'H';
+      el.appendChild(label);
 
-    // Popup construido con DOM para evitar inyección HTML
-    const popupNode = document.createElement('div');
-    popupNode.style.textAlign = 'center';
+      const popupNode = document.createElement('div');
+      popupNode.style.textAlign = 'center';
 
-    const titleNode = document.createElement('h3');
-    titleNode.style.cssText = 'font-size:18px; font-weight:900; color:#38bdf8; margin-bottom:6px;';
-    titleNode.textContent = hospitalInfo.nombre || 'Hospital';
+      const titleNode = document.createElement('h3');
+      titleNode.style.cssText = 'font-size:18px; font-weight:900; color:#38bdf8; margin-bottom:6px;';
+      titleNode.textContent = hospitalInfo.nombre || 'Hospital';
 
-    const addrNode = document.createElement('p');
-    addrNode.style.cssText = 'font-size:13px; color:#a1a1aa; margin:0;';
-    addrNode.textContent = hospitalInfo.direccion || 'Dirección no registrada';
+      const addrNode = document.createElement('p');
+      addrNode.style.cssText = 'font-size:13px; color:#a1a1aa; margin:0;';
+      addrNode.textContent = hospitalInfo.direccion || 'Dirección no registrada';
 
-    popupNode.appendChild(titleNode);
-    popupNode.appendChild(addrNode);
+      popupNode.appendChild(titleNode);
+      popupNode.appendChild(addrNode);
 
-    const popup = new mapboxgl.Popup({ offset: 35 }).setDOMContent(popupNode);
+      const popup = new mapboxgl.Popup({ offset: 35 }).setDOMContent(popupNode);
 
-    hospitalMarker.current = new mapboxgl.Marker({ element: el })
-      .setLngLat([hospitalInfo.lng, hospitalInfo.lat])
-      .setPopup(popup)
-      .addTo(map.current);
-  } catch (err) {
-    console.warn('Error marcador hospital:', err.message);
-  }
-};
-  
+      hospitalMarker.current = new mapboxgl.Marker({ element: el })
+        .setLngLat([hospitalInfo.lng, hospitalInfo.lat])
+        .setPopup(popup)
+        .addTo(map.current);
+    } catch (err) {
+      console.warn('Error marcador hospital:', err.message);
+    }
+  };
+
   const updateAmbulanceMarkers = (list) => {
-  if (!map.current) return;
+    if (!map.current) return;
 
-  // Remover los marcadores existentes
-  Object.values(ambulanceMarkers.current).forEach(m => m.remove());
-  ambulanceMarkers.current = {};
+    Object.values(ambulanceMarkers.current).forEach(m => m.remove());
+    ambulanceMarkers.current = {};
 
-  list.forEach(amb => {
-    if (!amb.location?.lat || !amb.location?.lng) return;
-    const isRoute = amb.status === 'en_ruta';
-    const color = isRoute ? '#10b981' : amb.status === 'fuera_de_servicio' ? '#64748b' : '#f59e0b';
+    list.forEach(amb => {
+      if (!amb.location?.lat || !amb.location?.lng) return;
+      const isRoute = amb.status === 'en_ruta';
+      const color = isRoute ? '#10b981' : amb.status === 'fuera_de_servicio' ? '#64748b' : '#f59e0b';
 
-    const el = document.createElement('div');
-    el.style.cssText = `
-      width:50px; height:50px;
-      background:${color};
-      border:4px solid #18181b;
-      border-radius:50%;
-      display:flex; align-items:center; justify-content:center;
-      box-shadow:0 0 20px ${color}99;
-      cursor:pointer;
-    `;
-    const label = document.createElement('span');
-    label.style.cssText = 'color:#fff; font-weight:900; font-size:20px;';
-    label.textContent = 'A';
-    el.appendChild(label);
+      const el = document.createElement('div');
+      el.style.cssText = `
+        width:50px; height:50px;
+        background:${color};
+        border:4px solid #18181b;
+        border-radius:50%;
+        display:flex; align-items:center; justify-content:center;
+        box-shadow:0 0 20px ${color}99;
+        cursor:pointer;
+      `;
+      const label = document.createElement('span');
+      label.style.cssText = 'color:#fff; font-weight:900; font-size:20px;';
+      label.textContent = 'A';
+      el.appendChild(label);
 
-    const popupNode = document.createElement('div');
-    popupNode.style.textAlign = 'center';
+      const popupNode = document.createElement('div');
+      popupNode.style.textAlign = 'center';
 
-    const title = document.createElement('strong');
-    title.style.cssText = `font-size:16px; color:${color};`;
-    title.textContent = `UNIDAD ${amb.id}`;
+      const title = document.createElement('strong');
+      title.style.cssText = `font-size:16px; color:${color};`;
+      title.textContent = `UNIDAD ${amb.id}`;
 
-    const state = document.createElement('p');
-    state.style.cssText = 'margin-top:8px; font-size:13px; color:#d4d4d8;';
-    state.textContent = `ESTADO: ${(amb.status || '').replace('_', ' ').toUpperCase()}`;
+      const state = document.createElement('p');
+      state.style.cssText = 'margin-top:8px; font-size:13px; color:#d4d4d8;';
+      state.textContent = `ESTADO: ${(amb.status || '').replace('_', ' ').toUpperCase()}`;
 
-    const speed = document.createElement('p');
-    speed.style.cssText = 'margin:4px 0 0 0; font-size:13px; color:#d4d4d8;';
-    speed.textContent = `VELOCIDAD: ${amb.speed || 0} km/h`;
+      const speed = document.createElement('p');
+      speed.style.cssText = 'margin:4px 0 0 0; font-size:13px; color:#d4d4d8;';
+      speed.textContent = `VELOCIDAD: ${amb.speed || 0} km/h`;
 
-    popupNode.appendChild(title);
-    popupNode.appendChild(state);
-    popupNode.appendChild(speed);
+      popupNode.appendChild(title);
+      popupNode.appendChild(state);
+      popupNode.appendChild(speed);
 
-    const marker = new mapboxgl.Marker({ element: el })
-      .setLngLat([amb.location.lng, amb.location.lat])
-      .setPopup(new mapboxgl.Popup({ offset: 30 }).setDOMContent(popupNode))
-      .addTo(map.current);
+      const marker = new mapboxgl.Marker({ element: el })
+        .setLngLat([amb.location.lng, amb.location.lat])
+        .setPopup(new mapboxgl.Popup({ offset: 30 }).setDOMContent(popupNode))
+        .addTo(map.current);
 
-    ambulanceMarkers.current[amb.id] = marker;
+      ambulanceMarkers.current[amb.id] = marker;
 
-    el.addEventListener('click', () => {
-      setSelectedAmbulance(amb);
-      map.current.flyTo({ center: [amb.location.lng, amb.location.lat], zoom: 16, duration: 800 });
+      el.addEventListener('click', () => {
+        setSelectedAmbulance(amb);
+        map.current.flyTo({ center: [amb.location.lng, amb.location.lat], zoom: 16, duration: 800 });
+      });
     });
-  });
-};
-
+  };
 
   const handleAmbulanceLocationUpdate = (data) => {
     if (!data.ambulanceId || !data.location) return;
@@ -750,109 +733,101 @@ case 'doctor_disconnected':
     } catch (_) {}
   };
 
-const handleRouteUpdated = (data) => {
-  const { ambulanceId, hospitalId, routeGeometry, distance, duration } = data;
-  if (hospitalId && hospitalId !== hospitalInfo?.id) return;
+  const handleRouteUpdated = (data) => {
+    const { ambulanceId, hospitalId, routeGeometry, distance, duration } = data;
+    if (hospitalId && hospitalId !== hospitalInfo?.id) return;
 
-  if (routeGeometry) {
-    drawAmbulanceRoute(ambulanceId, routeGeometry, distance, duration);
+    if (routeGeometry) {
+      drawAmbulanceRoute(ambulanceId, routeGeometry, distance, duration);
 
-    // ⬅️ NUEVO: forzar visibilidad del marcador de la ambulancia
-    const marker = ambulanceMarkers.current[ambulanceId];
-    if (marker) {
-      marker.getElement().style.zIndex = '100';
+      const marker = ambulanceMarkers.current[ambulanceId];
+      if (marker) {
+        marker.getElement().style.zIndex = '100';
+      }
+
+      if (!activeRoutes.some(r => r.ambulanceId === ambulanceId)) {
+        setTimeout(() => {
+          if (!map.current) return;
+          const bounds = new mapboxgl.LngLatBounds();
+          bounds.extend([hospitalInfo.lng, hospitalInfo.lat]);
+          routeGeometry.forEach(c => bounds.extend([c[0], c[1]]));
+          map.current.fitBounds(bounds, { padding: 80, duration: 1200 });
+        }, 300);
+      }
+    } else {
+      clearAmbulanceRoute(ambulanceId);
+      return;
     }
 
-    // ⬅️ NUEVO: auto-centrar en la ruta si es la primera vez que llega
-    if (!activeRoutes.some(r => r.ambulanceId === ambulanceId)) {
-      setTimeout(() => {
-        if (!map.current) return;
-        const bounds = new mapboxgl.LngLatBounds();
-        bounds.extend([hospitalInfo.lng, hospitalInfo.lat]);
-        routeGeometry.forEach(c => bounds.extend([c[0], c[1]]));
-        map.current.fitBounds(bounds, { padding: 80, duration: 1200 });
-      }, 300);
-    }
-  } else {
-    clearAmbulanceRoute(ambulanceId);
-    return;
-  }
-
-  setActiveRoutes(prev => {
-    const idx = prev.findIndex(r => r.ambulanceId === ambulanceId);
-    const newRoute = {
-      ambulanceId,
-      hospitalId: hospitalId || hospitalInfo?.id,
-      distance, duration,
-      geometry: routeGeometry,
-      updatedAt: new Date().toISOString()
-    };
-    if (idx >= 0) {
-      const copy = [...prev];
-      copy[idx] = newRoute;
-      return copy;
-    }
-    return [...prev, newRoute];
-  });
-};
+    setActiveRoutes(prev => {
+      const idx = prev.findIndex(r => r.ambulanceId === ambulanceId);
+      const newRoute = {
+        ambulanceId,
+        hospitalId: hospitalId || hospitalInfo?.id,
+        distance, duration,
+        geometry: routeGeometry,
+        updatedAt: new Date().toISOString()
+      };
+      if (idx >= 0) {
+        const copy = [...prev];
+        copy[idx] = newRoute;
+        return copy;
+      }
+      return [...prev, newRoute];
+    });
+  };
 
   const handleNavigationCancelled = (data) => {
     if (data.ambulanceId) clearAmbulanceRoute(data.ambulanceId);
   };
 
   // ==================== NOTIFICACIONES ====================
-const handlePatientTransferNotification = (data) => {
-  const notification = {
-    ...data,
-    id: data.notificationId || `notif_${Date.now()}`,
-    timestamp: new Date().toLocaleTimeString(),
-    status: 'pending'
-  };
-
-  // 1) Agregar a la lista de notificaciones pendientes
-  setPatientNotifications(prev => [...prev, notification]);
-  setSelectedNotification(notification);
-  setConfirmReject(false);
-
-  // 2) Registrar caso activo en el panel de casos (dropdown)
-  setActiveCases(prev => {
-    const exists = prev.find(c => c.callId === data.callId);
-    const entry = {
-      callId: data.callId,
-      ambulanceId: data.ambulanceId,
-      ambulanceName: data.ambulanceName,
-      emergencyType: data.emergencyType,
-      patientInfo: data.patientInfo,
-      distanceKm: data.distanceKm,
-      receivedAt: new Date().toISOString(),
-      isFinal: false
+  const handlePatientTransferNotification = (data) => {
+    const notification = {
+      ...data,
+      id: data.notificationId || `notif_${Date.now()}`,
+      timestamp: new Date().toLocaleTimeString(),
+      status: 'pending'
     };
-    return exists
-      ? prev.map(c => c.callId === data.callId ? { ...c, ...entry } : c)
-      : [...prev, entry];
-  });
 
-  // 3) Dibujar la ruta en el mapa si viene
-  if (data.routeGeometry) {
-    drawAmbulanceRoute(data.ambulanceId, data.routeGeometry);
-  }
+    setPatientNotifications(prev => [...prev, notification]);
+    setSelectedNotification(notification);
+    setConfirmReject(false);
 
-  // 4) ▼▼▼ AQUÍ VA EL BLOQUE DE ETA ▼▼▼
-  if (data.routeGeometry && data.duration) {
-    const etaMin = Math.round(data.duration / 60);
-    const arrivalTime = new Date(Date.now() + data.duration * 1000)
-      .toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' });
-    showToast(
-      'info',
-      `${data.ambulanceName || data.ambulanceId} en camino`,
-      `ETA ${etaMin} min · Llegada aprox. ${arrivalTime}`
-    );
-  }
-  // ▲▲▲ FIN DEL BLOQUE DE ETA ▲▲▲
+    setActiveCases(prev => {
+      const exists = prev.find(c => c.callId === data.callId);
+      const entry = {
+        callId: data.callId,
+        ambulanceId: data.ambulanceId,
+        ambulanceName: data.ambulanceName,
+        emergencyType: data.emergencyType,
+        patientInfo: data.patientInfo,
+        distanceKm: data.distanceKm,
+        receivedAt: new Date().toISOString(),
+        isFinal: false
+      };
+      return exists
+        ? prev.map(c => c.callId === data.callId ? { ...c, ...entry } : c)
+        : [...prev, entry];
+    });
 
-  // 5) Abrir el modal de alerta
-  onNotificationOpen();
-};
+    if (data.routeGeometry) {
+      drawAmbulanceRoute(data.ambulanceId, data.routeGeometry);
+    }
+
+    if (data.routeGeometry && data.duration) {
+      const etaMin = Math.round(data.duration / 60);
+      const arrivalTime = new Date(Date.now() + data.duration * 1000)
+        .toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' });
+      showToast(
+        'info',
+        `${data.ambulanceName || data.ambulanceId} en camino`,
+        `ETA ${etaMin} min · Llegada aprox. ${arrivalTime}`
+      );
+    }
+
+    onNotificationOpen();
+  };
 
   const acceptPatient = () => {
     if (!sendWS({
@@ -903,7 +878,6 @@ const handlePatientTransferNotification = (data) => {
   const handlePrehospitalReportUpdate = (data) => {
     const { callId, version, report, patientInfo, urgentOnly } = data;
 
-    // Guardar versión en historial local de expedientes
     setHistorialExpedientes(prev => {
       const existingIdx = prev.findIndex(e => e.callId === callId);
       const entry = {
@@ -937,14 +911,12 @@ const handlePatientTransferNotification = (data) => {
       return [entry, ...prev];
     });
 
-    // Si hay un expediente abierto para ese callId, actualizar
     if (selectedReport?.callId === callId) {
       setReportHistory(prev => [...prev, { version, report, timestamp: new Date().toISOString() }]);
       setSelectedReportVersion(version);
       setSelectedReport(prev => ({ ...prev, ...report }));
     }
 
-    // Pre-seleccionar especialista
     const motivo = report?.seccionF?.motivo_principal || '';
     const espReq = clasificarEspecialidad(motivo);
     const docIdeal = listaDoctores.find(d => d.especialidad?.toLowerCase() === espReq.toLowerCase());
@@ -1035,7 +1007,6 @@ const handlePatientTransferNotification = (data) => {
     );
   }
 
-    // ── BLOQUE 2: configuración inicial de camas ──
   if (setupStep === 'beds') {
     return (
       <ChakraProvider>
@@ -1100,7 +1071,7 @@ const handlePatientTransferNotification = (data) => {
   return (
     <ChakraProvider>
       <Box h="100vh" w="100vw" bg="#09090b" display="flex" flexDirection="column" overflow="hidden">
-        {/* HEADER */}
+        {/* ==================== HEADER ==================== */}
         <Flex as="nav" h="85px" bg="#09090b" borderBottom="1px solid #27272a" px={6} align="center" justify="space-between" zIndex="10">
           <HStack spacing={4}>
             <Box p={3} bg="#18181b" borderRadius="xl" border="1px solid #27272a">
@@ -1113,7 +1084,6 @@ const handlePatientTransferNotification = (data) => {
           </HStack>
 
           <HStack spacing={5}>
-            {/* Camas de emergencia */}
             <HStack bg="#18181b" px={4} py={2} borderRadius="xl" border="2px solid #27272a">
               <Icon as={FaBed} color={camasEmergencia > 2 ? "#10b981" : camasEmergencia > 0 ? "#f59e0b" : "#ef4444"} boxSize={6} />
               <VStack align="start" spacing={0} ml={2} mr={3}>
@@ -1133,60 +1103,6 @@ const handlePatientTransferNotification = (data) => {
                 />
               </ButtonGroup>
             </HStack>
-
-          {/* Barra de casos activos */}
-<Flex bg="#0f0f10" borderBottom="1px solid #27272a" px={6} py={3} align="center" gap={4}>
-  <HStack spacing={2}>
-    <Icon as={FaAmbulance} color="#38bdf8" />
-    <Text fontSize="13px" fontWeight="900" color="#38bdf8" letterSpacing="1px">
-      CASOS ACTIVOS ({activeCases.length})
-    </Text>
-  </HStack>
-
-  <Select
-    value={selectedCaseId}
-    onChange={(e) => {
-      const callId = e.target.value;
-      setSelectedCaseId(callId);
-      if (callId) {
-        const c = activeCases.find(x => x.callId === callId);
-        if (c?.ambulanceId) {
-          sendWS({ type: 'prehospital_report_get', callId });
-          // centrar el mapa en la ambulancia
-          const marker = ambulanceMarkers.current[c.ambulanceId];
-          if (marker && map.current) {
-            const { lng, lat } = marker.getLngLat();
-            map.current.flyTo({ center: [lng, lat], zoom: 15, duration: 1000 });
-          }
-        }
-      } else {
-        setCurrentSheet(null);
-      }
-    }}
-    bg="#18181b" border="1px solid #3f3f46" color="white"
-    fontWeight="800" fontSize="13px"
-    w="100%" maxW="500px"
-    _focus={{ borderColor: '#38bdf8', boxShadow: 'none' }}
-  >
-    <option value="" style={{ background: '#18181b' }}>— Seleccione un caso —</option>
-    {activeCases.map(c => (
-      <option key={c.callId} value={c.callId} style={{ background: '#18181b' }}>
-        {c.callId} · {c.emergencyType || 'Urgencia'} · {c.ambulanceName || c.ambulanceId}
-        {c.distanceKm != null ? ` · ${c.distanceKm} km` : ''}
-      </option>
-    ))}
-  </Select>
-
-  {currentSheet && (
-    <Badge
-      bg={currentSheet.isFinal ? '#10b981' : '#f59e0b'}
-      color="white" px={3} py={1} borderRadius="md"
-      fontSize="11px" fontWeight="900"
-    >
-      {currentSheet.isFinal ? `REPORTE FINAL v${currentSheet.version}` : `URGENTE v${currentSheet.version}`}
-    </Badge>
-  )}
-</Flex>
 
             <Button
               h="55px" px={4} bg="#18181b" color="#38bdf8" border="1px solid #3f3f46"
@@ -1227,7 +1143,60 @@ const handlePatientTransferNotification = (data) => {
           </HStack>
         </Flex>
 
-        {/* BODY */}
+        {/* ==================== BARRA DE CASOS ACTIVOS (fuera del header) ==================== */}
+        <Flex bg="#0f0f10" borderBottom="1px solid #27272a" px={6} py={3} align="center" gap={4}>
+          <HStack spacing={2}>
+            <Icon as={FaAmbulance} color="#38bdf8" />
+            <Text fontSize="13px" fontWeight="900" color="#38bdf8" letterSpacing="1px">
+              CASOS ACTIVOS ({activeCases.length})
+            </Text>
+          </HStack>
+
+          <Select
+            value={selectedCaseId}
+            onChange={(e) => {
+              const callId = e.target.value;
+              setSelectedCaseId(callId);
+              if (callId) {
+                const c = activeCases.find(x => x.callId === callId);
+                if (c?.ambulanceId) {
+                  sendWS({ type: 'prehospital_report_get', callId });
+                  const marker = ambulanceMarkers.current[c.ambulanceId];
+                  if (marker && map.current) {
+                    const { lng, lat } = marker.getLngLat();
+                    map.current.flyTo({ center: [lng, lat], zoom: 15, duration: 1000 });
+                  }
+                }
+              } else {
+                setCurrentSheet(null);
+              }
+            }}
+            bg="#18181b" border="1px solid #3f3f46" color="white"
+            fontWeight="800" fontSize="13px"
+            w="100%" maxW="500px"
+            _focus={{ borderColor: '#38bdf8', boxShadow: 'none' }}
+          >
+            <option value="" style={{ background: '#18181b' }}>— Seleccione un caso —</option>
+            {activeCases.map(c => (
+              <option key={c.callId} value={c.callId} style={{ background: '#18181b' }}>
+                {c.callId} · {c.emergencyType || 'Urgencia'} · {c.ambulanceName || c.ambulanceId}
+                {c.distanceKm != null ? ` · ${c.distanceKm} km` : ''}
+              </option>
+            ))}
+          </Select>
+
+          {currentSheet && (
+            <Badge
+              bg={currentSheet.isFinal ? '#10b981' : '#f59e0b'}
+              color="white" px={3} py={1} borderRadius="md"
+              fontSize="11px" fontWeight="900"
+            >
+              {currentSheet.isFinal ? `REPORTE FINAL v${currentSheet.version}` : `URGENTE v${currentSheet.version}`}
+            </Badge>
+          )}
+        </Flex>
+
+        {/* ==================== BODY ==================== */}
         <Flex flex={1} overflow="hidden">
           <Box w={sidebarWidth} bg="#09090b" borderRight="1px solid #27272a" display="flex" flexDirection="column" zIndex={5}>
             <Box p={5} borderBottom="1px solid #27272a">
@@ -1285,10 +1254,9 @@ const handlePatientTransferNotification = (data) => {
                         </Badge>
                       </Flex>
                       <Button w="100%" h="50px" bg="#27272a" color="white" _hover={{ bg: '#3f3f46' }} fontSize="12px" fontWeight="900"
-  onClick={() => { if (amb.location && map.current) map.current.flyTo({ center: [amb.location.lng, amb.location.lat], zoom: 16 }); }}>
-  UBICAR MAPA
-</Button>
-
+                        onClick={() => { if (amb.location && map.current) map.current.flyTo({ center: [amb.location.lng, amb.location.lat], zoom: 16 }); }}>
+                        UBICAR MAPA
+                      </Button>
                     </Box>
                   ))}
                 </VStack>
@@ -1310,134 +1278,119 @@ const handlePatientTransferNotification = (data) => {
           </Box>
 
           <Box flex={1} position="relative" display="flex" flexDirection="column">
-  {/* Hoja de atención (si hay caso seleccionado y hay reporte) */}
-  {currentSheet && (
-    <Box
-      bg="#0f0f10"
-      borderBottom="1px solid #27272a"
-      maxH="45%"
-      overflowY="auto"
-      p={4}
-    >
-      <Box ref={sheetRef} p={6} bg="#ffffff" color="#0f172a" borderRadius="lg" maxW="900px" mx="auto"
-        fontFamily="system-ui, -apple-system, sans-serif">
+            {currentSheet && (
+              <Box bg="#0f0f10" borderBottom="1px solid #27272a" maxH="45%" overflowY="auto" p={4}>
+                <Box ref={sheetRef} p={6} bg="#ffffff" color="#0f172a" borderRadius="lg" maxW="900px" mx="auto"
+                  fontFamily="system-ui, -apple-system, sans-serif">
 
-        {/* Header con logo */}
-        <Flex align="center" justify="space-between" borderBottom="3px solid #0ea5e9" pb={3} mb={4}>
-          <HStack spacing={3}>
-            <Box w="60px" h="60px">
-              <img src={logo} alt="EmergenCity" crossOrigin="anonymous"
-                style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
-            </Box>
-            <Box>
-              <Text fontSize="18px" fontWeight="900" color="#0c4a6e" lineHeight="1.1">EMERGENCITY MORELIA</Text>
-              <Text fontSize="11px" fontWeight="800" color="#0284c7">REPORTE DE ATENCIÓN PREHOSPITALARIA</Text>
-            </Box>
-          </HStack>
-          <VStack align="end" spacing={0}>
-            <Text fontSize="11px" fontWeight="900" color="#0c4a6e">{currentSheet.callId}</Text>
-            <Badge bg={currentSheet.isFinal ? '#10b981' : '#f59e0b'} color="white"
-              fontSize="10px" fontWeight="900" px={2} py={0.5} borderRadius="md">
-              {currentSheet.isFinal ? 'REPORTE FINAL' : `URGENTE v${currentSheet.version}`}
-            </Badge>
-          </VStack>
-        </Flex>
+                  <Flex align="center" justify="space-between" borderBottom="3px solid #0ea5e9" pb={3} mb={4}>
+                    <HStack spacing={3}>
+                      <Box w="60px" h="60px">
+                        <img src={logo} alt="EmergenCity" crossOrigin="anonymous"
+                          style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+                      </Box>
+                      <Box>
+                        <Text fontSize="18px" fontWeight="900" color="#0c4a6e" lineHeight="1.1">EMERGENCITY MORELIA</Text>
+                        <Text fontSize="11px" fontWeight="800" color="#0284c7">REPORTE DE ATENCIÓN PREHOSPITALARIA</Text>
+                      </Box>
+                    </HStack>
+                    <VStack align="end" spacing={0}>
+                      <Text fontSize="11px" fontWeight="900" color="#0c4a6e">{currentSheet.callId}</Text>
+                      <Badge bg={currentSheet.isFinal ? '#10b981' : '#f59e0b'} color="white"
+                        fontSize="10px" fontWeight="900" px={2} py={0.5} borderRadius="md">
+                        {currentSheet.isFinal ? 'REPORTE FINAL' : `URGENTE v${currentSheet.version}`}
+                      </Badge>
+                    </VStack>
+                  </Flex>
 
-        {/* Contenido condicional, reusa la lógica de ReportesPage:
-            triaje, identificación, signos vitales, evaluación, intervenciones, observaciones
-            todos con hasValue(...) para no imprimir vacíos */}
-        <SimpleGrid columns={2} spacing={3} mb={3}>
-          {currentSheet.report?.triaje?.label && (
-            <Box bg="#f0f9ff" border="2px solid #0ea5e9" borderRadius="lg" p={3} textAlign="center">
-              <Text fontSize="10px" color="#0c4a6e" fontWeight="900">TRIAGE</Text>
-              <Text fontSize="18px" fontWeight="900" color={currentSheet.report.triaje.color}>{currentSheet.report.triaje.label}</Text>
-            </Box>
-          )}
-          {currentSheet.report?.glasgow?.total && (
-            <Box bg="#f0f9ff" border="2px solid #0ea5e9" borderRadius="lg" p={3} textAlign="center">
-              <Text fontSize="10px" color="#0c4a6e" fontWeight="900">GLASGOW</Text>
-              <Text fontSize="18px" fontWeight="900" color="#0c4a6e">{currentSheet.report.glasgow.total} / 15</Text>
-            </Box>
-          )}
-        </SimpleGrid>
+                  <SimpleGrid columns={2} spacing={3} mb={3}>
+                    {currentSheet.report?.triaje?.label && (
+                      <Box bg="#f0f9ff" border="2px solid #0ea5e9" borderRadius="lg" p={3} textAlign="center">
+                        <Text fontSize="10px" color="#0c4a6e" fontWeight="900">TRIAGE</Text>
+                        <Text fontSize="18px" fontWeight="900" color={currentSheet.report.triaje.color}>{currentSheet.report.triaje.label}</Text>
+                      </Box>
+                    )}
+                    {currentSheet.report?.glasgow?.total && (
+                      <Box bg="#f0f9ff" border="2px solid #0ea5e9" borderRadius="lg" p={3} textAlign="center">
+                        <Text fontSize="10px" color="#0c4a6e" fontWeight="900">GLASGOW</Text>
+                        <Text fontSize="18px" fontWeight="900" color="#0c4a6e">{currentSheet.report.glasgow.total} / 15</Text>
+                      </Box>
+                    )}
+                  </SimpleGrid>
 
-        <SimpleGrid columns={3} spacing={3} mb={3}>
-          {currentSheet.report?.seccionD?.nombre && (
-            <Box bg="#f8fafc" p={3} borderRadius="md" border="1px solid #e2e8f0">
-              <Text fontSize="9px" color="#64748b" fontWeight="900">NOMBRE</Text>
-              <Text fontSize="14px" fontWeight="900">{currentSheet.report.seccionD.nombre}</Text>
-            </Box>
-          )}
-          {currentSheet.report?.seccionD?.edad && (
-            <Box bg="#f8fafc" p={3} borderRadius="md" border="1px solid #e2e8f0">
-              <Text fontSize="9px" color="#64748b" fontWeight="900">EDAD</Text>
-              <Text fontSize="14px" fontWeight="900">{currentSheet.report.seccionD.edad}</Text>
-            </Box>
-          )}
-          {currentSheet.report?.seccionD?.sexo && (
-            <Box bg="#f8fafc" p={3} borderRadius="md" border="1px solid #e2e8f0">
-              <Text fontSize="9px" color="#64748b" fontWeight="900">SEXO</Text>
-              <Text fontSize="14px" fontWeight="900">{currentSheet.report.seccionD.sexo}</Text>
-            </Box>
-          )}
-        </SimpleGrid>
+                  <SimpleGrid columns={3} spacing={3} mb={3}>
+                    {currentSheet.report?.seccionD?.nombre && (
+                      <Box bg="#f8fafc" p={3} borderRadius="md" border="1px solid #e2e8f0">
+                        <Text fontSize="9px" color="#64748b" fontWeight="900">NOMBRE</Text>
+                        <Text fontSize="14px" fontWeight="900">{currentSheet.report.seccionD.nombre}</Text>
+                      </Box>
+                    )}
+                    {currentSheet.report?.seccionD?.edad && (
+                      <Box bg="#f8fafc" p={3} borderRadius="md" border="1px solid #e2e8f0">
+                        <Text fontSize="9px" color="#64748b" fontWeight="900">EDAD</Text>
+                        <Text fontSize="14px" fontWeight="900">{currentSheet.report.seccionD.edad}</Text>
+                      </Box>
+                    )}
+                    {currentSheet.report?.seccionD?.sexo && (
+                      <Box bg="#f8fafc" p={3} borderRadius="md" border="1px solid #e2e8f0">
+                        <Text fontSize="9px" color="#64748b" fontWeight="900">SEXO</Text>
+                        <Text fontSize="14px" fontWeight="900">{currentSheet.report.seccionD.sexo}</Text>
+                      </Box>
+                    )}
+                  </SimpleGrid>
 
-        {/* Signos vitales */}
-        {(() => {
-          const sv = currentSheet.report?.seccionI || {};
-          const vitals = [
-            { label: 'FC', value: sv.fc, unit: 'bpm' },
-            { label: 'FR', value: sv.fr, unit: 'rpm' },
-            { label: 'SpO₂', value: sv.spo2, unit: '%' },
-            { label: 'T/A', value: sv.ta, unit: 'mmHg' },
-            { label: 'TEMP', value: sv.temp, unit: '°C' },
-            { label: 'GLUC', value: sv.glucemia, unit: 'mg/dL' },
-          ].filter(v => v.value !== undefined && v.value !== null && String(v.value).trim() !== '');
-          if (!vitals.length) return null;
-          return (
-            <SimpleGrid columns={3} spacing={2} mb={3}>
-              {vitals.map((v, i) => (
-                <Box key={i} bg="#fef2f2" p={2} borderRadius="md" border="1px solid #fecaca" textAlign="center">
-                  <Text fontSize="9px" color="#991b1b" fontWeight="900">{v.label}</Text>
-                  <Text fontSize="16px" fontWeight="900" color="#dc2626">{v.value}</Text>
-                  <Text fontSize="9px" color="#64748b">{v.unit}</Text>
-                </Box>
-              ))}
-            </SimpleGrid>
-          );
-        })()}
+                  {(() => {
+                    const sv = currentSheet.report?.seccionI || {};
+                    const vitals = [
+                      { label: 'FC', value: sv.fc, unit: 'bpm' },
+                      { label: 'FR', value: sv.fr, unit: 'rpm' },
+                      { label: 'SpO₂', value: sv.spo2, unit: '%' },
+                      { label: 'T/A', value: sv.ta, unit: 'mmHg' },
+                      { label: 'TEMP', value: sv.temp, unit: '°C' },
+                      { label: 'GLUC', value: sv.glucemia, unit: 'mg/dL' },
+                    ].filter(v => v.value !== undefined && v.value !== null && String(v.value).trim() !== '');
+                    if (!vitals.length) return null;
+                    return (
+                      <SimpleGrid columns={3} spacing={2} mb={3}>
+                        {vitals.map((v, i) => (
+                          <Box key={i} bg="#fef2f2" p={2} borderRadius="md" border="1px solid #fecaca" textAlign="center">
+                            <Text fontSize="9px" color="#991b1b" fontWeight="900">{v.label}</Text>
+                            <Text fontSize="16px" fontWeight="900" color="#dc2626">{v.value}</Text>
+                            <Text fontSize="9px" color="#64748b">{v.unit}</Text>
+                          </Box>
+                        ))}
+                      </SimpleGrid>
+                    );
+                  })()}
 
-        {/* Intervenciones */}
-        {currentSheet.report?.intervenciones?.length > 0 && (
-          <Box mb={3}>
-            <Text fontSize="11px" fontWeight="900" color="#0c4a6e" mb={1}>INTERVENCIONES</Text>
-            <VStack align="stretch" spacing={1}>
-              {currentSheet.report.intervenciones.map((iv, i) => (
-                <Flex key={i} bg="#ecfdf5" p={2} borderRadius="md" gap={2}>
-                  {iv.hora_intervencion && (
-                    <Badge bg="#10b981" color="white" fontSize="10px">{iv.hora_intervencion}</Badge>
+                  {currentSheet.report?.intervenciones?.length > 0 && (
+                    <Box mb={3}>
+                      <Text fontSize="11px" fontWeight="900" color="#0c4a6e" mb={1}>INTERVENCIONES</Text>
+                      <VStack align="stretch" spacing={1}>
+                        {currentSheet.report.intervenciones.map((iv, i) => (
+                          <Flex key={i} bg="#ecfdf5" p={2} borderRadius="md" gap={2}>
+                            {iv.hora_intervencion && (
+                              <Badge bg="#10b981" color="white" fontSize="10px">{iv.hora_intervencion}</Badge>
+                            )}
+                            <Text fontSize="11px" fontWeight="700" color="#065f46">
+                              {iv.tipo_intervencion} {iv.descripcion && `· ${iv.descripcion}`}
+                            </Text>
+                          </Flex>
+                        ))}
+                      </VStack>
+                    </Box>
                   )}
-                  <Text fontSize="11px" fontWeight="700" color="#065f46">
-                    {iv.tipo_intervencion} {iv.descripcion && `· ${iv.descripcion}`}
-                  </Text>
-                </Flex>
-              ))}
-            </VStack>
-          </Box>
-        )}
-      </Box>
-    </Box>
-  )}
+                </Box>
+              </Box>
+            )}
 
-  {/* Mapa */}
-  <Box flex={1} position="relative">
-    <div ref={mapContainer} style={{ width: '100%', height: '100%' }} />
-  </Box>
-</Box>
-          
+            <Box flex={1} position="relative">
+              <div ref={mapContainer} style={{ width: '100%', height: '100%' }} />
+            </Box>
+          </Box>
         </Flex>
 
-        {/* DRAWER EXPEDIENTES */}
+        {/* ==================== DRAWER EXPEDIENTES ==================== */}
         <Drawer isOpen={isExpedientesOpen} placement="right" onClose={onExpedientesClose} size="md">
           <DrawerOverlay backdropFilter="blur(10px)" />
           <DrawerContent bg="#09090b" color="white" borderLeft="1px solid #27272a">
@@ -1473,7 +1426,7 @@ const handlePatientTransferNotification = (data) => {
           </DrawerContent>
         </Drawer>
 
-        {/* MODAL NOTIFICACIÓN */}
+        {/* ==================== MODAL NOTIFICACIÓN ==================== */}
         <Modal isOpen={isNotificationOpen} onClose={() => {}} size="2xl" isCentered closeOnOverlayClick={false}>
           <ModalOverlay backdropFilter="blur(20px)" bg="rgba(0,0,0,0.85)" />
           <ModalContent bg="#09090b" border="2px solid #3f3f46" borderRadius="2xl" overflow="hidden">
@@ -1523,7 +1476,7 @@ const handlePatientTransferNotification = (data) => {
           </ModalContent>
         </Modal>
 
-        {/* MODAL REPORTE CLÍNICO */}
+        {/* ==================== MODAL REPORTE CLÍNICO ==================== */}
         <Modal isOpen={isReportModalOpen} onClose={onReportModalClose} size="5xl" scrollBehavior="inside" closeOnOverlayClick={false}>
           <ModalOverlay backdropFilter="blur(15px)" bg="rgba(0,0,0,0.85)" />
           <ModalContent bg="#09090b" border="1px solid #3f3f46" borderRadius="2xl">
@@ -1564,11 +1517,10 @@ const handlePatientTransferNotification = (data) => {
                     h="55px" value={doctorSeleccionado} onChange={(e) => setDoctorSeleccionado(e.target.value)}>
                     <option value="" style={{ background: '#09090b' }}>-- SELECCIONAR MÉDICO --</option>
                     {listaDoctores.map(doc => (
-  <option key={doc.id_doctor} value={doc.id_doctor}>
-    Dr(a). {doc.nombre} {doc.apellidos || ''} — Lic. {doc.licencia_medica || 'N/A'}
-  </option>
-))}
-
+                      <option key={doc.id_doctor} value={doc.id_doctor}>
+                        Dr(a). {doc.nombre} {doc.apellidos || ''} — Lic. {doc.licencia_medica || 'N/A'}
+                      </option>
+                    ))}
                   </Select>
                 </Box>
               </Box>
@@ -1589,7 +1541,7 @@ const handlePatientTransferNotification = (data) => {
           </ModalContent>
         </Modal>
 
-        {/* MODAL COMUNICACIÓN RÁPIDA */}
+        {/* ==================== MODAL COMUNICACIÓN RÁPIDA ==================== */}
         <Modal isOpen={isNoteOpen} onClose={onNoteClose} size="3xl" isCentered>
           <ModalOverlay backdropFilter="blur(10px)" bg="rgba(0,0,0,0.8)" />
           <ModalContent bg="#09090b" border="1px solid #3f3f46" borderRadius="2xl" overflow="hidden">
