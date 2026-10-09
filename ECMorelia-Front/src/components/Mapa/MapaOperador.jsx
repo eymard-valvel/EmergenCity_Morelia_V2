@@ -807,31 +807,63 @@ export default function MapaOperador() {
       .setLngLat([loc.lng, loc.lat]).addTo(map.current);
   }, []);
 
+  const routeCacheRef = useRef({ key: '', result: null, ts: 0 });
+
+const computeRouteCached = useCallback(async (start, end) => {
+  const key = `${start.lat.toFixed(4)},${start.lng.toFixed(4)}-${end.lat.toFixed(4)},${end.lng.toFixed(4)}`;
+  const now = Date.now();
+  const cached = routeCacheRef.current;
+  if (cached.key === key && cached.result && (now - cached.ts) < 8000) {
+    return cached.result;
+  }
+  const result = await computeRoute(start, end);
+  if (result) routeCacheRef.current = { key, result, ts: now };
+  return result;
+}, [computeRoute]);
+
   // ==================== MOTOR DE RUTAS ====================
-  const computeRoute = useCallback(async (start, end) => {
-    if (!isValidCoord(start) || !isValidCoord(end)) return null;
-    const straightKm = calcDistance(start.lat, start.lng, end.lat, end.lng);
-    if (straightKm > 500) return null;
-    try {
-      const coords = `${start.lng},${start.lat};${end.lng},${end.lat}`;
-      const url = `https://api.mapbox.com/directions/v5/mapbox/driving-traffic/${coords}?geometries=geojson&overview=full&steps=true&access_token=${mapboxgl.accessToken}&language=es`;
-      const resp = await fetch(url);
-      if (!resp.ok) return null;
-      const data = await resp.json();
-      const route = data.routes?.[0];
-      if (!route) return null;
-      const routeKm = route.distance / 1000;
-      if (routeKm > straightKm * MAX_REASONABLE_ROUTE_FACTOR + 5) return null;
-      return {
-        geometry: route.geometry.coordinates,
-        distance: route.distance,
-        duration: route.duration,
-        steps: route.legs?.[0]?.steps || []
-      };
-    } catch (e) {
-      return null;
+ const computeRoute = useCallback(async (start, end) => {
+  if (!isValidCoord(start) || !isValidCoord(end)) return null;
+  const straightKm = calcDistance(start.lat, start.lng, end.lat, end.lng);
+  if (straightKm > 500) return null;
+
+  // Timeout interno de 3.5s para no colgar la UI en caso de red lenta
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 3500);
+
+  try {
+    const coords = `${start.lng},${start.lat};${end.lng},${end.lat}`;
+    // overview=simplified reduce el payload ~60% sin perder calidad visual.
+    // driving-traffic ya aplica el perfil de tráfico en vivo.
+    const url = `https://api.mapbox.com/directions/v5/mapbox/driving-traffic/${coords}` +
+      `?geometries=geojson&overview=simplified&steps=true` +
+      `&access_token=${mapboxgl.accessToken}&language=es`;
+
+    const resp = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeoutId);
+    if (!resp.ok) return null;
+
+    const data = await resp.json();
+    const route = data.routes?.[0];
+    if (!route) return null;
+
+    const routeKm = route.distance / 1000;
+    if (routeKm > straightKm * MAX_REASONABLE_ROUTE_FACTOR + 5) return null;
+
+    return {
+      geometry: route.geometry.coordinates,
+      distance: route.distance,
+      duration: route.duration,
+      steps: route.legs?.[0]?.steps || []
+    };
+  } catch (e) {
+    clearTimeout(timeoutId);
+    if (e.name === 'AbortError') {
+      console.warn('[route] Timeout de cálculo de ruta');
     }
-  }, []);
+    return null;
+  }
+}, []);
 
   const drawRoute = useCallback((geometry, color = '#0ea5e9') => {
     if (!map.current) return;

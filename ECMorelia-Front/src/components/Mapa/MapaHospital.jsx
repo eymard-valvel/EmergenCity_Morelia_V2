@@ -287,25 +287,32 @@ export default function MapaHospitalOptimizado() {
             case 'connection_established':
               break;
 
-            case 'prehospital_report_update':
-            case 'prehospital_report_broadcast':
-              setCurrentSheet({
-                callId: data.callId,
-                version: data.version,
-                isFinal: data.isFinal,
-                urgentOnly: data.urgentOnly,
-                report: data.report,
-                patientInfo: data.patientInfo,
-                timestamp: data.timestamp
-              });
-              setActiveCases(prev => prev.map(c =>
-                c.callId === data.callId
-                  ? { ...c, latestVersion: data.version, isFinal: data.isFinal }
-                  : c
-              ));
-              showToast('info', `Reporte v${data.version} ${data.isFinal ? 'FINAL' : 'URGENTE'}`, `Folio ${data.callId}`);
-              break;
-
+              case 'prehospital_report_update':
+case 'prehospital_report_broadcast':
+  setCurrentSheet({
+    callId: data.callId,
+    version: data.version,
+    isFinal: data.isFinal,
+    urgentOnly: data.urgentOnly,
+    report: data.report,
+    patientInfo: data.patientInfo,
+    timestamp: data.timestamp
+  });
+  setActiveCases(prev => prev.map(c =>
+    c.callId === data.callId
+      ? { ...c, latestVersion: data.version, isFinal: data.isFinal }
+      : c
+  ));
+  // Persistir en el drawer de expedientes
+  handlePrehospitalReportUpdate(data);
+  // Notificación flotante (toast) — el usuario la verá sin abrir nada
+  showToast(
+    'info',
+    `Reporte ${data.isFinal ? 'FINAL' : `v${data.version}`} recibido`,
+    `Folio ${data.callId} · ${data.patientInfo?.nombre || 'Paciente'}`
+  );
+  break;
+              
 
               case 'hospital_active_cases_update':
   setActiveCases(data.cases || []);
