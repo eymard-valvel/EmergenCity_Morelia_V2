@@ -1,5 +1,5 @@
-// ws-core.js — Núcleo del WebSocket v2 (compartido por main.js y websocket-server.js)
-// Un solo source de verdad para el protocolo.
+// ws-core.js — Núcleo del WebSocket (compartido por main.js y websocket-server.js)
+// v3: heartbeat robusto, case recovery, disconnection handling
 
 const WebSocket = require('ws');
 const fetch = require('node-fetch');
@@ -7,7 +7,7 @@ const { PrismaClient } = require('@prisma/client');
 
 const prisma = new PrismaClient();
 const crypto = require('crypto');
-const PROTOCOL_VERSION = 2;
+const PROTOCOL_VERSION = 3;
 const MAPBOX_TOKEN =
   process.env.MAPBOX_TOKEN ||
   'pk.eyJ1IjoiZXltYXJkMjkiLCJhIjoiY21tcDY4YzNpMGw3bjJzb203YmZyNTVnMyJ9.OvZlnCMfUkUYe6Ib83DUVw';
@@ -15,7 +15,15 @@ const MAPBOX_TOKEN =
 const DEFAULT_LOCATION = { lat: 19.7024, lng: -101.1969 };
 const OFFER_TIMEOUT_MS = 20_000;
 const LOCATION_BROADCAST_THROTTLE_MS = 2_000;
-const AMBULANCE_INACTIVITY_MS = 5 * 60 * 1000;
+
+// Soft inactivity: si el WS está vivo, NO borrar la ambulancia por estos ms.
+const SOFT_INACTIVITY_MS = 15 * 60 * 1000;
+
+// Hard inactivity: si el WS está muerto Y no hay heartbeat por estos ms, borrar.
+const HARD_INACTIVITY_MS = 30 * 60 * 1000;
+
+// Ping server → cliente cada 25s (mantiene viva la conexión en NAT/proxies).
+const SERVER_PING_INTERVAL_MS = 25_000;
 
 // ============ ESTADO (singleton) ============
 const activeAmbulances = new Map();
@@ -37,8 +45,6 @@ const lastLocationBroadcast = new Map();
 
 let currentWss = null;
 
-// ID único e irrepetible: fecha + 64 bits de aleatoriedad criptográfica.
-// Probabilidad de colisión: ~1 en 1.8×10^19 — imposible a escala estatal.
 function generateCallId(origin = 'receptor') {
   const now = new Date();
   const y = now.getFullYear();
@@ -102,6 +108,70 @@ const broadcastToReceptors  = m => broadcastToMap(activeReceptors, m);
 const broadcastToParamedics = m => broadcastToMap(activeParamedics, m);
 const broadcastToDoctors    = m => broadcastToMap(activeDoctors, m);
 
+// ============ LIVENESS ============
+/**
+ * Marca el WS como vivo. Actualiza lastUpdate del registro correspondiente.
+ * Se ejecuta en CADA mensaje entrante — así no hace falta depender solo de
+ * location_update para mantener viva la ambulancia.
+ */
+function touchConnection(ws) {
+  ws._lastHeartbeat = Date.now();
+  const role = ws._role;
+  if (role === 'ambulance' && ws._ambulanceId) {
+    const amb = activeAmbulances.get(ws._ambulanceId);
+    if (amb) amb.lastUpdate = new Date();
+  } else if (role === 'hospital' && ws._hospitalId) {
+    const h = activeHospitals.get(ws._hospitalId);
+    if (h) h.lastUpdate = new Date();
+  } else if (role === 'paramedic' && ws._paramedicId) {
+    const p = activeParamedics.get(ws._paramedicId);
+    if (p) p.lastUpdate = new Date();
+  } else if (role === 'doctor' && ws._doctorId) {
+    const d = activeDoctors.get(ws._doctorId);
+    if (d) d.lastUpdate = new Date();
+  } else if (role === 'receptor' && ws._receptorId) {
+    const r = activeReceptors.get(ws._receptorId);
+    if (r) r.lastUpdate = new Date();
+  }
+}
+
+// ============ HELPERS DE CASO ACTIVO ============
+/** Devuelve la emergencia asignada a esta ambulancia (o null). */
+function getCaseForAmbulance(ambulanceId) {
+  if (!ambulanceId) return null;
+  for (const [, em] of activeEmergencies) {
+    if (em.assignedAmbulanceId === String(ambulanceId)) return em;
+  }
+  return null;
+}
+
+/** Devuelve la ruta activa (cacheada) para una ambulancia. */
+function getRouteForAmbulance(ambulanceId) {
+  if (!ambulanceId) return null;
+  for (const [, route] of activeRoutes) {
+    if (route.ambulanceId === String(ambulanceId)) return route;
+  }
+  return null;
+}
+
+/** Devuelve las notificaciones pendientes dirigidas a un hospital. */
+function getPendingNotificationsForHospital(hospitalId) {
+  const arr = [];
+  for (const [, n] of pendingNotifications) {
+    if (String(n.hospitalId) === String(hospitalId)) arr.push(n);
+  }
+  return arr;
+}
+
+/** Devuelve la notificación pendiente que tiene esa ambulancia como emisora. */
+function getPendingNotificationForAmbulance(ambulanceId) {
+  for (const [, n] of pendingNotifications) {
+    if (String(n.ambulanceId) === String(ambulanceId)) return n;
+  }
+  return null;
+}
+
+// ============ GEOCODING ============
 async function geocodeAddress(address) {
   if (!address || address.trim() === '') return null;
   const clean = address.trim().toLowerCase();
@@ -187,11 +257,10 @@ async function getHospitalsList() {
   return list;
 }
 
-// ============ ASIGNACIÓN DE EMERGENCIAS ============
+// ============ ASIGNACIÓN ============
 function findNearestAvailableAmbulance(location, excludeIds = new Set()) {
   let best = null, bestDist = Infinity;
   for (const [, amb] of activeAmbulances) {
-    // Acepta "disponible" Y "fuera_de_servicio" (standby = el operador decide)
     if (amb.status !== 'disponible' && amb.status !== 'fuera_de_servicio') continue;
     if (!amb.location) continue;
     if (excludeIds.has(amb.id)) continue;
@@ -201,26 +270,19 @@ function findNearestAvailableAmbulance(location, excludeIds = new Set()) {
   return best ? { ambulance: best, distanceKm: bestDist } : null;
 }
 
-/** Encuentra el hospital conectado más cercano con camas disponibles. */
 function findNearestConnectedHospital(location, excludeIds = new Set()) {
   if (!location?.lat || !location?.lng) return null;
   let best = null;
   let bestDist = Infinity;
-
   for (const [, h] of activeHospitals) {
-    // SOLO hospitales conectados y activos
     if (h.ws?.readyState !== WebSocket.OPEN) continue;
     if (h.info.activo === false) continue;
     if (excludeIds.has(h.info.id)) continue;
     const camas = h.info.camasEmergencia ?? h.info.camasDisponibles ?? 0;
     if (camas <= 0) continue;
     if (!h.info.lat || !h.info.lng) continue;
-
     const d = calculateDistance(location.lat, location.lng, h.info.lat, h.info.lng);
-    if (d < bestDist) {
-      bestDist = d;
-      best = h;
-    }
+    if (d < bestDist) { bestDist = d; best = h; }
   }
   return best ? { hospital: best, distanceKm: bestDist } : null;
 }
@@ -252,10 +314,8 @@ function emitEmergencyOffer(emergency, ambulance, excludedIds = new Set()) {
     pendingOffers.delete(offerId);
     console.log(`⏱️ Oferta ${offerId} expirada (standby=${isStandby})`);
     if (!isStandby) {
-      // Auto-aceptar solo a unidades "disponibles"
       acceptEmergencyOffer(offerId, true);
     } else {
-      // Standby que no respondió → se descarta y se busca siguiente
       rejectEmergencyOffer(offerId, 'Standby sin respuesta');
     }
   }, OFFER_TIMEOUT_MS);
@@ -300,19 +360,19 @@ function acceptEmergencyOffer(offerId, auto = false) {
   });
 
   const pairedAm = Array.from(activeParamedics.values())
-  .find(p => p.ambulanceId === String(ambulance.id));
-if (pairedAm?.ws) {
-  sendMessage(pairedAm.ws, {
-    type: 'emergency_case_received',
-    callId: emergency.callId,
-    address: emergency.address,
-    emergencyType: emergency.emergencyType,
-    notes: emergency.notes,
-    patientInfo: emergency.patientInfo,
-    risks: emergency.risks || [],
-    timestamp: new Date().toISOString()
-  });
-}
+    .find(p => p.ambulanceId === String(ambulance.id));
+  if (pairedAm?.ws) {
+    sendMessage(pairedAm.ws, {
+      type: 'emergency_case_received',
+      callId: emergency.callId,
+      address: emergency.address,
+      emergencyType: emergency.emergencyType,
+      notes: emergency.notes,
+      patientInfo: emergency.patientInfo,
+      risks: emergency.risks || [],
+      timestamp: new Date().toISOString()
+    });
+  }
 
   if (emergency.receptorWs) {
     sendMessage(emergency.receptorWs, {
@@ -392,7 +452,9 @@ function serializeEmergency(e) {
     assignedAmbulanceId: e.assignedAmbulanceId,
     assignedAmbulanceName: e.assignedAmbulanceName,
     assignedAt: e.assignedAt, hospitalId: e.hospitalId, doctorId: e.doctorId,
-    correlationId: e.correlationId
+    correlationId: e.correlationId,
+    initiatedBy: e.initiatedBy || 'receptor',
+    createdBy: e.createdBy || null
   };
 }
 
@@ -421,23 +483,57 @@ async function broadcastActiveHospitalsToAmbulances() {
   });
 }
 
-// ============ HANDLERS ============
+// ============ REGISTROS ============
 async function handleRegisterAmbulance(ws, data) {
   if (!data.ambulance?.id) return sendError(ws, 'Datos de ambulancia incompletos', 'BAD_PAYLOAD');
   const location = data.ambulance.location || DEFAULT_LOCATION;
+  const ambId = String(data.ambulance.id);
+
   const amb = {
-    id: String(data.ambulance.id),
+    id: ambId,
     placa: data.ambulance.placa || 'SIN-PLACA',
     nombre: data.ambulance.nombre || data.ambulance.placa || 'Ambulancia',
     tipo: data.ambulance.tipo || 'UVI Móvil',
     status: data.ambulance.status || 'disponible',
-    location, speed: 0, heading: 0, ws, lastUpdate: new Date()
+    location, speed: 0, heading: 0, ws,
+    lastUpdate: new Date(),
+    connectedAt: new Date().toISOString()
   };
-  activeAmbulances.set(amb.id, amb);
-  console.log(`🚑 Ambulancia ${amb.id} (${amb.nombre}) · ${amb.status}`);
+  activeAmbulances.set(ambId, amb);
+
+  ws._role = 'ambulance';
+  ws._ambulanceId = ambId;
+
+  console.log(`🚑 Ambulancia ${ambId} (${amb.nombre}) · ${amb.status}`);
 
   await handleRequestHospitalsList(ws);
   handleRequestActiveEmergencies(ws);
+
+  // === RECUPERACIÓN DE CASO ===
+  // Si esta ambulancia tenía un caso asignado, reenviarlo para que el
+  // cliente recupere la vista de navegación.
+  const activeCase = getCaseForAmbulance(ambId);
+  const activeRoute = getRouteForAmbulance(ambId);
+  const pendingNotif = getPendingNotificationForAmbulance(ambId);
+
+  sendMessage(ws, {
+    type: 'assigned_emergency_sync',
+    emergency: activeCase ? serializeEmergency(activeCase) : null,
+    route: activeRoute ? {
+      routeGeometry: activeRoute.routeGeometry,
+      distance: activeRoute.distance,
+      duration: activeRoute.duration,
+      hospitalId: activeRoute.hospitalId
+    } : null,
+    hospitalRequest: pendingNotif ? {
+      hospitalName: pendingNotif.hospitalId, // nombre se completa abajo
+      hospitalId: pendingNotif.hospitalId,
+      distanceKm: pendingNotif.distanceKm,
+      callId: pendingNotif.callId
+    } : null,
+    timestamp: new Date().toISOString()
+  });
+
   broadcastActiveAmbulances();
   broadcastActiveEmergencies();
   broadcastToReceptors({
@@ -469,7 +565,11 @@ async function handleRegisterHospital(ws, data) {
       if (geo) { info.lat = geo.lat; info.lng = geo.lng; }
       else { info.lat = DEFAULT_LOCATION.lat; info.lng = DEFAULT_LOCATION.lng; }
     }
-    activeHospitals.set(info.id, { info, ws, connectedAt: new Date().toISOString() });
+    activeHospitals.set(info.id, { info, ws, connectedAt: new Date().toISOString(), lastUpdate: new Date() });
+
+    ws._role = 'hospital';
+    ws._hospitalId = info.id;
+
     console.log(`🏥 Hospital ${info.nombre} (${info.id}) · camas: ${info.camasEmergencia}`);
 
     const ambulancesList = Array.from(activeAmbulances.values()).map(a => ({
@@ -478,6 +578,7 @@ async function handleRegisterHospital(ws, data) {
     }));
     sendMessage(ws, { type: 'active_ambulances_update', ambulances: ambulancesList, hospitalInfo: info });
 
+    // Rutas relevantes activas
     const relevantRoutes = [];
     for (const [, route] of activeRoutes) {
       if (route.hospitalId === info.id) {
@@ -491,6 +592,16 @@ async function handleRegisterHospital(ws, data) {
       sendMessage(ws, { type: 'active_routes_update', routes: relevantRoutes });
     }
 
+    // === NOTIFICACIONES PENDIENTES ===
+    // Reenviar notificaciones pendientes a este hospital (recuperación).
+    const pending = getPendingNotificationsForHospital(info.id);
+    if (pending.length > 0) {
+      pending.forEach(n => {
+        sendMessage(ws, { type: 'patient_transfer_notification', ...n });
+      });
+      console.log(`📩 Reenviando ${pending.length} notificación(es) pendiente(s) a hospital ${info.id}`);
+    }
+
     broadcastActiveHospitalsToAmbulances();
     sendMessage(ws, { type: 'hospital_registered', hospitalInfo: info, message: 'Hospital registrado correctamente' });
   } catch (e) {
@@ -502,7 +613,7 @@ async function handleRegisterHospital(ws, data) {
 function handleRegisterReceptor(ws, data) {
   const receptorId = data.receptorId || generateId('receptor');
   const nombre = data.nombre || receptorId;
-  activeReceptors.set(receptorId, { ws, receptorId, nombre, connectedAt: new Date().toISOString() });
+  activeReceptors.set(receptorId, { ws, receptorId, nombre, connectedAt: new Date().toISOString(), lastUpdate: new Date() });
   ws._role = 'receptor';
   ws._receptorId = receptorId;
   console.log(`📞 Receptor ${receptorId} (${nombre})`);
@@ -529,26 +640,30 @@ function handleRegisterReceptor(ws, data) {
 
 function handleRegisterParamedic(ws, data) {
   const paramedicId = data.paramedicId || generateId('paramedic');
+  const ambulanceId = data.ambulanceId ? String(data.ambulanceId) : null;
   const record = {
     ws, paramedicId,
     nombre: data.nombre || paramedicId,
-    ambulanceId: data.ambulanceId ? String(data.ambulanceId) : null,
-    connectedAt: new Date().toISOString()
+    ambulanceId,
+    connectedAt: new Date().toISOString(),
+    lastUpdate: new Date()
   };
   activeParamedics.set(paramedicId, record);
   ws._role = 'paramedic';
   ws._paramedicId = paramedicId;
-  console.log(`🩺 Paramédico ${paramedicId} · amb: ${record.ambulanceId || 'sin asignar'}`);
+  if (ambulanceId) ws._ambulanceId = ambulanceId;
 
-  const operator = record.ambulanceId ? activeAmbulances.get(record.ambulanceId) : null;
+  console.log(`🩺 Paramédico ${paramedicId} · amb: ${ambulanceId || 'sin asignar'}`);
+
+  const operator = ambulanceId ? activeAmbulances.get(ambulanceId) : null;
   sendMessage(ws, {
     type: 'paramedic_registered',
-    paramedicId, nombre: record.nombre, ambulanceId: record.ambulanceId,
+    paramedicId, nombre: record.nombre, ambulanceId,
     pairedWith: operator ? { ambulanceId: operator.id, operatorName: operator.nombre, placa: operator.placa } : null,
     message: operator ? 'Emparejado con unidad activa' : 'Sin unidad activa emparejada',
     timestamp: new Date().toISOString()
   });
-    // Enviar lista de ambulancias activas para que el paramédico se vincule
+
   sendMessage(ws, {
     type: 'active_ambulances_update',
     ambulances: Array.from(activeAmbulances.values()).map(a => ({
@@ -558,6 +673,41 @@ function handleRegisterParamedic(ws, data) {
     })),
     timestamp: new Date().toISOString()
   });
+
+  // === RECUPERACIÓN DE CASO ===
+  // Enviar el caso activo asignado a la ambulancia del paramédico
+  if (ambulanceId) {
+    const activeCase = getCaseForAmbulance(ambulanceId);
+    if (activeCase) {
+      sendMessage(ws, {
+        type: 'assigned_case_sync',
+        callId: activeCase.callId,
+        emergencyType: activeCase.emergencyType,
+        address: activeCase.address,
+        patientInfo: activeCase.patientInfo,
+        notes: activeCase.notes,
+        hospitalId: activeCase.hospitalId,
+        ambulanceId,
+        timestamp: new Date().toISOString()
+      });
+
+      // Si el hospital ya aceptó, avisar también
+      const hospitalAccepted = pendingNotifications.size === 0 && activeCase.hospitalId
+        ? activeHospitals.get(activeCase.hospitalId)
+        : null;
+      if (hospitalAccepted) {
+        sendMessage(ws, {
+          type: 'hospital_accepted_for_call',
+          callId: activeCase.callId,
+          hospitalId: hospitalAccepted.info.id,
+          hospitalInfo: hospitalAccepted.info,
+          message: 'Hospital aceptó. Puede enviar reporte prehospitalario.',
+          timestamp: new Date().toISOString()
+        });
+      }
+    }
+  }
+
   if (operator) {
     sendMessage(operator.ws, {
       type: 'paramedic_paired',
@@ -565,7 +715,6 @@ function handleRegisterParamedic(ws, data) {
       timestamp: new Date().toISOString()
     });
   }
-
 }
 
 function handleRegisterDoctor(ws, data) {
@@ -576,25 +725,25 @@ function handleRegisterDoctor(ws, data) {
     especialidad: data.especialidad || 'Urgenciólogo',
     hospitalId: data.hospitalId ? String(data.hospitalId) : null,
     disponibilidad: data.disponibilidad || 'disponible',
-    connectedAt: new Date().toISOString()
+    connectedAt: new Date().toISOString(),
+    lastUpdate: new Date()
   };
   activeDoctors.set(doctorId, record);
   ws._role = 'doctor';
   ws._doctorId = doctorId;
   console.log(`👨‍⚕️ Doctor ${doctorId} (${record.especialidad})`);
 
-  // Enviar reportes prehospitalarios recientes al doctor que se conecta
   const recentReports = [];
-  prehospitalReports.forEach((record, callId) => {
-    const last = record.versions[record.versions.length - 1];
+  prehospitalReports.forEach((record2, callId) => {
+    const last = record2.versions[record2.versions.length - 1];
     if (last) {
       recentReports.push({
         callId,
-        version: record.currentVersion,
+        version: record2.currentVersion,
         report: last.report,
-        patientInfo: record.patientInfo,
-        hospitalId: record.hospitalId,
-        ambulanceId: record.ambulanceId,
+        patientInfo: record2.patientInfo,
+        hospitalId: record2.hospitalId,
+        ambulanceId: record2.ambulanceId,
         timestamp: last.timestamp
       });
     }
@@ -610,7 +759,6 @@ function handleRegisterDoctor(ws, data) {
     timestamp: new Date().toISOString()
   });
 
-  // Enviar historial de reportes para previsualización
   if (recentReports.length > 0) {
     sendMessage(ws, {
       type: 'doctor_reports_history',
@@ -620,6 +768,7 @@ function handleRegisterDoctor(ws, data) {
   }
 }
 
+// ============ LOCATION / STATUS ============
 function handleLocationUpdate(data) {
   const { ambulanceId } = data;
   if (!ambulanceId) return;
@@ -682,11 +831,12 @@ function handleAmbulanceStatusUpdate(ws, data) {
   });
 }
 
+// ============ EMERGENCIAS ============
 async function handleEmergencyCall(ws, data) {
   const { location, address, emergencyType, patientInfo, notes, timestamp } = data;
   if (!location) return sendError(ws, 'Datos incompletos: falta location', 'BAD_PAYLOAD');
 
-  const callId = generateCallId();
+  const callId = generateCallId('receptor');
   const correlationId = generateId('corr');
   console.log(`Emergencia ${callId} @ ${JSON.stringify(location)}`);
 
@@ -699,7 +849,8 @@ async function handleEmergencyCall(ws, data) {
     status: 'pending',
     assignedAmbulanceId: null, assignedAmbulanceName: null, assignedAt: null,
     createdBy: ws._receptorId || 'desconocido',
-    receptorWs: ws, hospitalId: null, doctorId: null
+    receptorWs: ws, hospitalId: null, doctorId: null,
+    initiatedBy: 'receptor'
   };
   activeEmergencies.set(callId, emergency);
   rejectedAmbulances.set(callId, new Set());
@@ -723,24 +874,6 @@ async function handleEmergencyCall(ws, data) {
       timestamp: new Date().toISOString()
     });
   }
-  // Difundir detalles del caso al paramédico de la unidad asignada.
-// Se envía como plantilla para que el reporte prehospitalario se prellene.
-if (emergency.assignedAmbulanceId) {
-  const paired = Array.from(activeParamedics.values())
-    .find(p => p.ambulanceId === String(emergency.assignedAmbulanceId));
-  if (paired?.ws) {
-    sendMessage(paired.ws, {
-      type: 'emergency_case_received',
-      callId: emergency.callId,
-      address: emergency.address,
-      emergencyType: emergency.emergencyType,
-      notes: emergency.notes,
-      patientInfo: emergency.patientInfo,
-      risks: emergency.risks || [],
-      timestamp: new Date().toISOString()
-    });
-  }
-}
   broadcastActiveEmergencies();
   broadcastActiveAmbulances();
 }
@@ -781,7 +914,7 @@ async function handleOperatorInitiatedEmergency(ws, data) {
   rejectedAmbulances.set(callId, new Set());
   amb.status = 'en_ruta';
 
-  // === 1. Buscar hospital conectado más cercano ===
+  // === Buscar hospital conectado más cercano ===
   const excluded = rejectedHospitals.get(String(amb.id)) || new Set();
   const candidate = findNearestConnectedHospital(emLocation, excluded);
 
@@ -793,7 +926,6 @@ async function handleOperatorInitiatedEmergency(ws, data) {
     hospitalInfo = candidate.hospital.info;
     distanceKm = parseFloat(candidate.distanceKm.toFixed(2));
 
-    // === 2. Trazar la ruta óptima operador → hospital ===
     if (hospitalInfo.lat && hospitalInfo.lng) {
       try {
         const coords = `${emLocation.lng},${emLocation.lat};${hospitalInfo.lng},${hospitalInfo.lat}`;
@@ -808,7 +940,6 @@ async function handleOperatorInitiatedEmergency(ws, data) {
               distance: route.distance,
               duration: route.duration
             };
-            // Cachear en activeRoutes para reutilizarla si el hospital acepta
             activeRoutes.set(`${amb.id}-${hospitalInfo.id}`, {
               ...routeData,
               ambulanceId: amb.id,
@@ -816,7 +947,7 @@ async function handleOperatorInitiatedEmergency(ws, data) {
               updatedAt: new Date(),
               timestamp: new Date().toISOString()
             });
-            console.log(`[operator] Ruta trazada a ${hospitalInfo.nombre}: ${(route.distance / 1000).toFixed(1)} km · ${Math.round(route.duration / 60)} min`);
+            console.log(`[operator] Ruta a ${hospitalInfo.nombre}: ${(route.distance / 1000).toFixed(1)} km · ${Math.round(route.duration / 60)} min`);
           }
         }
       } catch (e) {
@@ -828,7 +959,7 @@ async function handleOperatorInitiatedEmergency(ws, data) {
     activeEmergencies.set(callId, emergency);
   }
 
-  // === 3. Confirmar al operador con folio + hospital + ruta ===
+  // === Confirmar al operador ===
   sendMessage(ws, {
     type: 'operator_emergency_created',
     callId, correlationId,
@@ -846,7 +977,6 @@ async function handleOperatorInitiatedEmergency(ws, data) {
     timestamp: new Date().toISOString()
   });
 
-  // === 4. Broadcast a receptores con ruta incluida ===
   broadcastToReceptors({
     type: 'emergency_created_by_operator_broadcast',
     callId, ambulanceId: amb.id,
@@ -865,7 +995,7 @@ async function handleOperatorInitiatedEmergency(ws, data) {
   broadcastActiveEmergencies();
   broadcastActiveAmbulances();
 
-  // === 5. Notificar al hospital con la ruta ya trazada ===
+  // === Notificar al hospital ===
   if (candidate && hospitalInfo) {
     const notificationId = generateId('notif');
     const payload = {
@@ -921,7 +1051,6 @@ async function handleOperatorInitiatedEmergency(ws, data) {
       timestamp: new Date().toISOString()
     });
   } else {
-    // Sin hospital conectado → intentar flujo genérico
     await autoRequestHospital(ws, {
       callId, ambulanceId: amb.id,
       patientInfo: emergency.patientInfo,
@@ -1009,7 +1138,6 @@ function handleEmergencyCompleted(data) {
   const { ambulanceId, callId, completedBy } = data;
   console.log(`Servicio ${callId || '(sin folio)'} finalizado (por: ${completedBy || 'operador'})`);
 
-  // Helper de reset de estado local (idempotente)
   const resetAmbulanceState = (id) => {
     if (!id) return;
     const amb = activeAmbulances.get(String(id));
@@ -1019,9 +1147,7 @@ function handleEmergencyCompleted(data) {
     }
   };
 
-  // Caso 1: no hay callId o ya no está activo (doble click, o completado cruzado)
   if (!callId || !activeEmergencies.has(callId)) {
-    // Cleanup residual por si quedó algo pendiente
     if (callId) {
       pendingNotifications.forEach((n, id) => {
         if (n.callId === callId) pendingNotifications.delete(id);
@@ -1038,11 +1164,9 @@ function handleEmergencyCompleted(data) {
   const emergency = activeEmergencies.get(callId);
   const assignedId = emergency.assignedAmbulanceId || ambulanceId;
 
-  // === Limpieza completa del folio ===
   activeEmergencies.delete(callId);
   rejectedAmbulances.delete(callId);
 
-  // Notificaciones pendientes ligadas al folio
   pendingNotifications.forEach((n, id) => {
     if (n.callId === callId) pendingNotifications.delete(id);
   });
@@ -1050,7 +1174,6 @@ function handleEmergencyCompleted(data) {
     if (r.callId === callId) pendingEmergencyRoutes.delete(id);
   });
 
-  // Rutas activas de la ambulancia que atendió
   if (assignedId) {
     for (const [key, route] of activeRoutes) {
       if (route.ambulanceId === String(assignedId)) {
@@ -1059,7 +1182,6 @@ function handleEmergencyCompleted(data) {
     }
   }
 
-  // Liberar la ambulancia
   resetAmbulanceState(assignedId);
 
   broadcastActiveEmergencies();
@@ -1074,7 +1196,6 @@ function handleEmergencyCompleted(data) {
     timestamp: new Date().toISOString()
   });
 
-  // Cerrar reporte del paramédico emparejado
   if (assignedId) {
     const paired = Array.from(activeParamedics.values())
       .find(p => p.ambulanceId === String(assignedId));
@@ -1088,7 +1209,6 @@ function handleEmergencyCompleted(data) {
     }
   }
 
-  // Notificar a hospitales conectados que la ruta ya no está activa
   broadcastToHospitals({
     type: 'route_cleared',
     ambulanceId: assignedId,
@@ -1127,7 +1247,36 @@ function handleRequestActiveAmbulances(ws) {
   });
 }
 
-// Ranking de hospitales por cercanía + capacidad. Excluye rechazados y sin camas.
+// ============ CASO ACTIVO (recuperación) ============
+function handleRequestMyCase(ws, data) {
+  const { role, id, ambulanceId } = data || {};
+  const ambId = ambulanceId || (role === 'ambulance' ? id : (ws._ambulanceId || null));
+
+  if (!ambId) return sendError(ws, 'ambulanceId requerido', 'BAD_PAYLOAD');
+
+  const emergency = getCaseForAmbulance(ambId);
+  const route = getRouteForAmbulance(ambId);
+  const notif = getPendingNotificationForAmbulance(ambId);
+
+  sendMessage(ws, {
+    type: 'assigned_emergency_sync',
+    emergency: emergency ? serializeEmergency(emergency) : null,
+    route: route ? {
+      routeGeometry: route.routeGeometry,
+      distance: route.distance,
+      duration: route.duration,
+      hospitalId: route.hospitalId
+    } : null,
+    hospitalRequest: notif ? {
+      hospitalId: notif.hospitalId,
+      distanceKm: notif.distanceKm,
+      callId: notif.callId
+    } : null,
+    timestamp: new Date().toISOString()
+  });
+}
+
+// ============ RANKING HOSPITALES ============
 async function handleRequestRankedHospitals(ws, data) {
   const { location, excludeIds = [], ambulanceId } = data || {};
   if (!location?.lat || !location?.lng) {
@@ -1149,7 +1298,6 @@ async function handleRequestRankedHospitals(ws, data) {
     .map(h => {
       const dist = calculateDistance(location.lat, location.lng, h.info.lat, h.info.lng);
       const camas = h.info.camasEmergencia ?? h.info.camasDisponibles ?? 0;
-      // Score: menor es mejor. Distancia penaliza, camas premian.
       const score = dist / (1 + Math.min(camas, 20));
       return {
         id: h.info.id,
@@ -1187,6 +1335,7 @@ async function handleRequestHospitalsList(ws) {
   });
 }
 
+// ============ NOTIFICACIONES / RUTAS ============
 async function handlePatientTransferNotification(data) {
   const notificationId = data.notificationId || generateId('notif');
   const payload = { ...data, notificationId, timestamp: new Date().toISOString(), status: 'pending' };
@@ -1231,10 +1380,6 @@ async function handlePatientTransferNotification(data) {
   }
 }
 
-/**
- * Solicitud automática de hospital: busca el más cercano conectado y notifica.
- * Uso: (a) al crear emergencia desde operador, (b) atajo del operador.
- */
 async function autoRequestHospital(ws, data) {
   const { callId, ambulanceId, patientInfo, notes, emergencyType } = data;
   if (!callId) return sendError(ws, 'callId requerido', 'BAD_PAYLOAD');
@@ -1290,7 +1435,7 @@ async function autoRequestHospital(ws, data) {
   em.hospitalId = candidate.hospital.info.id;
   activeEmergencies.set(callId, em);
 
-  console.log(`[autoRequestHospital] Enviando notificación ${notificationId} a hospital ${candidate.hospital.info.id} (${candidate.hospital.info.nombre})`);
+  console.log(`[autoRequestHospital] Notificación ${notificationId} → hospital ${candidate.hospital.info.id}`);
 
   sendMessage(candidate.hospital.ws, {
     type: 'patient_transfer_notification',
@@ -1347,12 +1492,9 @@ async function handleHospitalAcceptPatient(data) {
       timestamp: new Date().toISOString()
     });
     broadcastActiveHospitalsToAmbulances();
-    console.log(`🛏️ Hospital ${h.info.id} → camas emergencia: ${h.info.camasEmergencia}`);
   }
 
-  // === 1. Ruta: buscar en pendingEmergencyRoutes → activeRoutes → calcular fresco ===
   let routeData = null;
-
   if (pendingRoute) {
     routeData = {
       routeGeometry: pendingRoute.routeGeometry,
@@ -1360,7 +1502,6 @@ async function handleHospitalAcceptPatient(data) {
       duration: pendingRoute.duration
     };
   }
-
   if (!routeData) {
     const cached = activeRoutes.get(`${notification.ambulanceId}-${data.hospitalId}`);
     if (cached) {
@@ -1371,7 +1512,6 @@ async function handleHospitalAcceptPatient(data) {
       };
     }
   }
-
   if (!routeData && amb?.location && h?.info?.lat) {
     try {
       const coords = `${amb.location.lng},${amb.location.lat};${h.info.lng},${h.info.lat}`;
@@ -1386,7 +1526,6 @@ async function handleHospitalAcceptPatient(data) {
             distance: route.distance,
             duration: route.duration
           };
-          console.log(`🛣️ Ruta calculada al aceptar: ${(route.distance / 1000).toFixed(1)} km · ${Math.round(route.duration / 60)} min`);
         }
       }
     } catch (e) {
@@ -1404,7 +1543,6 @@ async function handleHospitalAcceptPatient(data) {
     });
   }
 
-  // === 2. Responder a la ambulancia con la ruta ===
   if (amb?.ws) {
     if (routeData) {
       sendMessage(amb.ws, {
@@ -1433,7 +1571,6 @@ async function handleHospitalAcceptPatient(data) {
     rejectedHospitals.delete(amb.id);
   }
 
-  // === 3. Enviar ruta al hospital para que la pinte ===
   if (h?.ws?.readyState === WebSocket.OPEN && routeData) {
     sendMessage(h.ws, {
       type: 'route_updated',
@@ -1444,7 +1581,6 @@ async function handleHospitalAcceptPatient(data) {
       duration: routeData.duration,
       timestamp: new Date().toISOString()
     });
-    console.log(`📍 Ruta enviada al hospital ${h.info.id}`);
   }
 
   const callId = notification.callId;
@@ -1706,7 +1842,6 @@ function handlePrehospitalReportUpdate(data) {
     }
   }
 
-    // Notificar a TODOS los doctores conectados (broadcast) además del asignado
   const em = activeEmergencies.get(callId);
   if (em?.doctorId) {
     const doc = activeDoctors.get(em.doctorId);
@@ -1726,7 +1861,6 @@ function handlePrehospitalReportUpdate(data) {
     }
   }
 
-  // Broadcast general a todos los doctores (para que vean el caso aunque no estén asignados)
   broadcastToDoctors({
     type: 'prehospital_report_broadcast',
     callId,
@@ -1784,7 +1918,6 @@ function handleAssignDoctor(data) {
     doc.disponibilidad = 'asignado';
   }
   broadcastActiveEmergencies();
-  console.log(`👨‍⚕️ Doctor ${doctorId} asignado a ${callId}`);
 }
 
 function handleDoctorAck(data) {
@@ -1809,6 +1942,7 @@ function handleDoctorAck(data) {
   }
 }
 
+// ============ VIDEO ============
 function findWsByRoleId(role, id) {
   if (!role || !id) return null;
   const map =
@@ -1928,6 +2062,7 @@ function handleVideoCallEnd(ws, data) {
     .forEach(t => { if (t) sendMessage(t, { type: 'video_call_ended', sessionId, timestamp: new Date().toISOString() }); });
 }
 
+// ============ CLEANUP ============
 function cleanupDisconnectedClient(ws) {
   for (const [id, r] of activeReceptors) {
     if (r.ws === ws) { activeReceptors.delete(id); console.log(`📞 Receptor ${id} desconectado`); return; }
@@ -1956,25 +2091,13 @@ function cleanupDisconnectedClient(ws) {
   }
   for (const [id, amb] of activeAmbulances) {
     if (amb.ws === ws) {
-      activeAmbulances.delete(id);
-      lastLocationBroadcast.delete(id);
-      console.log(`🚑 Ambulancia ${id} desconectada`);
-      for (const [callId, em] of activeEmergencies) {
-  if (em.assignedAmbulanceId === id) {
-    // Mantener la referencia histórica para que el receptor pueda ver
-    // quién atendió el caso aunque la unidad se haya desconectado.
-    em.status = 'pending';
-    em.lastAssignedAmbulanceId = em.assignedAmbulanceId;
-    em.lastAssignedAmbulanceName = em.assignedAmbulanceName;
-    em.assignedAmbulanceId = null;
-    em.assignedAmbulanceName = null;
-    em.assignedAt = null;
-    em.unassignedAt = new Date().toISOString();
-    em.unassignedReason = 'ambulance_disconnected';
-    activeEmergencies.set(callId, em);
-  }
-}
-      
+      // NO eliminar la ambulancia inmediatamente — dejarla en el mapa para
+      // que pueda reconectarse y recuperar su caso. Se limpiará por el
+      // intervalo de inactividad si no vuelve.
+      amb.ws = null;
+      amb.disconnectedAt = new Date().toISOString();
+      console.log(`🚑 Ambulancia ${id} WS cerrado (marcada como desconectada, esperando reconexión)`);
+
       for (const [offerId, o] of pendingOffers) {
         if (o.ambulanceId === id) { clearTimeout(o.timer); pendingOffers.delete(offerId); }
       }
@@ -1988,6 +2111,7 @@ function cleanupDisconnectedClient(ws) {
   }
 }
 
+// ============ DISPATCH ============
 async function handleMessage(ws, data) {
   switch (data.type) {
     case 'register_ambulance':          return handleRegisterAmbulance(ws, data);
@@ -1995,21 +2119,16 @@ async function handleMessage(ws, data) {
     case 'register_receptor':           return handleRegisterReceptor(ws, data);
     case 'register_paramedic':          return handleRegisterParamedic(ws, data);
     case 'register_doctor':             return handleRegisterDoctor(ws, data);
-    case 'request_active_ambulances': return handleRequestActiveAmbulances(ws);
+    case 'request_active_ambulances':   return handleRequestActiveAmbulances(ws);
+    case 'request_my_case':             return handleRequestMyCase(ws, data);
+    case 'request_active_emergencies':  return handleRequestActiveEmergencies(ws);
     case 'location_update':             return handleLocationUpdate(data);
-    case 'video_call_request': return handleVideoCallRequest(ws, data);
     case 'auto_request_hospital':        return autoRequestHospital(ws, data);
-case 'operator_initiated_emergency': return handleOperatorInitiatedEmergency(ws, data);
-case 'video_call_accept':  return handleVideoCallAccept(ws, data);
-case 'video_call_reject':  return handleVideoCallReject(ws, data);
-case 'video_call_signal':  return handleVideoCallSignal(ws, data);
-case 'video_call_end':     return handleVideoCallEnd(ws, data);
-case 'receptor_complete_service': return handleReceptorCompleteService(ws, data);
-    case 'request_ranked_hospitals': return handleRequestRankedHospitals(ws, data);
     case 'operator_initiated_emergency': return handleOperatorInitiatedEmergency(ws, data);
+    case 'receptor_complete_service':   return handleReceptorCompleteService(ws, data);
+    case 'request_ranked_hospitals':    return handleRequestRankedHospitals(ws, data);
     case 'ambulance_status_update':     return handleAmbulanceStatusUpdate(ws, data);
     case 'emergency_call':              return handleEmergencyCall(ws, data);
-    case 'request_active_emergencies':  return handleRequestActiveEmergencies(ws);
     case 'emergency_accept':            return handleEmergencyAccept(ws, data);
     case 'emergency_reject':            return handleEmergencyReject(ws, data);
     case 'ambulance_emergency_cancel':  return handleAmbulanceEmergencyCancel(ws, data);
@@ -2044,41 +2163,54 @@ function startIntervals() {
   if (intervalsStarted) return;
   intervalsStarted = true;
 
-setInterval(() => {
-  if (!currentWss) return;
-  currentWss.clients.forEach(client => {
-    if (client.readyState === WebSocket.OPEN) {
-      try {
-        client.ping();
-      } catch (_) {
-        // Ignorar — el socket se limpiará cuando falle el close
+  // Ping server → cliente (mantiene viva la conexión a nivel TCP/WS)
+  setInterval(() => {
+    if (!currentWss) return;
+    currentWss.clients.forEach(client => {
+      if (client.readyState === WebSocket.OPEN) {
+        try { client.ping(); } catch (_) {}
       }
-    }
-  });
-}, 30000);
+    });
+  }, SERVER_PING_INTERVAL_MS);
 
+  // Cleanup de ambulancias:
+  //  - Si WS está cerrado → borrar tras SOFT_INACTIVITY_MS
+  //  - Si WS está vivo pero sin heartbeat por HARD_INACTIVITY_MS → borrar
   setInterval(() => {
     const now = Date.now();
     for (const [id, amb] of activeAmbulances) {
-      if (amb.lastUpdate && now - amb.lastUpdate.getTime() > AMBULANCE_INACTIVITY_MS) {
-        console.log(`🕒 Limpiando ambulancia inactiva ${id}`);
-        activeAmbulances.delete(id);
-        lastLocationBroadcast.delete(id);
-        for (const [callId, em] of activeEmergencies) {
-          if (em.assignedAmbulanceId === id) {
-            em.status = 'pending';
-            em.assignedAmbulanceId = null;
-            em.assignedAmbulanceName = null;
-            em.assignedAt = null;
-            activeEmergencies.set(callId, em);
-          }
+      const wsDead = !amb.ws || amb.ws.readyState !== WebSocket.OPEN;
+      const last = amb.lastUpdate ? amb.lastUpdate.getTime() : 0;
+      const age = now - last;
+
+      const shouldRemove = wsDead
+        ? age > SOFT_INACTIVITY_MS
+        : age > HARD_INACTIVITY_MS;
+
+      if (!shouldRemove) continue;
+
+      console.log(`🕒 Limpiando ambulancia inactiva ${id} (wsDead=${wsDead}, age=${Math.round(age / 1000)}s)`);
+      activeAmbulances.delete(id);
+      lastLocationBroadcast.delete(id);
+      for (const [callId, em] of activeEmergencies) {
+        if (em.assignedAmbulanceId === id) {
+          em.status = 'pending';
+          em.lastAssignedAmbulanceId = em.assignedAmbulanceId;
+          em.lastAssignedAmbulanceName = em.assignedAmbulanceName;
+          em.assignedAmbulanceId = null;
+          em.assignedAmbulanceName = null;
+          em.assignedAt = null;
+          em.unassignedAt = new Date().toISOString();
+          em.unassignedReason = 'ambulance_timeout';
+          activeEmergencies.set(callId, em);
         }
-        broadcastActiveEmergencies();
-        broadcastActiveAmbulances();
       }
+      broadcastActiveEmergencies();
+      broadcastActiveAmbulances();
     }
   }, 60_000);
 
+  // Recomposición de rutas activas (tráfico en vivo)
   setInterval(async () => {
     for (const [ambulanceId, amb] of activeAmbulances) {
       if (amb.status !== 'en_ruta' || !amb.location) continue;
@@ -2138,6 +2270,7 @@ function attachV2WebSocket(server, options = {}) {
 
   wss.on('connection', (ws, req) => {
     console.log(`✅ WS conexión desde ${req.socket.remoteAddress}`);
+    ws._lastHeartbeat = Date.now();
     sendMessage(ws, {
       type: 'connection_established',
       protocolVersion: PROTOCOL_VERSION,
@@ -2145,28 +2278,32 @@ function attachV2WebSocket(server, options = {}) {
       serverTime: new Date().toISOString()
     });
 
-    // El cliente puede enviar heartbeat y el servidor responde con ack.
-// Esto es útil cuando la pestaña está en segundo plano y el navegador
-// no deja correr el ping/pong nativo del WebSocket.
-ws.on('message', async raw => {
-  let data;
-  try { data = JSON.parse(raw); }
-  catch { return sendError(ws, 'JSON inválido', 'BAD_JSON'); }
+    ws.on('message', async raw => {
+      let data;
+      try { data = JSON.parse(raw); }
+      catch { return sendError(ws, 'JSON inválido', 'BAD_JSON'); }
 
-  // Responder heartbeat sin pasar por handleMessage
-  if (data.type === 'heartbeat') {
-    ws._lastHeartbeat = Date.now();
-    return sendMessage(ws, { type: 'heartbeat_ack', timestamp: new Date().toISOString() });
-  }
+      // Liveness: cualquier mensaje cuenta como señal de vida.
+      touchConnection(ws);
 
-  if (!data.type) return sendError(ws, 'Falta type', 'BAD_TYPE');
-  try {
-    await handleMessage(ws, data);
-  } catch (e) {
-    console.error(`[${data.type}]`, e.message);
-    sendError(ws, 'Error procesando mensaje', 'HANDLER_ERROR');
-  }
-});
+      if (data.type === 'heartbeat') {
+        return sendMessage(ws, { type: 'heartbeat_ack', timestamp: new Date().toISOString() });
+      }
+      if (!data.type) return sendError(ws, 'Falta type', 'BAD_TYPE');
+
+      try {
+        await handleMessage(ws, data);
+      } catch (e) {
+        console.error(`[${data.type}]`, e.message);
+        sendError(ws, 'Error procesando mensaje', 'HANDLER_ERROR');
+      }
+    });
+
+    // Responder pong para no perder el ping nativo
+    ws.on('pong', () => {
+      ws._lastHeartbeat = Date.now();
+      touchConnection(ws);
+    });
 
     ws.on('close', (code, reason) => {
       console.log(`🔌 WS cierre ${code} - ${reason || ''}`);

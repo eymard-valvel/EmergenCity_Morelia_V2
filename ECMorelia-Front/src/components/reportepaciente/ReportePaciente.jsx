@@ -5,6 +5,7 @@ import { useGlasgow } from '../hooks/useGlasgow';
 import { resolveWsUrl } from '../../helpers/wsUrl.js';
 
 const WS_URL = resolveWsUrl();
+const HEARTBEAT_INTERVAL_MS = 20000;   // NUEVO
 
 const API_URL = (import.meta.env.VITE_API || 'https://emergencity-morelia-v2.onrender.com').replace(/\/+$/, '');
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
@@ -46,6 +47,8 @@ const ReportePaciente = () => {
   const [intervencionActual, setIntervencionActual] = useState({ tipo_intervencion: '', descripcion: '', hora_intervencion: '' });
   const [ubicacion, setUbicacion] = useState({ lat: null, lng: null, direccion: '' });
   const [obteniendoUbicacion, setObteniendoUbicacion] = useState(false);
+
+  
 
   // Vinculación de unidad
   const [isConfigured, setIsConfigured] = useState(false);
@@ -111,27 +114,81 @@ const [reporte, setReporte] = useState(() => {
   const triaje = getTriageLevel(total);
 
   // ==================== WS PERMANENTE (para vinculación) ====================
-  const wsRef = useRef(null);
 
-  useEffect(() => {
-    // Conexión temprana para poder listar ambulancias activas
-    const ws = new WebSocket(WS_URL);
-    wsRef.current = ws;
+  // ==================== WS PERMANENTE (con heartbeat y case recovery) ====================
+const wsRef = useRef(null);
+const heartbeatRef = useRef(null);
 
-    ws.onopen = () => setWsConnected(true);
-    ws.onmessage = (e) => {
-      try {
-        const data = JSON.parse(e.data);
-        if (data.type === 'active_ambulances_update') {
-          setListaAmbulancias(data.ambulances || []);
-          setAmbulanciasCargadas(true);
+useEffect(() => {
+  const ws = new WebSocket(WS_URL);
+  wsRef.current = ws;
+
+  ws.onopen = () => {
+    setWsConnected(true);
+
+    // Heartbeat cada 20s para mantener viva la conexión
+    if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+    heartbeatRef.current = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        try { ws.send(JSON.stringify({ type: 'heartbeat' })); } catch (_) {}
+      }
+    }, HEARTBEAT_INTERVAL_MS);
+  };
+
+  ws.onmessage = (e) => {
+    try {
+      const data = JSON.parse(e.data);
+
+      if (data.type === 'active_ambulances_update') {
+        setListaAmbulancias(data.ambulances || []);
+        setAmbulanciasCargadas(true);
+      }
+
+      // NUEVO: recuperación de caso
+      if (data.type === 'assigned_case_sync') {
+        if (data.callId) {
+          setReporte(prev => ({
+            ...prev,
+            callId: data.callId,
+            seccionA: { ...prev.seccionA, folio: data.callId },
+            seccionC: {
+              ...prev.seccionC,
+              direccion: data.address || prev.seccionC.direccion
+            },
+            seccionF: {
+              ...prev.seccionF,
+              tipo_urgencia: data.emergencyType || prev.seccionF.tipo_urgencia
+            }
+          }));
         }
-      } catch (_) {}
-    };
-    ws.onclose = () => setWsConnected(false);
+        if (data.hospitalId) {
+          setHospitalAceptado({
+            callId: data.callId,
+            hospitalId: data.hospitalId,
+            hospitalInfo: data.hospitalInfo || null
+          });
+        }
+      }
+    } catch (_) {}
+  };
 
-    return () => { try { ws.close(); } catch (_) {} };
-  }, []);
+  ws.onclose = () => {
+    setWsConnected(false);
+    if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+  };
+
+  return () => {
+    if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+    try { ws.close(); } catch (_) {}
+  };
+}, []);
+
+useEffect(() => {
+  // Solicitar la lista cada vez que se abre la vista
+  if (wsRef.current?.readyState === WebSocket.OPEN) {
+    wsRef.current.send(JSON.stringify({ type: 'request_active_ambulances' }));
+  }
+}, [wsConnected]);
 
   useEffect(() => {
     // Solicitar la lista cada vez que se abre la vista
@@ -179,6 +236,14 @@ useEffect(() => {
         nombre: configInicial.paramedico1,
         ambulanceId: configInicial.ambulanciaId
       }));
+
+      // NUEVO: solicitar caso activo (recuperación tras recarga)
+    wsRef.current.send(JSON.stringify({
+      type: 'request_my_case',
+      role: 'paramedic',
+      ambulanceId: configInicial.ambulanciaId
+    }));
+
     }
   };
 
@@ -237,6 +302,42 @@ useEffect(() => {
           seccionA: { ...prev.seccionA, folio: parsed.callId }
         }));
       }
+
+      if (parsed.type === 'emergency_case_closed') {
+  mostrarNotificacion('Servicio cerrado por el centro regulador', 'info');
+  setHospitalAceptado(null);
+  setReporte(prev => ({
+    ...prev,
+    callId: '',
+    seccionA: { ...prev.seccionA, folio: '' },
+    intervenciones: []
+  }));
+}
+
+      if (parsed.type === 'assigned_case_sync') {
+  if (parsed.callId) {
+    setReporte(prev => ({
+      ...prev,
+      callId: parsed.callId,
+      seccionA: { ...prev.seccionA, folio: parsed.callId },
+      seccionC: {
+        ...prev.seccionC,
+        direccion: parsed.address || prev.seccionC.direccion
+      },
+      seccionF: {
+        ...prev.seccionF,
+        tipo_urgencia: parsed.emergencyType || prev.seccionF.tipo_urgencia
+      }
+    }));
+  }
+  if (parsed.hospitalId) {
+    setHospitalAceptado({
+      callId: parsed.callId,
+      hospitalId: parsed.hospitalId,
+      hospitalInfo: parsed.hospitalInfo || null
+    });
+  }
+}
       if (parsed.type === 'hospital_accepted_for_call') {
         setHospitalAceptado({
           callId: parsed.callId,
@@ -259,6 +360,11 @@ useEffect(() => {
 
   const handleOpen = () => {
     registerParamedic();
+    safeSend({
+    type: 'request_my_case',
+    role: 'paramedic',
+    ambulanceId: configInicial.ambulanciaId
+  });
   };
 
   ws.addEventListener('message', handleMessage);
