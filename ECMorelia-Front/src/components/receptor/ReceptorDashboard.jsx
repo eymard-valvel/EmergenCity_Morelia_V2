@@ -555,7 +555,8 @@ const EmergencyCard = ({ emergency: em }) => {
   return (
     <Box p={4} borderRadius="xl" bg="#18181b" border="1px solid #27272a" borderLeft="6px solid" borderLeftColor={statusColor}>
       <Flex justify="space-between" align="center" mb={2}>
-        <Text fontWeight="900" color="#f8fafc" fontSize="16px">{em.callId?.replace('EM-', 'F-') || em.callId}</Text>
+        <Text fontWeight="900" color="#f8fafc" fontSize="16px">{em.callId}</Text>
+        
         <Badge fontSize="10px" fontWeight="900" px={2} py={1} borderRadius="md" bg={statusColor} color="white">{statusLabel}</Badge>
       </Flex>
       <Text fontSize="14px" fontWeight="800" color="#38bdf8" mb={1}>{em.emergencyType}</Text>

@@ -51,9 +51,12 @@ function generateCallId(origin = 'receptor') {
   const m = String(now.getMonth() + 1).padStart(2, '0');
   const d = String(now.getDate()).padStart(2, '0');
   const rand = crypto.randomBytes(8).toString('hex').toUpperCase();
-  const prefix = origin === 'operator' ? 'OP' : 'EM';
+  // F   = Folio de emergencia detonada por RECEPTOR (formulario de despacho)
+  // OP  = Folio de emergencia detonada por OPERADOR (MapaOperador)
+  const prefix = origin === 'operator' ? 'OP' : 'F';
   return `${prefix}-${y}${m}${d}-${rand}`;
 }
+
 function generateId(prefix = 'id') {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
 }
@@ -994,6 +997,22 @@ async function handleOperatorInitiatedEmergency(ws, data) {
 
   broadcastActiveEmergencies();
   broadcastActiveAmbulances();
+
+    // Notificar al paramédico emparejado con esta unidad para pre-llenar su reporte
+  const pairedAm = Array.from(activeParamedics.values())
+    .find(p => p.ambulanceId === String(amb.id));
+  if (pairedAm?.ws) {
+    sendMessage(pairedAm.ws, {
+      type: 'emergency_case_received',
+      callId,
+      address: emergency.address,
+      emergencyType: emergency.emergencyType,
+      notes: emergency.notes,
+      patientInfo: emergency.patientInfo,
+      risks: emergency.risks || [],
+      timestamp: new Date().toISOString()
+    });
+  }
 
   // === Notificar al hospital ===
   if (candidate && hospitalInfo) {

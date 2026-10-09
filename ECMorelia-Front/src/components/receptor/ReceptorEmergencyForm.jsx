@@ -19,6 +19,13 @@ mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN ||
 
 const DEFAULT_CENTER = { lat: 19.7024, lng: -101.1969 };
 const SEARCH_DEBOUNCE_MS = 250;
+// Helper de logging para debug del WS (receptor → server, server → receptor)
+const logWS = (dir, type, payload) => {
+  const arrow = dir === 'out' ? '📤 [RECEPTOR → WS]' : '📥 [WS → RECEPTOR]';
+  const color = dir === 'out' ? 'color:#38bdf8;font-weight:900' : 'color:#10b981;font-weight:900';
+  // eslint-disable-next-line no-console
+  console.log(`%c${arrow} ${type}`, color, payload);
+};
 const SUCCESS_BANNER_MS = 3500;
 const UI_RESET_MS = 4000;
 const ACK_TIMEOUT_MS = 30000;
@@ -425,12 +432,23 @@ const searchAddresses = useCallback((query) => {
       try {
         const data = JSON.parse(event.data);
         if (data.type === 'emergency_assigned_ack' || data.type === 'emergency_assignment_failed') {
+          logWS('in', data.type, data);
           finalizeOnAck(data);
         }
       } catch (_) {}
     };
 
     try {
+
+            logWS('out', 'emergency_call', {
+        requestId,
+        location: selectedLocation,
+        address: addressQuery,
+        emergencyType: payload.emergencyType,
+        patientInfo,
+        riesgos,
+      });
+
       ws.send(JSON.stringify(payload));
       ws.addEventListener('message', responseHandler);
 

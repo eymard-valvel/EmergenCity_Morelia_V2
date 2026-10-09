@@ -1,18 +1,15 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Outlet, useNavigate } from 'react-router-dom';
 import VoiceAssistant from '../pln/VoiceAssistant';
 import { useGlasgow } from '../hooks/useGlasgow';
 import { resolveWsUrl } from '../../helpers/wsUrl.js';
+import { readLocal, saveLocal } from '../../helpers/persistence.js';
 
 const WS_URL = resolveWsUrl();
-const HEARTBEAT_INTERVAL_MS = 20000;   // NUEVO
+const HEARTBEAT_INTERVAL_MS = 20000;
 
 const API_URL = (import.meta.env.VITE_API || 'https://emergencity-morelia-v2.onrender.com').replace(/\/+$/, '');
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
-
-
-
-import { readLocal, saveLocal } from '../../helpers/persistence.js';
 
 const REPORTE_INICIAL = {
   id_ambulancia: '',
@@ -34,7 +31,21 @@ const REPORTE_INICIAL = {
   riesgos_escena: ''
 };
 
+// Campos mínimos para considerar el reporte "completo"
+const CAMPOS_REQUERIDOS_COMPLETO = [
+  ['seccionD', 'nombre'],
+  ['seccionD', 'edad'],
+  ['seccionD', 'sexo'],
+  ['seccionF', 'tipo_urgencia'],
+  ['seccionF', 'motivo_principal'],
+  ['seccionI', 'fc'],
+  ['seccionI', 'fr'],
+  ['seccionI', 'spo2'],
+  ['seccionI', 'ta'],
+  ['seccionN', 'diagnostico_presuntivo'],
+];
 
+const ahoraHHMM = () => new Date().toTimeString().slice(0, 5);
 
 const ReportePaciente = () => {
   const navigate = useNavigate();
@@ -42,15 +53,11 @@ const ReportePaciente = () => {
   const [listaHospitales, setListaHospitales] = useState([]);
   const [hospitalSeleccionado, setHospitalSeleccionado] = useState('');
   const [mensajeNotificacion, setMensajeNotificacion] = useState({ texto: '', tipo: '' });
-  const [socket, setSocket] = useState(null);
   const [wsConnected, setWsConnected] = useState(false);
   const [intervencionActual, setIntervencionActual] = useState({ tipo_intervencion: '', descripcion: '', hora_intervencion: '' });
   const [ubicacion, setUbicacion] = useState({ lat: null, lng: null, direccion: '' });
   const [obteniendoUbicacion, setObteniendoUbicacion] = useState(false);
 
-  
-
-  // Vinculación de unidad
   const [isConfigured, setIsConfigured] = useState(false);
   const [configInicial, setConfigInicial] = useState({
     ambulanciaId: '',
@@ -61,149 +68,142 @@ const ReportePaciente = () => {
   const [listaAmbulancias, setListaAmbulancias] = useState([]);
   const [ambulanciasCargadas, setAmbulanciasCargadas] = useState(false);
 
-  // Estado de hospital aceptado (desbloquea envío de versiones)
-  // Estructura base del reporte. Se usa como fallback cuando no hay nada
-// guardado en localStorage.
-const REPORTE_INICIAL = {
-  id_ambulancia: '',
-  callId: '',
-  tripulacion: {},
-  seccionA: { folio: '', fecha: new Date().toISOString().split('T')[0], tipo_servicio: 'Urgencia' },
-  seccionB: { activacion: '', salida_base: '', llegada_escena: '', primer_contacto: '', salida_escena: '', llegada_hospital: '', entrega_paciente: '', liberacion_unidad: '' },
-  seccionC: { direccion: '', municipio: '', estado: '', tipo_lugar: 'Vía pública', tipo_lugar_otro: '' },
-  seccionD: { nombre: '', edad: '', sexo: '', peso: '', paciente_identificado: 'Sí', acompanante: '', telefono: '' },
-  seccionE: { alergias: '', medicamentos: '', enfermedades: '', ultima_comida: '', embarazo: 'No' },
-  seccionF: { tipo_urgencia: '', motivo_principal: '' },
-  seccionG: { mecanismo: '', otro_mecanismo: '' },
-  seccionH: { via_aerea: 'Libre', ventilacion: 'Adecuada', circulacion_pulso: 'Periférico', lesiones_exposicion: '' },
-  seccionI: { fc: '', fr: '', ta: '', pam: '', spo2: '', temp: '', glucemia: '', eva: '', hora_toma: '' },
-  seccionK: { cabeza: '', torax: '', abdomen: '', extremidades: '' },
-  intervenciones: [],
-  seccionN: { eta: '', diagnostico_presuntivo: '', necesidades: '' },
-  seccionOP: { area_receptora: 'Urgencias', medico_recibe: '', estado_final: 'Estable' },
-  riesgos_escena: ''
-};
+  // Estado del caso
+  const [casoFinalizado, setCasoFinalizado] = useState(false);
 
   const [hospitalAceptado, setHospitalAceptado] = useState(
-  () => readLocal('paramedico', 'hospitalAceptado', null)
-);
+    () => readLocal('paramedico', 'hospitalAceptado', null)
+  );
 
-const [reporte, setReporte] = useState(() => {
-  const stored = readLocal('paramedico', 'reporte', null);
-  if (!stored) return REPORTE_INICIAL;
-  return {
-    ...REPORTE_INICIAL,
-    ...stored,
-    seccionA: { ...REPORTE_INICIAL.seccionA, ...(stored.seccionA || {}) },
-    seccionB: { ...REPORTE_INICIAL.seccionB, ...(stored.seccionB || {}) },
-    seccionC: { ...REPORTE_INICIAL.seccionC, ...(stored.seccionC || {}) },
-    seccionD: { ...REPORTE_INICIAL.seccionD, ...(stored.seccionD || {}) },
-    seccionE: { ...REPORTE_INICIAL.seccionE, ...(stored.seccionE || {}) },
-    seccionF: { ...REPORTE_INICIAL.seccionF, ...(stored.seccionF || {}) },
-    seccionG: { ...REPORTE_INICIAL.seccionG, ...(stored.seccionG || {}) },
-    seccionH: { ...REPORTE_INICIAL.seccionH, ...(stored.seccionH || {}) },
-    seccionI: { ...REPORTE_INICIAL.seccionI, ...(stored.seccionI || {}) },
-    seccionK: { ...REPORTE_INICIAL.seccionK, ...(stored.seccionK || {}) },
-    seccionN: { ...REPORTE_INICIAL.seccionN, ...(stored.seccionN || {}) },
-    seccionOP: { ...REPORTE_INICIAL.seccionOP, ...(stored.seccionOP || {}) }
-  };
-});
-  
+  const [reporte, setReporte] = useState(() => {
+    const stored = readLocal('paramedico', 'reporte', null);
+    if (!stored) return REPORTE_INICIAL;
+    return {
+      ...REPORTE_INICIAL,
+      ...stored,
+      seccionA: { ...REPORTE_INICIAL.seccionA, ...(stored.seccionA || {}) },
+      seccionB: { ...REPORTE_INICIAL.seccionB, ...(stored.seccionB || {}) },
+      seccionC: { ...REPORTE_INICIAL.seccionC, ...(stored.seccionC || {}) },
+      seccionD: { ...REPORTE_INICIAL.seccionD, ...(stored.seccionD || {}) },
+      seccionE: { ...REPORTE_INICIAL.seccionE, ...(stored.seccionE || {}) },
+      seccionF: { ...REPORTE_INICIAL.seccionF, ...(stored.seccionF || {}) },
+      seccionG: { ...REPORTE_INICIAL.seccionG, ...(stored.seccionG || {}) },
+      seccionH: { ...REPORTE_INICIAL.seccionH, ...(stored.seccionH || {}) },
+      seccionI: { ...REPORTE_INICIAL.seccionI, ...(stored.seccionI || {}) },
+      seccionK: { ...REPORTE_INICIAL.seccionK, ...(stored.seccionK || {}) },
+      seccionN: { ...REPORTE_INICIAL.seccionN, ...(stored.seccionN || {}) },
+      seccionOP: { ...REPORTE_INICIAL.seccionOP, ...(stored.seccionOP || {}) }
+    };
+  });
 
   const { ocular, setOcular, verbal, setVerbal, motor, setMotor, total, getTriageLevel } = useGlasgow(4, 5, 6);
   const triaje = getTriageLevel(total);
 
-  // ==================== WS PERMANENTE (para vinculación) ====================
+  const wsRef = useRef(null);
+  const heartbeatRef = useRef(null);
+  const reporteRef = useRef(reporte);
+
+  useEffect(() => { reporteRef.current = reporte; }, [reporte]);
+  useEffect(() => { saveLocal('paramedico', 'hospitalAceptado', hospitalAceptado); }, [hospitalAceptado]);
+  useEffect(() => { saveLocal('paramedico', 'reporte', reporte); }, [reporte]);
 
   // ==================== WS PERMANENTE (con heartbeat y case recovery) ====================
-const wsRef = useRef(null);
-const heartbeatRef = useRef(null);
-
-useEffect(() => {
-  const ws = new WebSocket(WS_URL);
-  wsRef.current = ws;
-
-  ws.onopen = () => {
-    setWsConnected(true);
-
-    // Heartbeat cada 20s para mantener viva la conexión
-    if (heartbeatRef.current) clearInterval(heartbeatRef.current);
-    heartbeatRef.current = setInterval(() => {
-      if (ws.readyState === WebSocket.OPEN) {
-        try { ws.send(JSON.stringify({ type: 'heartbeat' })); } catch (_) {}
-      }
-    }, HEARTBEAT_INTERVAL_MS);
-  };
-
-  ws.onmessage = (e) => {
-    try {
-      const data = JSON.parse(e.data);
-
-      if (data.type === 'active_ambulances_update') {
-        setListaAmbulancias(data.ambulances || []);
-        setAmbulanciasCargadas(true);
-      }
-
-      // NUEVO: recuperación de caso
-      if (data.type === 'assigned_case_sync') {
-        if (data.callId) {
-          setReporte(prev => ({
-            ...prev,
-            callId: data.callId,
-            seccionA: { ...prev.seccionA, folio: data.callId },
-            seccionC: {
-              ...prev.seccionC,
-              direccion: data.address || prev.seccionC.direccion
-            },
-            seccionF: {
-              ...prev.seccionF,
-              tipo_urgencia: data.emergencyType || prev.seccionF.tipo_urgencia
-            }
-          }));
-        }
-        if (data.hospitalId) {
-          setHospitalAceptado({
-            callId: data.callId,
-            hospitalId: data.hospitalId,
-            hospitalInfo: data.hospitalInfo || null
-          });
-        }
-      }
-    } catch (_) {}
-  };
-
-  ws.onclose = () => {
-    setWsConnected(false);
-    if (heartbeatRef.current) clearInterval(heartbeatRef.current);
-  };
-
-  return () => {
-    if (heartbeatRef.current) clearInterval(heartbeatRef.current);
-    try { ws.close(); } catch (_) {}
-  };
-}, []);
-
-useEffect(() => {
-  // Solicitar la lista cada vez que se abre la vista
-  if (wsRef.current?.readyState === WebSocket.OPEN) {
-    wsRef.current.send(JSON.stringify({ type: 'request_active_ambulances' }));
-  }
-}, [wsConnected]);
-
   useEffect(() => {
-    // Solicitar la lista cada vez que se abre la vista
+    const ws = new WebSocket(WS_URL);
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      setWsConnected(true);
+
+      // Heartbeat: mantiene viva la conexión en NAT/proxies
+      if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+      heartbeatRef.current = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          try { ws.send(JSON.stringify({ type: 'heartbeat' })); } catch (_) {}
+        }
+      }, HEARTBEAT_INTERVAL_MS);
+    };
+
+    ws.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data);
+
+        if (data.type === 'active_ambulances_update') {
+          setListaAmbulancias(data.ambulances || []);
+          setAmbulanciasCargadas(true);
+        }
+
+        // Recuperación de caso al abrir la página o reconectar
+        if (data.type === 'assigned_case_sync') {
+          if (data.callId) {
+            setReporte(prev => {
+              const patch = {
+                ...prev,
+                callId: data.callId,
+                seccionA: { ...prev.seccionA, folio: data.callId },
+                seccionC: {
+                  ...prev.seccionC,
+                  direccion: data.address || prev.seccionC.direccion
+                },
+                seccionF: {
+                  ...prev.seccionF,
+                  tipo_urgencia: data.emergencyType || prev.seccionF.tipo_urgencia
+                }
+              };
+              if (data.patientInfo) {
+                patch.seccionD = {
+                  ...patch.seccionD,
+                  sexo: patch.seccionD.sexo || data.patientInfo.sexo || '',
+                  edad: patch.seccionD.edad || data.patientInfo.edad || '',
+                };
+              }
+              // Autocompletar activación si aún no está
+              if (!prev.seccionB.activacion) {
+                patch.seccionB = { ...patch.seccionB, activacion: ahoraHHMM() };
+              }
+              return patch;
+            });
+          }
+          if (data.hospitalId) {
+            setHospitalAceptado({
+              callId: data.callId,
+              hospitalId: data.hospitalId,
+              hospitalInfo: data.hospitalInfo || null
+            });
+            setHospitalSeleccionado(data.hospitalId);
+          }
+        }
+
+        // Caso cerrado por operador / receptor → mantener folio visible para reporte final
+        if (data.type === 'emergency_case_closed') {
+          setCasoFinalizado(true);
+          setMensajeNotificacion({
+            texto: `Servicio ${data.callId || ''} cerrado. Puede enviar el reporte final.`,
+            tipo: 'info'
+          });
+          setTimeout(() => setMensajeNotificacion({ texto: '', tipo: '' }), 8000);
+        }
+      } catch (_) {}
+    };
+
+    ws.onclose = () => {
+      setWsConnected(false);
+      if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+    };
+
+    return () => {
+      if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+      try { ws.close(); } catch (_) {}
+    };
+  }, []);
+
+  // Solicitar lista cada vez que se conecta
+  useEffect(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: 'request_active_ambulances' }));
+      wsRef.current.send(JSON.stringify({ type: 'request_hospitals_list' }));
     }
   }, [wsConnected]);
-
-useEffect(() => {
-  saveLocal('paramedico', 'hospitalAceptado', hospitalAceptado);
-}, [hospitalAceptado]);
-
-useEffect(() => {
-  saveLocal('paramedico', 'reporte', reporte);
-}, [reporte]);
 
   // Recuperar config guardada
   useEffect(() => {
@@ -228,7 +228,6 @@ useEffect(() => {
     setReporte(prev => ({ ...prev, id_ambulancia: configInicial.ambulanciaId, tripulacion: configInicial }));
     setIsConfigured(true);
 
-    // Registrar como paramédico en el WS
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({
         type: 'register_paramedic',
@@ -237,149 +236,170 @@ useEffect(() => {
         ambulanceId: configInicial.ambulanciaId
       }));
 
-      // NUEVO: solicitar caso activo (recuperación tras recarga)
-    wsRef.current.send(JSON.stringify({
-      type: 'request_my_case',
-      role: 'paramedic',
-      ambulanceId: configInicial.ambulanciaId
-    }));
-
+      // Solicitar caso activo (recuperación tras recarga)
+      wsRef.current.send(JSON.stringify({
+        type: 'request_my_case',
+        role: 'paramedic',
+        ambulanceId: configInicial.ambulanciaId
+      }));
     }
   };
 
-  // ==================== WS OPERATIVO (tras vinculación) ====================
-useEffect(() => {
-  if (!isConfigured) return;
-  const ws = wsRef.current;
-  if (!ws) return;
+  // ==================== WS OPERATIVO (handlers de negocio) ====================
+  useEffect(() => {
+    if (!isConfigured) return;
+    const ws = wsRef.current;
+    if (!ws) return;
 
-  const safeSend = (payload) => {
-    if (ws.readyState === WebSocket.OPEN) {
-      try { ws.send(JSON.stringify(payload)); return true; } catch (_) { return false; }
-    }
-    return false;
-  };
-
-  const registerParamedic = () => {
-    if (!configInicial.ambulanciaId || !configInicial.paramedico1) return;
-    safeSend({
-      type: 'register_paramedic',
-      paramedicId: `pm_${configInicial.paramedico1}_${Date.now()}`,
-      nombre: configInicial.paramedico1,
-      ambulanceId: configInicial.ambulanciaId
-    });
-  };
-
-  const handleMessage = async (event) => {
-    // ⚠️ Pega aquí tu handler existente — no lo modifiques
-    const data = event.data instanceof Blob ? await event.data.text() : event.data;
-    try {
-      const parsed = JSON.parse(data);
-
-      if (parsed.type === 'active_hospitals_update') {
-        setListaHospitales(parsed.hospitals || []);
+    const safeSend = (payload) => {
+      if (ws.readyState === WebSocket.OPEN) {
+        try { ws.send(JSON.stringify(payload)); return true; } catch (_) { return false; }
       }
-      if (parsed.type === 'new_emergency_assigned') {
-        mostrarNotificacion(`Emergencia asignada: ${parsed.callId}`, 'success');
-        setReporte(prev => ({
-          ...prev,
-          callId: parsed.callId,
-          seccionA: { ...prev.seccionA, folio: parsed.callId },
-          seccionC: { ...prev.seccionC, direccion: parsed.address || prev.seccionC.direccion },
-          seccionF: {
-            ...prev.seccionF,
-            tipo_urgencia: parsed.emergencyType || '',
-            motivo_principal: parsed.notes || ''
-          },
-          riesgos_escena: parsed.patientInfo?.riesgos || ''
-        }));
-      }
-      if (parsed.type === 'operator_emergency_created') {
-        mostrarNotificacion(`Emergencia creada: ${parsed.callId}`, 'success');
-        setReporte(prev => ({
-          ...prev,
-          callId: parsed.callId,
-          seccionA: { ...prev.seccionA, folio: parsed.callId }
-        }));
-      }
+      return false;
+    };
 
-      if (parsed.type === 'emergency_case_closed') {
-  mostrarNotificacion('Servicio cerrado por el centro regulador', 'info');
-  setHospitalAceptado(null);
-  setReporte(prev => ({
-    ...prev,
-    callId: '',
-    seccionA: { ...prev.seccionA, folio: '' },
-    intervenciones: []
-  }));
-}
+    const registerParamedic = () => {
+      if (!configInicial.ambulanciaId || !configInicial.paramedico1) return;
+      safeSend({
+        type: 'register_paramedic',
+        paramedicId: `pm_${configInicial.paramedico1}_${Date.now()}`,
+        nombre: configInicial.paramedico1,
+        ambulanceId: configInicial.ambulanciaId
+      });
+      safeSend({
+        type: 'request_my_case',
+        role: 'paramedic',
+        ambulanceId: configInicial.ambulanciaId
+      });
+    };
 
-      if (parsed.type === 'assigned_case_sync') {
-  if (parsed.callId) {
-    setReporte(prev => ({
-      ...prev,
-      callId: parsed.callId,
-      seccionA: { ...prev.seccionA, folio: parsed.callId },
-      seccionC: {
-        ...prev.seccionC,
-        direccion: parsed.address || prev.seccionC.direccion
-      },
-      seccionF: {
-        ...prev.seccionF,
-        tipo_urgencia: parsed.emergencyType || prev.seccionF.tipo_urgencia
-      }
-    }));
-  }
-  if (parsed.hospitalId) {
-    setHospitalAceptado({
-      callId: parsed.callId,
-      hospitalId: parsed.hospitalId,
-      hospitalInfo: parsed.hospitalInfo || null
-    });
-  }
-}
-      if (parsed.type === 'hospital_accepted_for_call') {
-        setHospitalAceptado({
-          callId: parsed.callId,
-          hospitalId: parsed.hospitalId,
-          hospitalInfo: parsed.hospitalInfo
-        });
-        if (parsed.callId === reporte.callId) {
-          setHospitalSeleccionado(parsed.hospitalId);
-          mostrarNotificacion(`Hospital ${parsed.hospitalInfo?.nombre || ''} aceptó — reporte habilitado`, 'success');
+    const handleMessage = async (event) => {
+      const raw = event.data instanceof Blob ? await event.data.text() : event.data;
+      try {
+        const parsed = JSON.parse(raw);
+        const callIdActual = reporteRef.current.callId;
+
+        if (parsed.type === 'active_hospitals_update') {
+          setListaHospitales(parsed.hospitals || []);
         }
-      }
-      if (parsed.type === 'prehospital_report_ack') {
-        mostrarNotificacion(`Reporte v${parsed.version} enviado`, 'success');
-      }
-      if (parsed.type === 'active_ambulances_update') {
-        setListaAmbulancias(parsed.ambulances || []);
-      }
-    } catch (e) { console.error('WS error:', e); }
-  };
 
-  const handleOpen = () => {
-    registerParamedic();
-    safeSend({
-    type: 'request_my_case',
-    role: 'paramedic',
-    ambulanceId: configInicial.ambulanciaId
-  });
-  };
+        // Emergencia tradicional asignada por cercanía
+        if (parsed.type === 'new_emergency_assigned') {
+          setCasoFinalizado(false);
+          setReporte(prev => ({
+            ...prev,
+            callId: parsed.callId,
+            seccionA: { ...prev.seccionA, folio: parsed.callId },
+            seccionB: {
+              ...prev.seccionB,
+              activacion: prev.seccionB.activacion || ahoraHHMM(),
+              salida_base: prev.seccionB.salida_base || ahoraHHMM()
+            },
+            seccionC: { ...prev.seccionC, direccion: parsed.address || prev.seccionC.direccion },
+            seccionD: {
+              ...prev.seccionD,
+              sexo: prev.seccionD.sexo || parsed.patientInfo?.sexo || '',
+              edad: prev.seccionD.edad || parsed.patientInfo?.edad || '',
+            },
+            seccionF: {
+              ...prev.seccionF,
+              tipo_urgencia: parsed.emergencyType || prev.seccionF.tipo_urgencia,
+              motivo_principal: parsed.notes || prev.seccionF.motivo_principal
+            },
+            riesgos_escena: parsed.patientInfo?.riesgos || prev.riesgos_escena
+          }));
+          mostrarNotificacion(`Emergencia asignada: ${parsed.callId}`, 'success');
+        }
 
-  ws.addEventListener('message', handleMessage);
-  ws.addEventListener('open', handleOpen);
+        // Notificación genérica de caso recibido (incluye operator-initiated)
+        if (parsed.type === 'emergency_case_received') {
+          setCasoFinalizado(false);
+          setReporte(prev => ({
+            ...prev,
+            callId: parsed.callId || prev.callId,
+            seccionA: { ...prev.seccionA, folio: parsed.callId || prev.seccionA.folio },
+            seccionB: {
+              ...prev.seccionB,
+              activacion: prev.seccionB.activacion || ahoraHHMM(),
+              salida_base: prev.seccionB.salida_base || ahoraHHMM()
+            },
+            seccionC: {
+              ...prev.seccionC,
+              direccion: parsed.address || prev.seccionC.direccion
+            },
+            seccionD: {
+              ...prev.seccionD,
+              sexo: prev.seccionD.sexo || parsed.patientInfo?.sexo || '',
+              edad: prev.seccionD.edad || parsed.patientInfo?.edad || '',
+            },
+            seccionF: {
+              ...prev.seccionF,
+              tipo_urgencia: parsed.emergencyType || prev.seccionF.tipo_urgencia,
+              motivo_principal: parsed.notes || prev.seccionF.motivo_principal
+            },
+            riesgos_escena: parsed.patientInfo?.riesgos || prev.riesgos_escena
+          }));
+          mostrarNotificacion(`Caso recibido: ${parsed.callId}`, 'success');
+        }
 
-  // Si el socket ya estaba abierto al montar este efecto, registrar ya
-  if (ws.readyState === WebSocket.OPEN) {
-    registerParamedic();
-  }
+        // Operador detonó emergencia (llega también al paramédico emparejado)
+        if (parsed.type === 'operator_emergency_created') {
+          setCasoFinalizado(false);
+          setReporte(prev => ({
+            ...prev,
+            callId: parsed.callId,
+            seccionA: { ...prev.seccionA, folio: parsed.callId },
+            seccionB: {
+              ...prev.seccionB,
+              activacion: prev.seccionB.activacion || ahoraHHMM()
+            }
+          }));
+          mostrarNotificacion(`Folio asignado: ${parsed.callId}`, 'success');
+        }
 
-  return () => {
-    ws.removeEventListener('message', handleMessage);
-    ws.removeEventListener('open', handleOpen);
-  };
-}, [isConfigured, configInicial.ambulanciaId, configInicial.paramedico1, reporte.callId]);
+        // Hospital aceptó → fijar destino en el selector
+        if (parsed.type === 'hospital_accepted_for_call') {
+          setHospitalAceptado({
+            callId: parsed.callId,
+            hospitalId: parsed.hospitalId,
+            hospitalInfo: parsed.hospitalInfo
+          });
+          setHospitalSeleccionado(parsed.hospitalId);
+          if (parsed.callId === callIdActual) {
+            mostrarNotificacion(`Hospital ${parsed.hospitalInfo?.nombre || ''} aceptó — reporte habilitado`, 'success');
+          }
+        }
+
+        if (parsed.type === 'prehospital_report_ack') {
+          mostrarNotificacion(`Reporte v${parsed.version} enviado`, 'success');
+        }
+
+        if (parsed.type === 'active_ambulances_update') {
+          setListaAmbulancias(parsed.ambulances || []);
+        }
+
+        // Caso cerrado
+        if (parsed.type === 'emergency_case_closed') {
+          setCasoFinalizado(true);
+          mostrarNotificacion('Servicio cerrado por el centro regulador. Puede enviar el reporte final.', 'info');
+        }
+      } catch (e) { console.error('WS error:', e); }
+    };
+
+    const handleOpen = () => {
+      registerParamedic();
+    };
+
+    ws.addEventListener('message', handleMessage);
+    ws.addEventListener('open', handleOpen);
+
+    if (ws.readyState === WebSocket.OPEN) registerParamedic();
+
+    return () => {
+      ws.removeEventListener('message', handleMessage);
+      ws.removeEventListener('open', handleOpen);
+    };
+  }, [isConfigured, configInicial.ambulanciaId, configInicial.paramedico1]);
 
   // Cargar hospitales vía REST como respaldo
   useEffect(() => {
@@ -435,13 +455,20 @@ useEffect(() => {
     });
   };
 
+  // Timestamp rápido: marca la hora actual en un campo de seccionB
+  const marcarHora = (campo) => {
+    const hora = ahoraHHMM();
+    handleChange(['seccionB', campo], hora);
+    mostrarNotificacion(`Hora ${campo.replace('_', ' ')}: ${hora}`, 'success');
+  };
+
   const agregarIntervencion = () => {
     if (intervencionActual.tipo_intervencion.trim() || intervencionActual.descripcion.trim()) {
       setReporte(prev => ({
         ...prev,
         intervenciones: [...prev.intervenciones, {
           ...intervencionActual,
-          hora_intervencion: intervencionActual.hora_intervencion || new Date().toTimeString().slice(0, 5)
+          hora_intervencion: intervencionActual.hora_intervencion || ahoraHHMM()
         }]
       }));
       setIntervencionActual({ tipo_intervencion: '', descripcion: '', hora_intervencion: '' });
@@ -458,145 +485,111 @@ useEffect(() => {
     setTimeout(() => setMensajeNotificacion({ texto: '', tipo: '' }), 4000);
   };
 
+  // Cálculo de completitud del reporte
+  const isReportComplete = useMemo(() => {
+    return CAMPOS_REQUERIDOS_COMPLETO.every(([sec, key]) => {
+      const v = reporte[sec]?.[key];
+      return v !== undefined && v !== null && String(v).trim() !== '';
+    });
+  }, [reporte]);
+
   const handleNLPData = useCallback((parsed, meta = {}) => {
-  if (!parsed) return;
+    if (!parsed) return;
+    const { secciones = {}, seccionesCompletas = [], acciones = [] } = parsed;
 
-  const { secciones = {}, seccionesCompletas = [], acciones = [] } = parsed;
+    setReporte(prev => {
+      const actualizado = { ...prev };
+      if (secciones.signos) {
+        actualizado.seccionI = {
+          ...actualizado.seccionI,
+          fc: secciones.signos.frecuencia_cardiaca ?? actualizado.seccionI.fc,
+          fr: secciones.signos.frecuencia_respiratoria ?? actualizado.seccionI.fr,
+          ta: secciones.signos.tension_arterial ?? actualizado.seccionI.ta,
+          spo2: secciones.signos.saturacion_oxigeno ?? actualizado.seccionI.spo2,
+          temp: secciones.signos.temperatura ?? actualizado.seccionI.temp,
+          glucemia: secciones.signos.glucemia ?? actualizado.seccionI.glucemia,
+          hora_toma: ahoraHHMM()
+        };
+      }
+      if (secciones.glasgow) {
+        if (secciones.glasgow.ocular) setOcular(secciones.glasgow.ocular);
+        if (secciones.glasgow.verbal) setVerbal(secciones.glasgow.verbal);
+        if (secciones.glasgow.motor) setMotor(secciones.glasgow.motor);
+      }
+      if (secciones.demografia) {
+        actualizado.seccionD = {
+          ...actualizado.seccionD,
+          nombre: secciones.demografia.nombre || actualizado.seccionD.nombre,
+          edad: secciones.demografia.edad ?? actualizado.seccionD.edad,
+          sexo: secciones.demografia.sexo || actualizado.seccionD.sexo
+        };
+      }
+      if (secciones.motivo?.motivo_urgencia) {
+        actualizado.seccionF = {
+          ...actualizado.seccionF,
+          motivo_principal: actualizado.seccionF.motivo_principal
+            ? `${actualizado.seccionF.motivo_principal} ${secciones.motivo.motivo_urgencia}`.trim()
+            : secciones.motivo.motivo_urgencia
+        };
+      }
+      if (secciones.lesiones?.descripcion_lesion) {
+        actualizado.seccionH = {
+          ...actualizado.seccionH,
+          lesiones_exposicion: secciones.lesiones.descripcion_lesion
+        };
+      }
+      if (Array.isArray(secciones.intervenciones) && secciones.intervenciones.length > 0) {
+        const existentes = new Set(actualizado.intervenciones.map(i => i.tipo_intervencion));
+        const nuevas = secciones.intervenciones
+          .filter(i => !existentes.has(i.tipo_intervencion))
+          .map(i => ({ ...i, hora_intervencion: i.hora_intervencion || ahoraHHMM() }));
+        actualizado.intervenciones = [...actualizado.intervenciones, ...nuevas];
+      }
+      return actualizado;
+    });
 
-  // === Fusión de secciones al reporte ===
-  setReporte(prev => {
-    const actualizado = { ...prev };
+    const accion = meta.action || (acciones.includes('enviar_urgente') ? 'enviar_urgente'
+      : acciones.includes('enviar_completo') ? 'enviar_completo' : null);
 
-    // Signos vitales
-    if (secciones.signos) {
-      actualizado.seccionI = {
-        ...actualizado.seccionI,
-        fc: secciones.signos.frecuencia_cardiaca ?? actualizado.seccionI.fc,
-        fr: secciones.signos.frecuencia_respiratoria ?? actualizado.seccionI.fr,
-        ta: secciones.signos.tension_arterial ?? actualizado.seccionI.ta,
-        spo2: secciones.signos.saturacion_oxigeno ?? actualizado.seccionI.spo2,
-        temp: secciones.signos.temperatura ?? actualizado.seccionI.temp,
-        glucemia: secciones.signos.glucemia ?? actualizado.seccionI.glucemia,
-        hora_toma: new Date().toTimeString().slice(0, 5)
-      };
+    if (accion === 'enviar_urgente') {
+      if (hospitalAceptado) setTimeout(() => enviarVersion(true), 800);
+      else mostrarNotificacion('Aún no hay hospital asignado.', 'warning');
+    } else if (accion === 'enviar_completo') {
+      if (hospitalAceptado) setTimeout(() => enviarVersion(false), 800);
+      else mostrarNotificacion('Aún no hay hospital asignado.', 'warning');
     }
+  }, [hospitalAceptado, setOcular, setVerbal, setMotor]);
 
-    // Glasgow: sincronizar con el hook useGlasgow
-    if (secciones.glasgow) {
-      if (secciones.glasgow.ocular) setOcular(secciones.glasgow.ocular);
-      if (secciones.glasgow.verbal) setVerbal(secciones.glasgow.verbal);
-      if (secciones.glasgow.motor) setMotor(secciones.glasgow.motor);
+  const solicitarMedico = () => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      mostrarNotificacion('Sin conexión al servidor', 'error');
+      return;
     }
-
-    // Demografía
-    if (secciones.demografia) {
-      actualizado.seccionD = {
-        ...actualizado.seccionD,
-        nombre: secciones.demografia.nombre || actualizado.seccionD.nombre,
-        edad: secciones.demografia.edad ?? actualizado.seccionD.edad,
-        sexo: secciones.demografia.sexo || actualizado.seccionD.sexo
-      };
+    if (!hospitalAceptado) {
+      mostrarNotificacion('Esperando aceptación del hospital', 'warning');
+      return;
     }
+    const sessionId = `EC-${reporte.callId || Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+    window.open(`/videollamada?room=${sessionId}&role=paramedico`, '_blank');
+    wsRef.current.send(JSON.stringify({
+      type: 'video_call_request',
+      sessionId,
+      from: {
+        role: 'paramedic',
+        id: `pm_${configInicial.paramedico1 || 'EC-Paramedico'}_${configInicial.ambulanciaId}`
+      },
+      to: { role: 'doctor', id: 'any' },
+      callId: reporte.callId,
+      ambulanceId: configInicial.ambulanciaId
+    }));
+    mostrarNotificacion('Sala abierta. Esperando doctor.', 'info');
+  };
 
-    // Motivo
-    if (secciones.motivo?.motivo_urgencia) {
-      actualizado.seccionF = {
-        ...actualizado.seccionF,
-        motivo_principal: actualizado.seccionF.motivo_principal
-          ? `${actualizado.seccionF.motivo_principal} ${secciones.motivo.motivo_urgencia}`.trim()
-          : secciones.motivo.motivo_urgencia
-      };
-    }
-
-    // Lesiones
-    if (secciones.lesiones?.descripcion_lesion) {
-      actualizado.seccionH = {
-        ...actualizado.seccionH,
-        lesiones_exposicion: secciones.lesiones.descripcion_lesion
-      };
-    }
-
-    // Intervenciones: evitar duplicados por tipo
-    if (Array.isArray(secciones.intervenciones) && secciones.intervenciones.length > 0) {
-      const existentes = new Set(actualizado.intervenciones.map(i => i.tipo_intervencion));
-      const nuevas = secciones.intervenciones
-        .filter(i => !existentes.has(i.tipo_intervencion))
-        .map(i => ({
-          ...i,
-          hora_intervencion: i.hora_intervencion || new Date().toTimeString().slice(0, 5)
-        }));
-      actualizado.intervenciones = [...actualizado.intervenciones, ...nuevas];
-    }
-
-    return actualizado;
-  });
-
-  // === Comandos de acción ===
-  const accion = meta.action || (acciones.includes('enviar_urgente') ? 'enviar_urgente'
-    : acciones.includes('enviar_completo') ? 'enviar_completo'
-    : null);
-
-  if (accion === 'enviar_urgente') {
-    if (hospitalAceptado) {
-      setTimeout(() => enviarVersion(true), 800);
-    } else {
-      mostrarNotificacion('Aún no hay hospital asignado.', 'warning');
-    }
-  } else if (accion === 'enviar_completo') {
-    if (hospitalAceptado) {
-      setTimeout(() => enviarVersion(false), 800);
-    } else {
-      mostrarNotificacion('Aún no hay hospital asignado.', 'warning');
-    }
-  }
-
-  // === Auto-envío cuando se completa una sección urgente ===
-  // (solo si no es un análisis en vivo, para no saturar el WS)
-  if (!meta.live && hospitalAceptado && seccionesCompletas.length >= 3) {
-    setTimeout(() => enviarVersion(true), 1200);
-  }
-}, [hospitalAceptado, setOcular, setVerbal, setMotor]);
-
-
-const solicitarMedico = () => {
-  if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-    mostrarNotificacion('Sin conexión al servidor', 'error');
-    return;
-  }
-  if (!hospitalAceptado) {
-    mostrarNotificacion('Esperando aceptación del hospital', 'warning');
-    return;
-  }
-
-  // El sessionId se genera en el cliente. El paramédico es el host.
-  const sessionId = `EC-${reporte.callId || Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
-
-  // 1. Abrir la ventana del paramédico inmediatamente
-  window.open(`/videollamada?room=${sessionId}&role=paramedico`, '_blank');
-
-  // 2. Notificar por WS a cualquier doctor disponible
-  wsRef.current.send(JSON.stringify({
-    type: 'video_call_request',
-    sessionId,
-    from: {
-      role: 'paramedic',
-      id: `pm_${configInicial.paramedico1 || 'EC-Paramedico'}_${configInicial.ambulanciaId}`
-    },
-    to: { role: 'doctor', id: 'any' },
-    callId: reporte.callId,
-    ambulanceId: configInicial.ambulanciaId
-  }));
-
-  mostrarNotificacion('Sala abierta. Esperando doctor.', 'info');
-};
-
-  // ==================== ENVÍO DE VERSIONES ====================
   const enviarVersion = (urgentOnly = false) => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
       mostrarNotificacion('Sin conexión al servidor', 'error');
       return;
     }
-
     const payload = {
       type: 'prehospital_report_update',
       callId: reporte.callId,
@@ -629,9 +622,8 @@ const solicitarMedico = () => {
         glasgow: total
       }
     };
-
     wsRef.current.send(JSON.stringify(payload));
-    mostrarNotificacion(urgentOnly ? 'Enviando datos urgentes...' : 'Enviando actualización completa...', 'info');
+    mostrarNotificacion(urgentOnly ? 'Enviando versión parcial...' : 'Enviando informe completo...', 'info');
   };
 
   const handleSubmit = async (e) => {
@@ -641,8 +633,6 @@ const solicitarMedico = () => {
       return;
     }
     enviarVersion(false);
-
-    // Persistir en backend
     try {
       const response = await fetch(`${API_URL}/reporte-prehospitalario`, {
         method: 'POST',
@@ -677,8 +667,8 @@ const solicitarMedico = () => {
           .setup-header p { opacity: 0.7; font-size: 0.9rem; margin: 0; }
           .form-group { margin-bottom: 16px; }
           .form-group label { display: block; font-size: 0.75rem; font-weight: 700; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.8; }
-          .form-group input, .form-group select { width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #334155; background: rgba(0,0,0,0.2); color: #f1f5f9; font-size: 1rem; }
-          .form-group select:focus, .form-group input:focus { outline: none; border-color: #38bdf8; }
+          .form-group input { width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #334155; background: rgba(0,0,0,0.2); color: #f1f5f9; font-size: 1rem; }
+          .form-group input:focus { outline: none; border-color: #38bdf8; }
           .btn-primary { width: 100%; padding: 14px; background: #2563eb; color: white; border: none; border-radius: 8px; font-size: 1rem; font-weight: 700; cursor: pointer; }
           .btn-primary:hover { background: #1d4ed8; }
           .btn-primary:disabled { background: #475569; cursor: not-allowed; }
@@ -747,10 +737,9 @@ const solicitarMedico = () => {
     );
   }
 
-  // ==================== VISTA 2: REPORTE ====================
   const puedeEnviar = !!hospitalAceptado;
 
-   return (
+  return (
     <>
       <div className={`reporte-root ${theme === 'dark' ? 'theme-dark' : 'theme-light'}`}>
         <style>{`
@@ -762,7 +751,7 @@ const solicitarMedico = () => {
             --danger: #ef4444; --warning: #f59e0b; --success: #10b981;
           }
           * { box-sizing: border-box; }
-          .reporte-root { min-height: 100vh; padding-bottom: 140px; font-family: system-ui, -apple-system, sans-serif; }
+          .reporte-root { min-height: 100vh; padding-bottom: 220px; font-family: system-ui, -apple-system, sans-serif; }
           [data-theme="light"] .reporte-root { background: var(--bg-light); color: var(--text-light); }
           [data-theme="dark"] .reporte-root { background: var(--bg-dark); color: var(--text-dark); }
           .container { max-width: 768px; margin: 0 auto; padding: 16px; }
@@ -780,6 +769,7 @@ const solicitarMedico = () => {
           [data-theme="dark"] .status-banner { background: var(--panel-dark); border-color: var(--border-dark); }
           .banner-warn { border-left-color: var(--warning); }
           .banner-success { border-left-color: var(--success); background: rgba(16,185,129,0.08); }
+          .banner-closed { border-left-color: #64748b; background: rgba(100,116,139,0.1); }
           details { background: var(--panel-light); border-radius: 10px; margin-bottom: 12px; border: 1px solid var(--border-light); overflow: hidden; }
           [data-theme="dark"] details { background: var(--panel-dark); border-color: var(--border-dark); }
           .priority-red { border-left: 4px solid var(--danger); }
@@ -798,6 +788,10 @@ const solicitarMedico = () => {
           input, select, textarea { width: 100%; padding: 11px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--bg-light); font-size: 1rem; color: inherit; font-family: inherit; }
           [data-theme="dark"] input, [data-theme="dark"] select, [data-theme="dark"] textarea { border-color: var(--border-dark); background: rgba(0,0,0,0.2); }
           input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+          .quick-times { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+          .quick-btn { padding: 12px; border-radius: 10px; background: rgba(14,165,233,0.15); border: 1px solid #0ea5e9; color: #0ea5e9; font-weight: 900; font-size: 0.8rem; cursor: pointer; letter-spacing: 0.3px; }
+          .quick-btn:hover { background: rgba(14,165,233,0.25); }
+          .quick-btn.done { background: rgba(16,185,129,0.15); border-color: #10b981; color: #10b981; }
           .bottom-action-area { position: fixed; bottom: 0; left: 0; width: 100%; background: var(--panel-light); border-top: 1px solid var(--border-light); padding: 14px; z-index: 100; box-shadow: 0 -10px 20px rgba(0,0,0,0.2); display: flex; flex-direction: column; gap: 10px; }
           [data-theme="dark"] .bottom-action-area { background: var(--panel-dark); border-top-color: var(--border-dark); }
           .pln-container { width: 100%; display: flex; justify-content: center; }
@@ -805,6 +799,7 @@ const solicitarMedico = () => {
           .btn-sync { flex: 1; padding: 16px; background: var(--success); color: white; border: none; border-radius: 12px; font-size: 1rem; font-weight: 700; cursor: pointer; text-transform: uppercase; letter-spacing: 0.5px; }
           .btn-sync:hover:not(:disabled) { opacity: 0.9; }
           .btn-sync:disabled { background: #475569; cursor: not-allowed; opacity: 0.6; }
+          .btn-complete { background: #0284c7; }
           .btn-urgent { flex: 0.6; padding: 16px; background: var(--warning); color: #000; border: none; border-radius: 12px; font-size: 0.95rem; font-weight: 700; cursor: pointer; text-transform: uppercase; }
           .btn-urgent:hover:not(:disabled) { opacity: 0.9; }
           .btn-urgent:disabled { background: #475569; color: #cbd5e1; cursor: not-allowed; opacity: 0.6; }
@@ -812,47 +807,6 @@ const solicitarMedico = () => {
           .toast.success { background: var(--success); }
           .toast.error { background: var(--danger); }
           .toast.info { background: var(--accent); }
-
-          .voice-modal-overlay {
-            position: fixed;
-            inset: 0;
-            background: rgba(0, 0, 0, 0.55);
-            backdrop-filter: blur(6px);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            z-index: 9999;
-            padding: 16px;
-            overflow-y: auto;
-          }
-          .voice-modal {
-            background: #1e293b;
-            color: #f1f5f9;
-            border-radius: 16px;
-            width: 100%;
-            max-width: 520px;
-            max-height: 90vh;
-            overflow-y: auto;
-            padding: 24px 28px 28px;
-            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
-            position: relative;
-          }
-          @media (max-width: 480px) {
-            .voice-modal {
-              padding: 18px 16px;
-              border-radius: 12px;
-            }
-          }
-          @media (orientation: landscape) and (max-height: 500px) {
-            .voice-modal-overlay {
-              align-items: flex-start;
-              padding: 8px;
-            }
-            .voice-modal {
-              max-height: calc(100vh - 16px);
-              padding: 14px 20px;
-            }
-          }
 
           .destino-prioritario {
             background: linear-gradient(135deg, rgba(16,185,129,0.15), rgba(16,185,129,0.05));
@@ -864,17 +818,14 @@ const solicitarMedico = () => {
             box-shadow: 0 4px 16px rgba(16,185,129,0.2);
           }
           .destino-icon {
-            width: 48px;
-            height: 48px;
-            border-radius: 50%;
-            background: #10b981;
-            color: white;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.5rem;
-            font-weight: 900;
+            width: 48px; height: 48px; border-radius: 50%;
+            background: #10b981; color: white;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 1.5rem; font-weight: 900;
           }
+          .chip { display: inline-flex; align-items: center; padding: 4px 10px; border-radius: 6px; font-size: 0.7rem; font-weight: 900; letter-spacing: 0.5px; }
+          .chip-op { background: #7c3aed; color: white; }
+          .chip-f { background: #0ea5e9; color: white; }
 
           @media (max-width: 480px) {
             .grid-3 { grid-template-columns: 1fr 1fr; }
@@ -913,7 +864,7 @@ const solicitarMedico = () => {
                 <div className="destino-icon">H</div>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: '0.72rem', fontWeight: 900, letterSpacing: '1px', opacity: 0.85 }}>
-                    HOSPITAL DESTINO
+                    HOSPITAL DESTINO CONFIRMADO
                   </div>
                   <div style={{ fontSize: '1.25rem', fontWeight: 900, color: '#10b981', marginTop: '2px' }}>
                     {hospitalAceptado.hospitalInfo?.nombre || hospitalAceptado.hospitalId}
@@ -927,9 +878,25 @@ const solicitarMedico = () => {
           )}
 
           {reporte.callId ? (
-            hospitalAceptado ? (
+            casoFinalizado ? (
+              <div className="status-banner banner-closed">
+                <div><strong>Folio:</strong> {reporte.callId}
+                  {reporte.callId.startsWith('OP-') && <span className="chip chip-op" style={{ marginLeft: 8 }}>OPERADOR</span>}
+                  {reporte.callId.startsWith('F-') && <span className="chip chip-f" style={{ marginLeft: 8 }}>RECEPTOR</span>}
+                </div>
+                <div style={{ fontSize: '0.82rem', marginTop: 4 }}>
+                  El caso ha sido marcado como finalizado por el centro regulador.
+                </div>
+                <div style={{ fontSize: '0.78rem', opacity: 0.85, marginTop: 2, fontWeight: 700 }}>
+                  Puede completar y enviar el informe final.
+                </div>
+              </div>
+            ) : hospitalAceptado ? (
               <div className="status-banner banner-success">
-                <div><strong>Folio:</strong> {reporte.callId}</div>
+                <div><strong>Folio:</strong> {reporte.callId}
+                  {reporte.callId.startsWith('OP-') && <span className="chip chip-op" style={{ marginLeft: 8 }}>OPERADOR</span>}
+                  {reporte.callId.startsWith('F-') && <span className="chip chip-f" style={{ marginLeft: 8 }}>RECEPTOR</span>}
+                </div>
                 <div style={{ fontSize: '0.82rem', marginTop: 4 }}>
                   Hospital destino: <strong>{hospitalAceptado.hospitalInfo?.nombre || hospitalAceptado.hospitalId}</strong>
                 </div>
@@ -939,9 +906,12 @@ const solicitarMedico = () => {
               </div>
             ) : (
               <div className="status-banner banner-warn">
-                <div><strong>Folio:</strong> {reporte.callId}</div>
+                <div><strong>Folio:</strong> {reporte.callId}
+                  {reporte.callId.startsWith('OP-') && <span className="chip chip-op" style={{ marginLeft: 8 }}>OPERADOR</span>}
+                  {reporte.callId.startsWith('F-') && <span className="chip chip-f" style={{ marginLeft: 8 }}>RECEPTOR</span>}
+                </div>
                 <div style={{ fontSize: '0.85rem', marginTop: 4 }}>
-                  Esperando aceptación del hospital para habilitar el envío del reporte.
+                  Esperando aceptación del hospital para habilitar el envío.
                 </div>
               </div>
             )
@@ -987,6 +957,37 @@ const solicitarMedico = () => {
                     <input type="text" readOnly value={reporte.riesgos_escena} disabled style={{ color: 'var(--danger)', fontWeight: 'bold' }} />
                   </div>
                 )}
+
+                <div>
+                  <label style={{ marginBottom: 10 }}>MARCAS DE TIEMPO RÁPIDAS</label>
+                  <div className="quick-times">
+                    <button type="button" className={`quick-btn ${reporte.seccionB.activacion ? 'done' : ''}`}
+                      onClick={() => marcarHora('activacion')}>
+                      ACTIVACIÓN {reporte.seccionB.activacion && `· ${reporte.seccionB.activacion}`}
+                    </button>
+                    <button type="button" className={`quick-btn ${reporte.seccionB.salida_base ? 'done' : ''}`}
+                      onClick={() => marcarHora('salida_base')}>
+                      SALÍ DE BASE {reporte.seccionB.salida_base && `· ${reporte.seccionB.salida_base}`}
+                    </button>
+                    <button type="button" className={`quick-btn ${reporte.seccionB.llegada_escena ? 'done' : ''}`}
+                      onClick={() => marcarHora('llegada_escena')}>
+                      LLEGUÉ A ESCENA {reporte.seccionB.llegada_escena && `· ${reporte.seccionB.llegada_escena}`}
+                    </button>
+                    <button type="button" className={`quick-btn ${reporte.seccionB.primer_contacto ? 'done' : ''}`}
+                      onClick={() => marcarHora('primer_contacto')}>
+                      CONTACTO PACIENTE {reporte.seccionB.primer_contacto && `· ${reporte.seccionB.primer_contacto}`}
+                    </button>
+                    <button type="button" className={`quick-btn ${reporte.seccionB.salida_escena ? 'done' : ''}`}
+                      onClick={() => marcarHora('salida_escena')}>
+                      SALIENDO DE ESCENA {reporte.seccionB.salida_escena && `· ${reporte.seccionB.salida_escena}`}
+                    </button>
+                    <button type="button" className={`quick-btn ${reporte.seccionB.llegada_hospital ? 'done' : ''}`}
+                      onClick={() => marcarHora('llegada_hospital')}>
+                      LLEGUÉ AL HOSPITAL {reporte.seccionB.llegada_hospital && `· ${reporte.seccionB.llegada_hospital}`}
+                    </button>
+                  </div>
+                </div>
+
                 <div className="grid-3">
                   <div><label>Activación</label><input type="time" value={reporte.seccionB.activacion} onChange={e => handleChange(['seccionB', 'activacion'], e.target.value)} /></div>
                   <div><label>Salida Base</label><input type="time" value={reporte.seccionB.salida_base} onChange={e => handleChange(['seccionB', 'salida_base'], e.target.value)} /></div>
@@ -1064,8 +1065,13 @@ const solicitarMedico = () => {
               <div className="section-content">
                 <div className="grid-2">
                   <div style={{ gridColumn: 'span 2' }}>
-                    <label>Hospital Destino {hospitalAceptado ? '(aceptado)' : '*'}</label>
-                    <select value={hospitalSeleccionado} onChange={e => setHospitalSeleccionado(e.target.value)} disabled={!!hospitalAceptado}>
+                    <label>Hospital Destino {hospitalAceptado ? '(confirmado por sistema)' : '*'}</label>
+                    <select
+                      value={hospitalSeleccionado}
+                      onChange={e => setHospitalSeleccionado(e.target.value)}
+                      disabled={!!hospitalAceptado}
+                      style={hospitalAceptado ? { borderColor: '#10b981', borderWidth: 2, fontWeight: 900, color: '#10b981' } : {}}
+                    >
                       <option value="">Seleccione un hospital...</option>
                       {listaHospitales.map(h => (
                         <option key={h.id} value={h.id}>{h.nombre}</option>
@@ -1073,7 +1079,7 @@ const solicitarMedico = () => {
                     </select>
                     {hospitalAceptado && (
                       <p style={{ fontSize: '0.75rem', color: 'var(--success)', marginTop: 6, fontWeight: 700 }}>
-                        Hospital destino fijado por el sistema central.
+                        ✓ Hospital que aceptó al paciente. Ya no requiere selección manual.
                       </p>
                     )}
                   </div>
@@ -1084,6 +1090,12 @@ const solicitarMedico = () => {
                       <option>Urgencias</option><option>Choque</option><option>Tococirugía</option>
                     </select>
                   </div>
+                </div>
+                <div>
+                  <label>Diagnóstico Presuntivo</label>
+                  <textarea rows="2" value={reporte.seccionN.diagnostico_presuntivo}
+                    onChange={e => handleChange(['seccionN', 'diagnostico_presuntivo'], e.target.value)}
+                    placeholder="Diagnóstico clínico presuntivo..." />
                 </div>
               </div>
             </details>
@@ -1103,30 +1115,42 @@ const solicitarMedico = () => {
             </button>
             <button
               onClick={handleSubmit}
-              className="btn-sync"
-              disabled={!puedeEnviar}
+              className={`btn-sync ${isReportComplete ? 'btn-complete' : ''}`}
+              disabled={!puedeEnviar || !isReportComplete}
+              title={!isReportComplete ? 'Complete los campos obligatorios para enviar informe completo' : ''}
             >
-              {puedeEnviar ? 'ENVIAR COMPLETO' : 'ESPERANDO HOSPITAL'}
+              {!puedeEnviar
+                ? 'ESPERANDO HOSPITAL'
+                : isReportComplete
+                  ? 'ENVIAR INFORME COMPLETO'
+                  : 'ENVIAR VERSIÓN PARCIAL'}
             </button>
           </div>
+
+          {!isReportComplete && puedeEnviar && (
+            <button
+              onClick={() => enviarVersion(false)}
+              style={{
+                width: '100%', padding: '14px',
+                background: 'transparent', color: '#94a3b8',
+                border: '1px dashed #334155', borderRadius: '12px',
+                fontSize: '0.85rem', fontWeight: 700, cursor: 'pointer',
+                textTransform: 'uppercase', letterSpacing: '0.5px'
+              }}
+            >
+              ENVIAR VERSIÓN PARCIAL AL HOSPITAL
+            </button>
+          )}
 
           {puedeEnviar && (
             <button
               onClick={solicitarMedico}
-              className="btn-video"
               style={{
-                width: '100%',
-                padding: '14px',
-                background: '#0ea5e9',
-                color: 'white',
-                border: 'none',
-                borderRadius: '12px',
-                fontSize: '0.95rem',
-                fontWeight: 900,
-                letterSpacing: '1px',
-                cursor: 'pointer',
-                textTransform: 'uppercase',
-                marginTop: '8px'
+                width: '100%', padding: '14px',
+                background: '#0ea5e9', color: 'white',
+                border: 'none', borderRadius: '12px',
+                fontSize: '0.95rem', fontWeight: 900, letterSpacing: '1px',
+                cursor: 'pointer', textTransform: 'uppercase', marginTop: '4px'
               }}
             >
               SOLICITAR MÉDICO

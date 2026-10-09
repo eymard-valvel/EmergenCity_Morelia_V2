@@ -12,9 +12,12 @@ import {
 } from "react-icons/fa";
 import { FiActivity, FiWifiOff } from "react-icons/fi";
 import { resolveWsUrl } from '../../helpers/wsUrl.js';
+import logo from '../img/Logo.png';
 
 const WS_URL = resolveWsUrl();
 const API_URL = (import.meta.env.VITE_API || 'https://emergencity-morelia-v2.onrender.com').replace(/\/+$/, '');
+
+const hasValue = (v) => v !== undefined && v !== null && String(v).trim() !== '' && String(v).trim() !== '--';
 
 const ReportesPage = () => {
   const [reports, setReports] = useState([]);
@@ -26,6 +29,7 @@ const ReportesPage = () => {
   const [selectedVersion, setSelectedVersion] = useState(null);
   const reportRef = useRef(null);
   const wsRef = useRef(null);
+  const heartbeatRef = useRef(null);
   const toast = useToast();
 
   const { isOpen: isReportModalOpen, onOpen: onReportModalOpen, onClose: onReportModalClose } = useDisclosure();
@@ -34,7 +38,6 @@ const ReportesPage = () => {
     toast({ title, description, status, duration: 4000, isClosable: true, position: 'top-right' });
   }, [toast]);
 
-  // ==================== CARGA REST ====================
   const fetchReports = useCallback(async () => {
     try {
       setLoading(true);
@@ -52,7 +55,6 @@ const ReportesPage = () => {
 
   useEffect(() => { fetchReports(); }, [fetchReports]);
 
-  // ==================== WS EN VIVO ====================
   useEffect(() => {
     const socket = new WebSocket(WS_URL);
     wsRef.current = socket;
@@ -65,6 +67,12 @@ const ReportesPage = () => {
         nombre: 'EC-Doctor',
         especialidad: 'Urgenciólogo'
       }));
+      if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+      heartbeatRef.current = setInterval(() => {
+        if (socket.readyState === WebSocket.OPEN) {
+          try { socket.send(JSON.stringify({ type: 'heartbeat' })); } catch (_) {}
+        }
+      }, 20000);
     };
 
     socket.onmessage = (event) => {
@@ -72,7 +80,6 @@ const ReportesPage = () => {
         const data = JSON.parse(event.data);
 
         if (data.type === 'doctor_reports_history') {
-          // Cargar expedientes previos que el server tiene en memoria
           const historical = (data.reports || []).map(r => ({
             callId: r.callId,
             paciente: r.report?.seccionD ? {
@@ -111,28 +118,28 @@ const ReportesPage = () => {
         }
 
         if (data.type === 'prehospital_report_broadcast') {
-          // Reporte en vivo
           setLiveUpdates(prev => [data, ...prev].slice(0, 50));
           showToast('info', `Reporte v${data.version} recibido`, `Folio ${data.callId}`);
-          // Refrescar tabla con datos del broadcast
           fetchReports();
         }
 
         if (data.type === 'doctor_assigned') {
           showToast('success', 'Paciente asignado', `Folio ${data.callId}`);
         }
-
-        if (data.type === 'doctor_ack_broadcast') {
-          // Confirmación de nuestro propio ack
-        }
       } catch (e) {
         console.error('WS message error:', e);
       }
     };
 
-    socket.onclose = () => setWsConnected(false);
+    socket.onclose = () => {
+      setWsConnected(false);
+      if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+    };
 
-    return () => { try { socket.close(); } catch (_) {} };
+    return () => {
+      if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+      try { socket.close(); } catch (_) {}
+    };
   }, [fetchReports, showToast]);
 
   // ==================== PDF ====================
@@ -166,7 +173,7 @@ const ReportesPage = () => {
         heightLeft -= pdf.internal.pageSize.getHeight();
       }
 
-      pdf.save(`Expediente_${selectedReport?.paciente?.nombre || 'Paciente'}.pdf`);
+      pdf.save(`Expediente_${selectedReport?.paciente?.nombre || 'Paciente'}_${selectedReport?.callId || ''}.pdf`);
       showToast('success', 'Expediente descargado', 'PDF generado correctamente');
     } catch (error) {
       console.error('Error PDF:', error);
@@ -175,8 +182,8 @@ const ReportesPage = () => {
   };
 
   const limpiarTexto = (texto) => {
-    if (!texto) return 'Ninguna.';
-    return texto.replace(/\[VideoID:.*?\]/g, '').trim() || 'Ninguna.';
+    if (!texto) return '';
+    return texto.replace(/\[VideoID:.*?\]/g, '').trim();
   };
 
   const verDetalles = (reporte) => {
@@ -189,7 +196,6 @@ const ReportesPage = () => {
   return (
     <ChakraProvider>
       <Box bg="#09090b" minH="100vh" p={6} color="#f8fafc">
-        {/* HEADER */}
         <Flex justify="space-between" align="center" mb={6}>
           <VStack align="start" spacing={0}>
             <Text fontSize="26px" fontWeight="900" letterSpacing="1px" color="white">
@@ -221,7 +227,6 @@ const ReportesPage = () => {
           </HStack>
         </Flex>
 
-        {/* TABLA */}
         {loading ? (
           <Flex justify="center" py={20}>
             <Spinner size="xl" color="#38bdf8" thickness="4px" />
@@ -248,7 +253,7 @@ const ReportesPage = () => {
                     </Box>
                   </Box>
                 ) : reports.map((report, idx) => (
-                  <Box as="tr" key={idx} borderBottom="1px solid #27272a" _hover={{ bg: '#1f1f23' }} transition="background 0.15s">
+                  <Box as="tr" key={idx} borderBottom="1px solid #27272a" _hover={{ bg: '#1f1f23' }}>
                     <Box as="td" p={4}>
                       <Text fontWeight="900" color="#38bdf8" fontSize="13px">
                         {report.callId || report.id_reporte || 'S/F'}
@@ -273,13 +278,9 @@ const ReportesPage = () => {
                       </Badge>
                     </Box>
                     <Box as="td" p={4} textAlign="center">
-                      <Button
-                        size="sm" h="45px" px={4}
-                        bg="#0284c7" color="white"
-                        fontSize="12px" fontWeight="900"
-                        _hover={{ bg: '#0369a1' }}
-                        onClick={() => verDetalles(report)}
-                      >
+                      <Button size="sm" h="45px" px={4} bg="#0284c7" color="white"
+                        fontSize="12px" fontWeight="900" _hover={{ bg: '#0369a1' }}
+                        onClick={() => verDetalles(report)}>
                         VER EXPEDIENTE
                       </Button>
                     </Box>
@@ -290,7 +291,6 @@ const ReportesPage = () => {
           </Box>
         )}
 
-        {/* MODAL DE EXPEDIENTE */}
         <Modal isOpen={isReportModalOpen} onClose={onReportModalClose} size="5xl" scrollBehavior="inside">
           <ModalOverlay backdropFilter="blur(10px)" bg="rgba(0,0,0,0.85)" />
           <ModalContent bg="#09090b" border="1px solid #3f3f46" borderRadius="2xl" overflow="hidden">
@@ -309,147 +309,204 @@ const ReportesPage = () => {
             </ModalHeader>
 
             <ModalBody p={0} bg="#09090b">
-              <Box ref={reportRef} p={8} bg="#09090b" color="white">
+              <Box ref={reportRef} p={8} bg="#ffffff" color="#0f172a" fontFamily="system-ui, -apple-system, sans-serif">
                 {selectedReport && (
-                  <VStack spacing={6} align="stretch">
-                    {/* ENCABEZADO */}
-                    <Box borderBottom="2px solid #38bdf8" pb={4}>
-                      <Text fontSize="22px" fontWeight="900" color="#38bdf8">EMERGENCITY MORELIA</Text>
-                      <Text fontSize="13px" color="#a1a1aa">
-                        Reporte de Atención Prehospitalaria · Folio: {selectedReport.callId || '--'}
-                      </Text>
-                    </Box>
-
-                    {/* PACIENTE */}
-                    <Box bg="#18181b" p={5} borderRadius="xl" border="1px solid #27272a">
-                      <HStack mb={3}>
-                        <Icon as={FaUserMd} color="#38bdf8" />
-                        <Text fontWeight="900" color="#38bdf8" fontSize="14px">IDENTIFICACIÓN</Text>
-                      </HStack>
-                      <SimpleGrid columns={2} spacing={4}>
+                  <VStack spacing={5} align="stretch">
+                    {/* HEADER CON LOGO */}
+                    <Flex align="center" justify="space-between" borderBottom="3px solid #0ea5e9" pb={4}>
+                      <HStack spacing={4} align="center">
+                        <Box w="70px" h="70px" display="flex" alignItems="center" justifyContent="center">
+                          <img src={logo} alt="EmergenCity" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} crossOrigin="anonymous" />
+                        </Box>
                         <Box>
-                          <Text fontSize="11px" color="#a1a1aa" fontWeight="900">NOMBRE</Text>
-                          <Text fontSize="20px" fontWeight="900" color="white">
-                            {selectedReport.paciente?.nombre || 'Desconocido'}
+                          <Text fontSize="22px" fontWeight="900" color="#0c4a6e" letterSpacing="1px" lineHeight="1.1">
+                            EMERGENCITY MORELIA
+                          </Text>
+                          <Text fontSize="12px" fontWeight="800" color="#0284c7" letterSpacing="1px">
+                            REPORTE DE ATENCIÓN PREHOSPITALARIA
+                          </Text>
+                          <Text fontSize="11px" color="#64748b" mt={0.5}>
+                            Centro Regulador de Urgencias Médicas (CRUM)
                           </Text>
                         </Box>
-                        <HStack spacing={8}>
-                          <Box>
-                            <Text fontSize="11px" color="#a1a1aa" fontWeight="900">EDAD</Text>
-                            <Text fontSize="18px" fontWeight="900" color="white">
-                              {selectedReport.paciente?.edad || '--'} años
-                            </Text>
-                          </Box>
-                          <Box>
-                            <Text fontSize="11px" color="#a1a1aa" fontWeight="900">SEXO</Text>
-                            <Text fontSize="18px" fontWeight="900" color="white">
-                              {selectedReport.paciente?.sexo || '--'}
-                            </Text>
-                          </Box>
-                        </HStack>
-                      </SimpleGrid>
-                    </Box>
-
-                    {/* SIGNOS VITALES */}
-                    <Box>
-                      <HStack mb={3}>
-                        <Icon as={FaHeartbeat} color="#ef4444" />
-                        <Text fontWeight="900" color="#ef4444" fontSize="14px">SIGNOS VITALES</Text>
                       </HStack>
-                      <SimpleGrid columns={4} spacing={3}>
-                        {[
-                          { label: 'FC', value: selectedReport.signos_vitales?.frecuencia_cardiaca, unit: 'bpm', color: '#ef4444' },
-                          { label: 'SpO2', value: selectedReport.signos_vitales?.saturacion_oxigeno, unit: '%', color: '#38bdf8' },
-                          { label: 'TA', value: selectedReport.signos_vitales?.tension_arterial, unit: 'mmHg', color: '#a78bfa' },
-                          { label: 'GLUC', value: selectedReport.signos_vitales?.nivel_glucosa, unit: 'mg/dL', color: '#f59e0b' }
-                        ].map((s, i) => (
-                          <Box key={i} bg="#18181b" p={4} borderRadius="xl" border="1px solid #27272a" textAlign="center">
-                            <Text fontSize="10px" color="#a1a1aa" fontWeight="900">{s.label}</Text>
-                            <Text fontSize="26px" fontWeight="900" color={s.color} lineHeight="1">
-                              {s.value || '--'}
-                            </Text>
-                            <Text fontSize="10px" color="#71717a">{s.unit}</Text>
-                          </Box>
-                        ))}
-                      </SimpleGrid>
-                    </Box>
-
-                    {/* EVALUACIÓN */}
-                    <Box bg="#18181b" p={5} borderRadius="xl" border="1px solid #27272a">
-                      <HStack mb={3}>
-                        <Icon as={FaExclamationTriangle} color="#f59e0b" />
-                        <Text fontWeight="900" color="#f59e0b" fontSize="14px">EVALUACIÓN CLÍNICA</Text>
-                      </HStack>
-                      <VStack align="start" spacing={4}>
-                        <Box w="100%">
-                          <Text fontSize="11px" color="#a1a1aa" fontWeight="900">MOTIVO DE URGENCIA</Text>
-                          <Text fontSize="16px" fontWeight="800" color="white">
-                            {selectedReport.paciente?.motivo_urgencia || 'No especificado'}
-                          </Text>
+                      <VStack align="end" spacing={1}>
+                        <Box px={3} py={1} bg="#0c4a6e" color="white" borderRadius="md">
+                          <Text fontSize="10px" fontWeight="900" letterSpacing="1px">FOLIO</Text>
                         </Box>
-                        <Box w="100%">
-                          <Text fontSize="11px" color="#a1a1aa" fontWeight="900">DESCRIPCIÓN DE LESIONES</Text>
-                          <Text fontSize="14px" color="#d4d4d8" mt={1}>
-                            {selectedReport.paciente?.descripcion_lesion || 'Sin descripción detallada.'}
-                          </Text>
-                        </Box>
-                      </VStack>
-                    </Box>
-
-                    {/* INTERVENCIONES */}
-                    <Box>
-                      <HStack mb={3}>
-                        <Icon as={FaAmbulance} color="#10b981" />
-                        <Text fontWeight="900" color="#10b981" fontSize="14px">INTERVENCIONES</Text>
-                      </HStack>
-                      {selectedReport.intervenciones?.length > 0 ? (
-                        <VStack align="stretch" spacing={2}>
-                          {selectedReport.intervenciones.map((iv, idx) => (
-                            <Box key={idx} p={3} bg="#18181b" borderRadius="lg" border="1px solid #27272a" borderLeft="4px solid #10b981">
-                              <HStack justify="space-between">
-                                <Text fontWeight="900" color="white" fontSize="14px">{iv.tipo_intervencion}</Text>
-                                <Badge bg="#27272a" color="#d4d4d8" fontSize="10px">{iv.hora_intervencion || 'S/H'}</Badge>
-                              </HStack>
-                              <Text fontSize="13px" color="#a1a1aa" mt={1}>{iv.descripcion}</Text>
-                            </Box>
-                          ))}
-                        </VStack>
-                      ) : (
-                        <Text fontSize="13px" color="#71717a" fontStyle="italic">
-                          No se registraron intervenciones.
+                        <Text fontSize="14px" fontWeight="900" color="#0c4a6e">
+                          {selectedReport.callId || '--'}
                         </Text>
-                      )}
-                    </Box>
+                        <Text fontSize="10px" color="#64748b" fontWeight="700">
+                          {new Date().toLocaleString('es-MX', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                        </Text>
+                      </VStack>
+                    </Flex>
 
-                    {/* OBSERVACIONES */}
-                    <Box bg="#18181b" p={5} borderRadius="xl" border="1px solid #27272a">
-                      <Text fontSize="11px" color="#a1a1aa" fontWeight="900" mb={2}>OBSERVACIONES</Text>
-                      <Text fontSize="14px" color="white">
-                        {limpiarTexto(selectedReport.paciente?.observaciones)}
-                      </Text>
-                    </Box>
-
-                    {/* TRIAGE Y GLASGOW */}
-                    {(selectedReport.triaje || selectedReport.glasgow) && (
-                      <SimpleGrid columns={2} spacing={4}>
-                        {selectedReport.triaje && (
-                          <Box bg="#18181b" p={5} borderRadius="xl" border="1px solid #27272a" textAlign="center">
-                            <Text fontSize="11px" color="#a1a1aa" fontWeight="900" mb={2}>TRIAGE</Text>
-                            <Badge bg={selectedReport.triaje.color} color="white" px={4} py={2} fontSize="16px" fontWeight="900" borderRadius="md">
+                    {/* TRIAGE + GLASGOW */}
+                    {(hasValue(selectedReport.triaje?.label) || hasValue(selectedReport.glasgow?.total)) && (
+                      <SimpleGrid columns={2} spacing={3}>
+                        {hasValue(selectedReport.triaje?.label) && (
+                          <Box bg="#f0f9ff" border="2px solid #0ea5e9" borderRadius="lg" p={3} textAlign="center">
+                            <Text fontSize="10px" color="#0c4a6e" fontWeight="900" letterSpacing="1px">CLASIFICACIÓN TRIAGE</Text>
+                            <Text fontSize="20px" fontWeight="900" color={selectedReport.triaje?.color || '#ef4444'} mt={1}>
                               {selectedReport.triaje.label}
-                            </Badge>
+                            </Text>
                           </Box>
                         )}
-                        {selectedReport.glasgow && (
-                          <Box bg="#18181b" p={5} borderRadius="xl" border="1px solid #27272a" textAlign="center">
-                            <Text fontSize="11px" color="#a1a1aa" fontWeight="900" mb={2}>GLASGOW</Text>
-                            <Text fontSize="26px" fontWeight="900" color="#38bdf8">
-                              {selectedReport.glasgow.total}
+                        {hasValue(selectedReport.glasgow?.total) && (
+                          <Box bg="#f0f9ff" border="2px solid #0ea5e9" borderRadius="lg" p={3} textAlign="center">
+                            <Text fontSize="10px" color="#0c4a6e" fontWeight="900" letterSpacing="1px">ESCALA DE GLASGOW</Text>
+                            <Text fontSize="20px" fontWeight="900" color="#0c4a6e" mt={1}>
+                              {selectedReport.glasgow.total} / 15
                             </Text>
                           </Box>
                         )}
                       </SimpleGrid>
                     )}
+
+                    {/* IDENTIFICACIÓN DEL PACIENTE */}
+                    {(hasValue(selectedReport.paciente?.nombre) || hasValue(selectedReport.paciente?.edad) || hasValue(selectedReport.paciente?.sexo)) && (
+                      <Box>
+                        <Flex align="center" mb={2} gap={2}>
+                          <Box w="4px" h="16px" bg="#0ea5e9" borderRadius="full" />
+                          <Text fontSize="12px" fontWeight="900" color="#0c4a6e" letterSpacing="1px">IDENTIFICACIÓN DEL PACIENTE</Text>
+                        </Flex>
+                        <SimpleGrid columns={3} spacing={3}>
+                          {hasValue(selectedReport.paciente?.nombre) && (
+                            <Box bg="#f8fafc" p={3} borderRadius="md" border="1px solid #e2e8f0">
+                              <Text fontSize="9px" color="#64748b" fontWeight="900" letterSpacing="0.5px">NOMBRE</Text>
+                              <Text fontSize="14px" fontWeight="900" color="#0f172a">{selectedReport.paciente.nombre}</Text>
+                            </Box>
+                          )}
+                          {hasValue(selectedReport.paciente?.edad) && (
+                            <Box bg="#f8fafc" p={3} borderRadius="md" border="1px solid #e2e8f0">
+                              <Text fontSize="9px" color="#64748b" fontWeight="900" letterSpacing="0.5px">EDAD</Text>
+                              <Text fontSize="14px" fontWeight="900" color="#0f172a">{selectedReport.paciente.edad} años</Text>
+                            </Box>
+                          )}
+                          {hasValue(selectedReport.paciente?.sexo) && (
+                            <Box bg="#f8fafc" p={3} borderRadius="md" border="1px solid #e2e8f0">
+                              <Text fontSize="9px" color="#64748b" fontWeight="900" letterSpacing="0.5px">SEXO</Text>
+                              <Text fontSize="14px" fontWeight="900" color="#0f172a">{selectedReport.paciente.sexo}</Text>
+                            </Box>
+                          )}
+                        </SimpleGrid>
+                      </Box>
+                    )}
+
+                    {/* SIGNOS VITALES */}
+                    {(() => {
+                      const sv = selectedReport.signos_vitales || {};
+                      const vitals = [
+                        { label: 'FC', value: sv.frecuencia_cardiaca, unit: 'bpm', color: '#dc2626' },
+                        { label: 'FR', value: sv.frecuencia_respiratoria, unit: 'rpm', color: '#0ea5e9' },
+                        { label: 'SpO₂', value: sv.saturacion_oxigeno, unit: '%', color: '#0284c7' },
+                        { label: 'T/A', value: sv.tension_arterial, unit: 'mmHg', color: '#7c3aed' },
+                        { label: 'TEMP', value: sv.temperatura, unit: '°C', color: '#ea580c' },
+                        { label: 'GLUC', value: sv.nivel_glucosa, unit: 'mg/dL', color: '#16a34a' },
+                      ].filter(v => hasValue(v.value));
+                      if (vitals.length === 0) return null;
+                      return (
+                        <Box>
+                          <Flex align="center" mb={2} gap={2}>
+                            <Box w="4px" h="16px" bg="#dc2626" borderRadius="full" />
+                            <Text fontSize="12px" fontWeight="900" color="#0c4a6e" letterSpacing="1px">SIGNOS VITALES</Text>
+                          </Flex>
+                          <SimpleGrid columns={vitals.length >= 4 ? 3 : 2} spacing={3}>
+                            {vitals.map((v, i) => (
+                              <Box key={i} bg="#fef2f2" p={3} borderRadius="md" border="1px solid #fecaca" textAlign="center">
+                                <Text fontSize="9px" color="#991b1b" fontWeight="900" letterSpacing="0.5px">{v.label}</Text>
+                                <Text fontSize="20px" fontWeight="900" color={v.color} lineHeight="1.1">{v.value}</Text>
+                                <Text fontSize="9px" color="#64748b" fontWeight="700">{v.unit}</Text>
+                              </Box>
+                            ))}
+                          </SimpleGrid>
+                        </Box>
+                      );
+                    })()}
+
+                    {/* EVALUACIÓN CLÍNICA */}
+                    {(hasValue(selectedReport.paciente?.motivo_urgencia) || hasValue(selectedReport.paciente?.descripcion_lesion)) && (
+                      <Box>
+                        <Flex align="center" mb={2} gap={2}>
+                          <Box w="4px" h="16px" bg="#f59e0b" borderRadius="full" />
+                          <Text fontSize="12px" fontWeight="900" color="#0c4a6e" letterSpacing="1px">EVALUACIÓN CLÍNICA</Text>
+                        </Flex>
+                        <Box bg="#fffbeb" p={4} borderRadius="md" border="1px solid #fde68a">
+                          {hasValue(selectedReport.paciente?.motivo_urgencia) && (
+                            <Box mb={hasValue(selectedReport.paciente?.descripcion_lesion) ? 3 : 0}>
+                              <Text fontSize="9px" color="#92400e" fontWeight="900" letterSpacing="0.5px">MOTIVO DE URGENCIA</Text>
+                              <Text fontSize="13px" fontWeight="800" color="#0f172a">{selectedReport.paciente.motivo_urgencia}</Text>
+                            </Box>
+                          )}
+                          {hasValue(selectedReport.paciente?.descripcion_lesion) && (
+                            <Box>
+                              <Text fontSize="9px" color="#92400e" fontWeight="900" letterSpacing="0.5px">DESCRIPCIÓN DE LESIONES</Text>
+                              <Text fontSize="13px" fontWeight="700" color="#0f172a">{selectedReport.paciente.descripcion_lesion}</Text>
+                            </Box>
+                          )}
+                        </Box>
+                      </Box>
+                    )}
+
+                    {/* INTERVENCIONES */}
+                    {selectedReport.intervenciones?.length > 0 && (
+                      <Box>
+                        <Flex align="center" mb={2} gap={2}>
+                          <Box w="4px" h="16px" bg="#10b981" borderRadius="full" />
+                          <Text fontSize="12px" fontWeight="900" color="#0c4a6e" letterSpacing="1px">INTERVENCIONES REALIZADAS</Text>
+                        </Flex>
+                        <VStack align="stretch" spacing={2}>
+                          {selectedReport.intervenciones
+                            .filter(iv => hasValue(iv.tipo_intervencion) || hasValue(iv.descripcion))
+                            .map((iv, idx) => (
+                              <Flex key={idx} bg="#ecfdf5" p={3} borderRadius="md" border="1px solid #a7f3d0" gap={3} align="center">
+                                {hasValue(iv.hora_intervencion) && (
+                                  <Box bg="#10b981" color="white" px={2} py={1} borderRadius="sm">
+                                    <Text fontSize="11px" fontWeight="900">{iv.hora_intervencion}</Text>
+                                  </Box>
+                                )}
+                                <Box flex={1}>
+                                  {hasValue(iv.tipo_intervencion) && (
+                                    <Text fontSize="12px" fontWeight="900" color="#065f46">{iv.tipo_intervencion}</Text>
+                                  )}
+                                  {hasValue(iv.descripcion) && (
+                                    <Text fontSize="11px" color="#0f172a" mt={hasValue(iv.tipo_intervencion) ? 0.5 : 0}>{iv.descripcion}</Text>
+                                  )}
+                                </Box>
+                              </Flex>
+                            ))}
+                        </VStack>
+                      </Box>
+                    )}
+
+                    {/* OBSERVACIONES */}
+                    {hasValue(limpiarTexto(selectedReport.paciente?.observaciones)) && (
+                      <Box>
+                        <Flex align="center" mb={2} gap={2}>
+                          <Box w="4px" h="16px" bg="#0ea5e9" borderRadius="full" />
+                          <Text fontSize="12px" fontWeight="900" color="#0c4a6e" letterSpacing="1px">OBSERVACIONES</Text>
+                        </Flex>
+                        <Box bg="#f0f9ff" p={4} borderRadius="md" border="1px solid #bae6fd">
+                          <Text fontSize="12px" color="#0f172a" fontWeight="600" whiteSpace="pre-wrap">
+                            {limpiarTexto(selectedReport.paciente.observaciones)}
+                          </Text>
+                        </Box>
+                      </Box>
+                    )}
+
+                    {/* FOOTER */}
+                    <Box borderTop="2px solid #e2e8f0" pt={3} mt={2}>
+                      <Flex justify="space-between" align="center">
+                        <Text fontSize="9px" color="#64748b" fontWeight="700">
+                          Documento generado por EmergenCity Morelia · CRUM
+                        </Text>
+                        <Text fontSize="9px" color="#64748b" fontWeight="700">
+                          {new Date().toLocaleString('es-MX')}
+                        </Text>
+                      </Flex>
+                    </Box>
                   </VStack>
                 )}
               </Box>
@@ -457,22 +514,18 @@ const ReportesPage = () => {
 
             <ModalFooter bg="#18181b" borderTop="1px solid #27272a" p={5}>
               <HStack w="100%" spacing={4}>
-                <Button
-                  flex={0.3} h="60px" variant="ghost" color="#a1a1aa"
+                <Button flex={0.3} h="60px" variant="ghost" color="#a1a1aa"
                   fontSize="15px" fontWeight="900"
                   _hover={{ bg: '#27272a', color: 'white' }}
-                  onClick={onReportModalClose}
-                >
+                  onClick={onReportModalClose}>
                   CERRAR
                 </Button>
-                <Button
-                  flex={0.7} h="60px"
+                <Button flex={0.7} h="60px"
                   bg="#0284c7" color="white"
                   fontSize="16px" fontWeight="900"
                   leftIcon={<FaFilePdf />}
                   _hover={{ bg: '#0369a1' }}
-                  onClick={generarPDFVisual}
-                >
+                  onClick={generarPDFVisual}>
                   DESCARGAR PDF
                 </Button>
               </HStack>
