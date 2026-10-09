@@ -917,7 +917,7 @@ const route = await computeRouteCached(currentLoc, dest);
     }
   }, [computeRouteCached, drawRoute, isRecalculating, toast]);
 
-  const startNavigationEngine = async (targetLoc, mode = 'manual', address = '') => {
+    const startNavigationEngine = async (targetLoc, mode = 'manual', address = '') => {
     let loc = myLocationRef.current;
     if (!loc) {
       try {
@@ -957,102 +957,6 @@ const route = await computeRouteCached(currentLoc, dest);
     if (loc) {
       const color = mode === 'emergency' ? '#ef4444' : '#0ea5e9';
       const route = await computeRouteCached(loc, targetLoc);
-      if (route) {
-        drawRoute(route.geometry, color);
-        currentRouteGeometry.current = route.geometry;
-        setCurrentManeuver(route.steps[0]);
-        setRouteProgress({ distanceRemaining: route.distance, durationRemaining: route.duration });
-        lastRouteCalcRef.current = { loc: { ...loc }, time: Date.now() };
-      } else {
-        toast({ title: 'Ruta no disponible', description: 'Reintente al moverse.', status: 'warning', duration: 5000, position: 'bottom' });
-      }
-    }
-  };
-
-  const drawRoute = useCallback((geometry, color = '#0ea5e9') => {
-    if (!map.current) return;
-    const routeKey = 'active-route';
-    try {
-      if (map.current.getLayer(routeKey)) map.current.removeLayer(routeKey);
-      if (map.current.getLayer(`${routeKey}-glow`)) map.current.removeLayer(`${routeKey}-glow`);
-      if (map.current.getSource(routeKey)) map.current.removeSource(routeKey);
-    } catch {}
-
-    const geojson = { type: 'Feature', geometry: { type: 'LineString', coordinates: geometry } };
-    map.current.addSource(routeKey, { type: 'geojson', data: geojson });
-    map.current.addLayer({
-      id: `${routeKey}-glow`, type: 'line', source: routeKey,
-      paint: { 'line-color': color, 'line-width': 18, 'line-opacity': 0.25, 'line-blur': 6 }
-    });
-    map.current.addLayer({
-      id: routeKey, type: 'line', source: routeKey,
-      layout: { 'line-join': 'round', 'line-cap': 'round' },
-      paint: { 'line-color': color, 'line-width': 8, 'line-opacity': 1 }
-    });
-  }, []);
-
-  const recalcRoute = useCallback(async (silent = false) => {
-    if (!activeDestination.current || !myLocationRef.current) return;
-    if (isRecalculating) return;
-    setIsRecalculating(true);
-    try {
-      const route = await computeRoute(myLocationRef.current, activeDestination.current);
-      if (route) {
-        const color = activeDestination.current.mode === 'emergency' ? '#ef4444' : '#0ea5e9';
-        drawRoute(route.geometry, color);
-        currentRouteGeometry.current = route.geometry;
-        setCurrentManeuver(route.steps[0]);
-        const stepsPendientes = route.steps.filter((s, idx) => idx === 0 || s.distance > 5);
-        if (stepsPendientes.length > 0) setCurrentManeuver(stepsPendientes[0]);
-        setRouteProgress({ distanceRemaining: route.distance, durationRemaining: route.duration });
-        lastRouteCalcRef.current = { loc: { ...myLocationRef.current }, time: Date.now() };
-        if (!silent) toast({ title: 'Ruta actualizada', status: 'info', duration: 2000, position: 'bottom' });
-      }
-    } finally {
-      setIsRecalculating(false);
-    }
-  }, [computeRoute, drawRoute, isRecalculating, toast]);
-
-  const startNavigationEngine = async (targetLoc, mode = 'manual', address = '') => {
-    let loc = myLocationRef.current;
-    if (!loc) {
-      try {
-        loc = await new Promise((resolve, reject) => {
-          navigator.geolocation.getCurrentPosition(
-            pos => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-            err => reject(err), { enableHighAccuracy: true, timeout: 5000 }
-          );
-        });
-        if (isValidCoord(loc)) {
-          setMyLocation(loc);
-          myLocationRef.current = loc;
-        } else loc = null;
-      } catch {
-        toast({ title: 'Sin GPS', description: 'No se pudo obtener ubicación.', status: 'warning', duration: 5000, position: 'bottom' });
-        loc = null;
-      }
-    }
-
-    activeDestination.current = { ...targetLoc, mode, address };
-    placeDestinationMarker(targetLoc);
-    setIsNavigating(true);
-    setCancelStep('idle');
-    changeStatus('en_ruta');
-    setIsFollowing(true);
-    onDrawerClose();
-
-    if (map.current) {
-      if (loc) {
-        map.current.flyTo({ center: [loc.lng, loc.lat], zoom: 18, pitch: 60, bearing: myHeading, duration: 1200 });
-      } else {
-        map.current.flyTo({ center: [targetLoc.lng, targetLoc.lat], zoom: 15, duration: 1200 });
-      }
-      setIsGpsMode(true);
-    }
-
-    if (loc) {
-      const color = mode === 'emergency' ? '#ef4444' : '#0ea5e9';
-      const route = await computeRoute(loc, targetLoc);
       if (route) {
         drawRoute(route.geometry, color);
         currentRouteGeometry.current = route.geometry;
