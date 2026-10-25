@@ -223,9 +223,15 @@ const VoiceAssistant = ({ onDataExtracted, onError, onRecordingComplete }) => {
   };
 
   const enviarManual = (tipo) => {
+    const texto = fullTextRef.current || transcript || '';
     if (onDataExtracted) {
       onDataExtracted(
-        { acciones: [tipo], secciones: {} },
+        { 
+          acciones: [tipo], 
+          secciones: {},
+          textoOriginal: texto,
+          textoNormalizado: texto.toLowerCase().trim()
+        },
         { action: tipo, manual: true }
       );
     }
