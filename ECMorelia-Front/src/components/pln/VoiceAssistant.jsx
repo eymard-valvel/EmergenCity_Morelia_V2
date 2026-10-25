@@ -32,8 +32,11 @@ const VoiceAssistant = ({ onDataExtracted, onError, onRecordingComplete }) => {
   const recognitionRef = useRef(null);
   const fullTextRef = useRef('');
   const lastResultIndexRef = useRef(0);
+  const committedLengthRef = useRef(0);
   const keepListeningRef = useRef(false);
   const processingRef = useRef(false);
+  const lastAnalyzeRef = useRef(0);
+  const isMobileRef = useRef(false);
 
   // Inicialización del reconocimiento (una sola vez)
   useEffect(() => {
@@ -45,10 +48,17 @@ const VoiceAssistant = ({ onDataExtracted, onError, onRecordingComplete }) => {
       return;
     }
 
+    try {
+      isMobileRef.current = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
+    } catch (_) {
+      isMobileRef.current = false;
+    }
+
     const rec = new SpeechRecognition();
     rec.lang = 'es-MX';
     rec.interimResults = true;
-    rec.continuous = true;
+    // En móvil usar continuous:false es mucho más estable; en desktop mantener true
+    rec.continuous = !isMobileRef.current;
     rec.maxAlternatives = 1;
 
     rec.onstart = () => {
@@ -62,21 +72,55 @@ const VoiceAssistant = ({ onDataExtracted, onError, onRecordingComplete }) => {
       // Leer únicamente desde el último índice procesado
       for (let i = lastResultIndexRef.current; i < event.results.length; i++) {
         const resultado = event.results[i];
-        const texto = resultado[0].transcript;
+        const texto = resultado[0] && resultado[0].transcript ? resultado[0].transcript : '';
 
-        if (resultado.isFinal) {
+        if (resultado.isFinal && texto.trim()) {
           nuevosFinales += texto + ' ';
           lastResultIndexRef.current = i + 1;
-        } else {
+        } else if (!resultado.isFinal && texto) {
           interimActual += texto;
         }
       }
 
-      if (nuevosFinales) {
-        fullTextRef.current = (fullTextRef.current + ' ' + nuevosFinales).trim();
+      if (nuevosFinales.trim()) {
+        let agregado = nuevosFinales.replace(/\s+/g, ' ').trim();
+        if (!agregado) {
+          setInterimTranscript(interimActual);
+          return;
+        }
+
+        const actual = fullTextRef.current;
+        if (actual) {
+          // Evitar duplicados: si lo agregado ya está al final del texto actual
+          const agregadoLower = agregado.toLowerCase();
+          const actualLower = actual.toLowerCase();
+          if (actualLower.endsWith(agregadoLower)) {
+            // Ya está añadido
+            setInterimTranscript(interimActual);
+            return;
+          }
+          // Si las últimas palabras se repiten, intentar recortar
+          const palabrasAgregadas = agregado.split(/\s+/);
+          if (palabrasAgregadas.length > 0) {
+            const ultimas = actual.split(/\s+/).slice(-palabrasAgregadas.length).join(' ').toLowerCase();
+            if (ultimas === agregadoLower) {
+              setInterimTranscript(interimActual);
+              return;
+            }
+          }
+          fullTextRef.current = (actual + ' ' + agregado).replace(/\s+/g, ' ').trim();
+        } else {
+          fullTextRef.current = agregado;
+        }
+
         setTranscript(fullTextRef.current);
-        // Analizar en vivo para poder mostrar feedback sección a sección
-        analizarEnVivo(fullTextRef.current);
+        committedLengthRef.current = fullTextRef.current.length;
+        // Analizar en vivo con throttle para evitar sobrecarga en móvil
+        const ahora = Date.now();
+        if (ahora - lastAnalyzeRef.current > (isMobileRef.current ? 1000 : 800)) {
+          lastAnalyzeRef.current = ahora;
+          analizarEnVivo(fullTextRef.current);
+        }
       }
 
       setInterimTranscript(interimActual);
@@ -99,10 +143,13 @@ const VoiceAssistant = ({ onDataExtracted, onError, onRecordingComplete }) => {
     rec.onend = () => {
       setIsRecording(false);
       // Si el usuario no pidió detener, reiniciar automáticamente
-      // (el navegador suele cortar tras un minuto de silencio)
+      // En móvil evitamos resetear el índice a 0 para prevenir duplicados
       if (keepListeningRef.current && recognitionRef.current) {
         try {
-          lastResultIndexRef.current = 0; // nuevo ciclo del motor
+          if (!isMobileRef.current) {
+            // En desktop mantener comportamiento previo pero sin forzar reset agresivo
+            // No reseteamos lastResultIndexRef a 0 para evitar re-procesar
+          }
           recognitionRef.current.start();
           return;
         } catch (_) {
@@ -110,7 +157,6 @@ const VoiceAssistant = ({ onDataExtracted, onError, onRecordingComplete }) => {
           setTimeout(() => {
             if (keepListeningRef.current && recognitionRef.current) {
               try {
-                lastResultIndexRef.current = 0;
                 recognitionRef.current.start();
               } catch (_) {}
             }
@@ -128,6 +174,7 @@ const VoiceAssistant = ({ onDataExtracted, onError, onRecordingComplete }) => {
   }, []);
 
   const analizarEnVivo = useCallback(async (texto) => {
+    if (!texto || !texto.trim()) return;
     if (processingRef.current) return;
     processingRef.current = true;
     setProcessing(true);
@@ -136,12 +183,12 @@ const VoiceAssistant = ({ onDataExtracted, onError, onRecordingComplete }) => {
       if (onDataExtracted) onDataExtracted(parsed, { live: true });
 
       // Comandos de voz
-      if (parsed.acciones.includes('detener_captura')) {
+      if (parsed.acciones && parsed.acciones.includes('detener_captura')) {
         detenerCaptura();
-      } else if (parsed.acciones.includes('enviar_urgente')) {
+      } else if (parsed.acciones && parsed.acciones.includes('enviar_urgente')) {
         setLastAction('enviar_urgente');
         if (onDataExtracted) onDataExtracted(parsed, { action: 'enviar_urgente' });
-      } else if (parsed.acciones.includes('enviar_completo')) {
+      } else if (parsed.acciones && parsed.acciones.includes('enviar_completo')) {
         setLastAction('enviar_completo');
         if (onDataExtracted) onDataExtracted(parsed, { action: 'enviar_completo' });
       }
@@ -151,7 +198,7 @@ const VoiceAssistant = ({ onDataExtracted, onError, onRecordingComplete }) => {
       processingRef.current = false;
       setProcessing(false);
     }
-  }, [onDataExtracted]);
+  }, [onDataExtracted, detenerCaptura]);
 
   const detenerCaptura = useCallback(() => {
     keepListeningRef.current = false;
@@ -188,6 +235,8 @@ const VoiceAssistant = ({ onDataExtracted, onError, onRecordingComplete }) => {
     if (!recognitionRef.current) return;
     fullTextRef.current = '';
     lastResultIndexRef.current = 0;
+    committedLengthRef.current = 0;
+    lastAnalyzeRef.current = 0;
     setTranscript('');
     setInterimTranscript('');
     setErrorMessage('');
@@ -202,7 +251,13 @@ const VoiceAssistant = ({ onDataExtracted, onError, onRecordingComplete }) => {
         recognitionRef.current.stop();
         setTimeout(() => {
           lastResultIndexRef.current = 0;
-          recognitionRef.current.start();
+          committedLengthRef.current = 0;
+          lastAnalyzeRef.current = 0;
+          if (recognitionRef.current) {
+            try {
+              recognitionRef.current.start();
+            } catch (_) {}
+          }
         }, 200);
       } catch (_) {}
     }
@@ -216,7 +271,7 @@ const VoiceAssistant = ({ onDataExtracted, onError, onRecordingComplete }) => {
     if (!isOpen && isRecording) {
       detenerCaptura();
     }
-  }, [isOpen, isRecording, iniciarCaptura, detenerCaptura]);
+  }, [isOpen]);
 
   const cerrarModal = () => {
     setIsOpen(false);
