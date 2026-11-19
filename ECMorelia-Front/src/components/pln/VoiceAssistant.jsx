@@ -29,6 +29,7 @@ const VoiceAssistant = ({ onDataExtracted, onError, onRecordingComplete }) => {
   const [bertEstado, setBertEstado] = useState(() => getEstadoBert());
   const [bertInfo, setBertInfo] = useState(null);
 
+  const isMountedRef = useRef(true);
   const recognitionRef = useRef(null);
   const fullTextRef = useRef('');
   const lastResultIndexRef = useRef(0);
@@ -37,15 +38,176 @@ const VoiceAssistant = ({ onDataExtracted, onError, onRecordingComplete }) => {
   const processingRef = useRef(false);
   const lastAnalyzeRef = useRef(0);
   const isMobileRef = useRef(false);
+  const retryTimeoutRef = useRef(null);
+
+  // Refs para callbacks y opciones actuales sin romper dependencias
+  const bertOpcionRef = useRef(bertOpcion);
+  bertOpcionRef.current = bertOpcion;
+
+  const callbacksRef = useRef({ onDataExtracted, onError, onRecordingComplete });
+  callbacksRef.current = { onDataExtracted, onError, onRecordingComplete };
+
+  const analizarEnVivoRef = useRef(null);
+
+  const procesarTextoFinal = useCallback(async (texto) => {
+    if (!texto || !texto.trim()) return;
+    if (isMountedRef.current) {
+      setProcessing(true);
+    }
+    try {
+      const parsed = bertOpcionRef.current
+        ? await parseTextConBert(texto)
+        : await parseText(texto);
+
+      if (!isMountedRef.current) return;
+
+      setBertEstado(getEstadoBert());
+      setBertInfo(parsed?.bert || null);
+      callbacksRef.current.onDataExtracted?.(parsed, { live: false, final: true });
+      callbacksRef.current.onRecordingComplete?.(parsed);
+    } catch (_) {
+      if (!isMountedRef.current) return;
+      setErrorMessage('Error procesando el texto.');
+      callbacksRef.current.onError?.('No se pudo procesar el dictado.');
+    } finally {
+      if (isMountedRef.current) {
+        setProcessing(false);
+      }
+    }
+  }, []);
+
+  const detenerCaptura = useCallback(
+    ({ procesarFinal = true } = {}) => {
+      keepListeningRef.current = false;
+      if (retryTimeoutRef.current) {
+        clearTimeout(retryTimeoutRef.current);
+        retryTimeoutRef.current = null;
+      }
+
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch (_) {}
+      }
+
+      if (isMountedRef.current) {
+        setIsRecording(false);
+        setInterimTranscript('');
+      }
+
+      if (procesarFinal && fullTextRef.current.trim()) {
+        procesarTextoFinal(fullTextRef.current);
+      }
+    },
+    [procesarTextoFinal]
+  );
+
+  const analizarEnVivo = useCallback(
+    async (texto) => {
+      if (!texto || !texto.trim()) return;
+      if (processingRef.current) return;
+      processingRef.current = true;
+      if (isMountedRef.current) {
+        setProcessing(true);
+      }
+      try {
+        const parsed = await parseText(texto);
+        if (!isMountedRef.current || !parsed) return;
+
+        callbacksRef.current.onDataExtracted?.(parsed, { live: true });
+
+        if (Array.isArray(parsed.acciones)) {
+          if (parsed.acciones.includes('detener_captura')) {
+            detenerCaptura({ procesarFinal: true });
+          } else if (parsed.acciones.includes('enviar_urgente')) {
+            setLastAction('enviar_urgente');
+            callbacksRef.current.onDataExtracted?.(parsed, { action: 'enviar_urgente' });
+          } else if (parsed.acciones.includes('enviar_completo')) {
+            setLastAction('enviar_completo');
+            callbacksRef.current.onDataExtracted?.(parsed, { action: 'enviar_completo' });
+          }
+        }
+      } catch (_) {
+        // Silencioso: el análisis en vivo no debe bloquear la captura
+      } finally {
+        processingRef.current = false;
+        if (isMountedRef.current) {
+          setProcessing(false);
+        }
+      }
+    },
+    [detenerCaptura]
+  );
+
+  analizarEnVivoRef.current = analizarEnVivo;
+
+  const iniciarCaptura = useCallback(() => {
+    if (retryTimeoutRef.current) {
+      clearTimeout(retryTimeoutRef.current);
+      retryTimeoutRef.current = null;
+    }
+
+    if (!recognitionRef.current) {
+      if (isMountedRef.current) {
+        setErrorMessage('Este navegador no soporta reconocimiento de voz. Use Chrome o Edge.');
+      }
+      return;
+    }
+
+    fullTextRef.current = '';
+    lastResultIndexRef.current = 0;
+    committedLengthRef.current = 0;
+    lastAnalyzeRef.current = 0;
+
+    if (isMountedRef.current) {
+      setTranscript('');
+      setInterimTranscript('');
+      setErrorMessage('');
+      setLastAction(null);
+      setBertInfo(null);
+    }
+
+    keepListeningRef.current = true;
+
+    try {
+      recognitionRef.current.start();
+    } catch (_) {
+      try {
+        recognitionRef.current.stop();
+        retryTimeoutRef.current = setTimeout(() => {
+          if (keepListeningRef.current && recognitionRef.current && isMountedRef.current) {
+            lastResultIndexRef.current = 0;
+            committedLengthRef.current = 0;
+            lastAnalyzeRef.current = 0;
+            try {
+              recognitionRef.current.start();
+            } catch (_) {}
+          }
+        }, 200);
+      } catch (_) {}
+    }
+  }, []);
 
   // Inicialización del reconocimiento (una sola vez)
   useEffect(() => {
+    isMountedRef.current = true;
+
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+
     const SpeechRecognition =
       window.SpeechRecognition || window.webkitSpeechRecognition;
 
     if (!SpeechRecognition) {
       setErrorMessage('Este navegador no soporta reconocimiento de voz. Use Chrome o Edge.');
-      return;
+      return () => {
+        isMountedRef.current = false;
+      };
+    }
+
+    if (window.isSecureContext === false && window.location.hostname !== 'localhost') {
+      setErrorMessage('El reconocimiento de voz en la nube requiere conexión segura (HTTPS).');
     }
 
     try {
@@ -57,22 +219,28 @@ const VoiceAssistant = ({ onDataExtracted, onError, onRecordingComplete }) => {
     const rec = new SpeechRecognition();
     rec.lang = 'es-MX';
     rec.interimResults = true;
-    // En móvil usar continuous:false es mucho más estable; en desktop mantener true
     rec.continuous = !isMobileRef.current;
     rec.maxAlternatives = 1;
 
     rec.onstart = () => {
-      setIsRecording(true);
+      if (isMountedRef.current) {
+        setIsRecording(true);
+      }
     };
 
     rec.onresult = (event) => {
+      if (!isMountedRef.current) return;
+
       let nuevosFinales = '';
       let interimActual = '';
 
-      // Leer únicamente desde el último índice procesado
+      if (lastResultIndexRef.current > event.results.length) {
+        lastResultIndexRef.current = 0;
+      }
+
       for (let i = lastResultIndexRef.current; i < event.results.length; i++) {
         const resultado = event.results[i];
-        const texto = resultado[0] && resultado[0].transcript ? resultado[0].transcript : '';
+        const texto = resultado?.[0]?.transcript ? resultado[0].transcript : '';
 
         if (resultado.isFinal && texto.trim()) {
           nuevosFinales += texto + ' ';
@@ -83,7 +251,7 @@ const VoiceAssistant = ({ onDataExtracted, onError, onRecordingComplete }) => {
       }
 
       if (nuevosFinales.trim()) {
-        let agregado = nuevosFinales.replace(/\s+/g, ' ').trim();
+        const agregado = nuevosFinales.replace(/\s+/g, ' ').trim();
         if (!agregado) {
           setInterimTranscript(interimActual);
           return;
@@ -91,35 +259,38 @@ const VoiceAssistant = ({ onDataExtracted, onError, onRecordingComplete }) => {
 
         const actual = fullTextRef.current;
         if (actual) {
-          // Evitar duplicados: si lo agregado ya está al final del texto actual
           const agregadoLower = agregado.toLowerCase();
           const actualLower = actual.toLowerCase();
           if (actualLower.endsWith(agregadoLower)) {
-            // Ya está añadido
             setInterimTranscript(interimActual);
             return;
           }
-          // Si las últimas palabras se repiten, intentar recortar
+
           const palabrasAgregadas = agregado.split(/\s+/);
           if (palabrasAgregadas.length > 0) {
-            const ultimas = actual.split(/\s+/).slice(-palabrasAgregadas.length).join(' ').toLowerCase();
+            const ultimas = actual
+              .split(/\s+/)
+              .slice(-palabrasAgregadas.length)
+              .join(' ')
+              .toLowerCase();
             if (ultimas === agregadoLower) {
               setInterimTranscript(interimActual);
               return;
             }
           }
-          fullTextRef.current = (actual + ' ' + agregado).replace(/\s+/g, ' ').trim();
+
+          fullTextRef.current = `${actual} ${agregado}`.replace(/\s+/g, ' ').trim();
         } else {
           fullTextRef.current = agregado;
         }
 
         setTranscript(fullTextRef.current);
         committedLengthRef.current = fullTextRef.current.length;
-        // Analizar en vivo con throttle para evitar sobrecarga en móvil
+
         const ahora = Date.now();
         if (ahora - lastAnalyzeRef.current > (isMobileRef.current ? 1000 : 800)) {
           lastAnalyzeRef.current = ahora;
-          analizarEnVivo(fullTextRef.current);
+          analizarEnVivoRef.current?.(fullTextRef.current);
         }
       }
 
@@ -127,35 +298,34 @@ const VoiceAssistant = ({ onDataExtracted, onError, onRecordingComplete }) => {
     };
 
     rec.onerror = (event) => {
+      if (!isMountedRef.current) return;
+
+      const fatalErrors = ['not-allowed', 'service-not-allowed', 'audio-capture'];
       if (event.error === 'not-allowed') {
         setErrorMessage('Permiso de micrófono denegado. Habilítelo en el navegador.');
         keepListeningRef.current = false;
         setIsRecording(false);
-      } else if (event.error === 'no-speech') {
-        // Silencio prolongado: no es error crítico, se reinicia solo
-      } else if (event.error === 'aborted') {
-        // Cierre normal
+      } else if (fatalErrors.includes(event.error)) {
+        setErrorMessage(`Error de audio/permisos (${event.error}). Verifique el micrófono y HTTPS.`);
+        keepListeningRef.current = false;
+        setIsRecording(false);
+      } else if (event.error === 'no-speech' || event.error === 'aborted') {
+        // Silencio o cierre normal: no interrumpir
       } else {
         setErrorMessage(`Error de reconocimiento: ${event.error}`);
       }
     };
 
     rec.onend = () => {
+      if (!isMountedRef.current) return;
       setIsRecording(false);
-      // Si el usuario no pidió detener, reiniciar automáticamente
-      // En móvil evitamos resetear el índice a 0 para prevenir duplicados
+
       if (keepListeningRef.current && recognitionRef.current) {
         try {
-          if (!isMobileRef.current) {
-            // En desktop mantener comportamiento previo pero sin forzar reset agresivo
-            // No reseteamos lastResultIndexRef a 0 para evitar re-procesar
-          }
           recognitionRef.current.start();
-          return;
         } catch (_) {
-          // Si falla el reinicio, esperar un poco y reintentar
-          setTimeout(() => {
-            if (keepListeningRef.current && recognitionRef.current) {
+          retryTimeoutRef.current = setTimeout(() => {
+            if (keepListeningRef.current && recognitionRef.current && isMountedRef.current) {
               try {
                 recognitionRef.current.start();
               } catch (_) {}
@@ -168,110 +338,27 @@ const VoiceAssistant = ({ onDataExtracted, onError, onRecordingComplete }) => {
     recognitionRef.current = rec;
 
     return () => {
+      isMountedRef.current = false;
       keepListeningRef.current = false;
-      try { rec.abort(); } catch (_) {}
+      if (retryTimeoutRef.current) {
+        clearTimeout(retryTimeoutRef.current);
+        retryTimeoutRef.current = null;
+      }
+      try {
+        rec.abort();
+      } catch (_) {}
+      recognitionRef.current = null;
     };
   }, []);
 
-  const analizarEnVivo = useCallback(async (texto) => {
-    if (!texto || !texto.trim()) return;
-    if (processingRef.current) return;
-    processingRef.current = true;
-    setProcessing(true);
-    try {
-      const parsed = await parseText(texto);
-      if (onDataExtracted) onDataExtracted(parsed, { live: true });
-
-      // Comandos de voz
-      if (parsed.acciones && parsed.acciones.includes('detener_captura')) {
-        detenerCaptura();
-      } else if (parsed.acciones && parsed.acciones.includes('enviar_urgente')) {
-        setLastAction('enviar_urgente');
-        if (onDataExtracted) onDataExtracted(parsed, { action: 'enviar_urgente' });
-      } else if (parsed.acciones && parsed.acciones.includes('enviar_completo')) {
-        setLastAction('enviar_completo');
-        if (onDataExtracted) onDataExtracted(parsed, { action: 'enviar_completo' });
-      }
-    } catch (e) {
-      // Silencioso: el análisis en vivo no debe bloquear
-    } finally {
-      processingRef.current = false;
-      setProcessing(false);
-    }
-  }, [onDataExtracted, detenerCaptura]);
-
-  const detenerCaptura = useCallback(() => {
-    keepListeningRef.current = false;
-    if (recognitionRef.current) {
-      try { recognitionRef.current.stop(); } catch (_) {}
-    }
-    setIsRecording(false);
-
-    // Procesar el texto completo al detener
-    if (fullTextRef.current.trim()) {
-      procesarTextoFinal(fullTextRef.current);
-    }
-  }, []);
-
-  const procesarTextoFinal = useCallback(async (texto) => {
-    setProcessing(true);
-    try {
-      const parsed = bertOpcion
-        ? await parseTextConBert(texto)
-        : await parseText(texto);
-      setBertEstado(getEstadoBert());
-      setBertInfo(parsed.bert || null);
-      if (onDataExtracted) onDataExtracted(parsed, { live: false, final: true });
-      if (onRecordingComplete) onRecordingComplete(parsed);
-    } catch (e) {
-      setErrorMessage('Error procesando el texto.');
-      if (onError) onError('No se pudo procesar el dictado.');
-    } finally {
-      setProcessing(false);
-    }
-  }, [onDataExtracted, onRecordingComplete, onError, bertOpcion]);
-
-  const iniciarCaptura = useCallback(() => {
-    if (!recognitionRef.current) return;
-    fullTextRef.current = '';
-    lastResultIndexRef.current = 0;
-    committedLengthRef.current = 0;
-    lastAnalyzeRef.current = 0;
-    setTranscript('');
-    setInterimTranscript('');
-    setErrorMessage('');
-    setLastAction(null);
-    setBertInfo(null);
-    keepListeningRef.current = true;
-    try {
-      recognitionRef.current.start();
-    } catch (_) {
-      // Si ya estaba iniciado, reiniciar
-      try {
-        recognitionRef.current.stop();
-        setTimeout(() => {
-          lastResultIndexRef.current = 0;
-          committedLengthRef.current = 0;
-          lastAnalyzeRef.current = 0;
-          if (recognitionRef.current) {
-            try {
-              recognitionRef.current.start();
-            } catch (_) {}
-          }
-        }, 200);
-      } catch (_) {}
-    }
-  }, []);
-
-  // Abrir modal => iniciar captura
+  // Abrir modal => iniciar captura; cerrar modal => detener sin forzar envío final
   useEffect(() => {
-    if (isOpen && !isRecording) {
+    if (isOpen) {
       iniciarCaptura();
+    } else if (keepListeningRef.current || isRecording) {
+      detenerCaptura({ procesarFinal: false });
     }
-    if (!isOpen && isRecording) {
-      detenerCaptura();
-    }
-  }, [isOpen]);
+  }, [isOpen, iniciarCaptura, detenerCaptura, isRecording]);
 
   const cerrarModal = () => {
     setIsOpen(false);
@@ -279,18 +366,16 @@ const VoiceAssistant = ({ onDataExtracted, onError, onRecordingComplete }) => {
 
   const enviarManual = (tipo) => {
     const texto = fullTextRef.current || transcript || '';
-    if (onDataExtracted) {
-      onDataExtracted(
-        { 
-          acciones: [tipo], 
-          secciones: {},
-          textoOriginal: texto,
-          textoNormalizado: texto.toLowerCase().trim()
-        },
-        { action: tipo, manual: true }
-      );
-    }
-    detenerCaptura();
+    callbacksRef.current.onDataExtracted?.(
+      {
+        acciones: [tipo],
+        secciones: {},
+        textoOriginal: texto,
+        textoNormalizado: texto.toLowerCase().trim(),
+      },
+      { action: tipo, manual: true }
+    );
+    detenerCaptura({ procesarFinal: false });
   };
 
   const alternarBert = () => {
@@ -355,7 +440,7 @@ const VoiceAssistant = ({ onDataExtracted, onError, onRecordingComplete }) => {
                   {bertOpcion
                     ? bertEstado.listo
                       ? 'modelos activos'
-                      : Object.keys(bertEstado.fallos).length > 0
+                      : Object.keys(bertEstado.fallos || {}).length > 0
                         ? 'modelos indisponibles: se usa regex'
                         : 'pesos en caché del navegador (0 uso en Render)'
                     : 'desactivada'}
@@ -393,7 +478,7 @@ const VoiceAssistant = ({ onDataExtracted, onError, onRecordingComplete }) => {
               <div className="voice-actions">
                 <button
                   className={`voice-btn primary ${isRecording ? 'recording' : ''}`}
-                  onClick={detenerCaptura}
+                  onClick={() => detenerCaptura({ procesarFinal: true })}
                   disabled={processing || !isRecording}
                 >
                   {isRecording ? 'Detener y procesar' : 'Detenido'}
