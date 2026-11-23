@@ -7,6 +7,7 @@ import logo from "../img/Logo.png";
 import { useAuth } from "../../auth/useAuth";
 import { deleteCookie } from "../../helpers/cookies";
 import { resolveWsUrl } from "../../helpers/wsUrl.js";
+import { clearEmergencyDB } from "../db/emergencyDB";
 
 const WS_URL = resolveWsUrl();
 
@@ -26,11 +27,11 @@ function DoctorLayoutContent() {
     socket.onopen = () => {
       setWsConnected(true);
       socket.send(JSON.stringify({
-  type: 'register_doctor',
-  doctorId: `doc_${Date.now()}`,
-  nombre: 'EC-Doctor',
-  especialidad: 'Urgenciólogo'
-}));
+        type: 'register_doctor',
+        doctorId: `doc_${Date.now()}`,
+        nombre: 'EC-Doctor',
+        especialidad: 'Urgenciólogo'
+      }));
     };
 
     socket.onmessage = (event) => {
@@ -38,50 +39,50 @@ function DoctorLayoutContent() {
         const data = JSON.parse(event.data);
 
         if (data.type === 'video_call_incoming') {
-  const sessionId = data.sessionId;
-  toast({
-    position: 'top-right',
-    duration: null,
-    isClosable: true,
-    render: ({ onClose }) => (
-      <Box color="white" p={4} bg="#0ea5e9" borderRadius="lg" boxShadow="dark-lg" border="2px solid white" maxWidth="400px">
-        <Flex align="center" mb={3}>
-          <Icon as={FaVideo} boxSize={8} mr={3} />
-          <Box>
-            <Text fontWeight="900" fontSize="lg">SOLICITUD DE VIDEOLLAMADA</Text>
-            <Text fontSize="sm">Paramédico: {data.from?.id || 'EC-Paramedico'}</Text>
-            {data.callId && <Text fontSize="xs" opacity={0.9}>Folio: {data.callId}</Text>}
-            <Text fontSize="xs" opacity={0.9}>Sala: {sessionId}</Text>
-          </Box>
-        </Flex>
-        <HStack spacing={2}>
-          <Button
-            flex={1} h="50px" bg="white" color="#0ea5e9" fontWeight="900"
-            _hover={{ bg: 'gray.100' }}
-            onClick={() => {
-              onClose();
-              socket.send(JSON.stringify({ type: 'video_call_accept', sessionId }));
-              window.open(`/videollamada?room=${sessionId}&role=doctor&user=EC-Doctor`, '_blank');
-            }}
-          >
-            ACEPTAR
-          </Button>
-          <Button
-            flex={0.6} h="50px" bg="transparent" color="white"
-            border="2px solid white" fontWeight="900"
-            _hover={{ bg: 'rgba(255,255,255,0.2)' }}
-            onClick={() => {
-              onClose();
-              socket.send(JSON.stringify({ type: 'video_call_reject', sessionId, reason: 'No disponible' }));
-            }}
-          >
-            RECHAZAR
-          </Button>
-        </HStack>
-      </Box>
-    )
-  });
-}
+          const sessionId = data.sessionId;
+          toast({
+            position: 'top-right',
+            duration: null,
+            isClosable: true,
+            render: ({ onClose }) => (
+              <Box color="white" p={4} bg="#0ea5e9" borderRadius="lg" boxShadow="dark-lg" border="2px solid white" maxWidth="400px">
+                <Flex align="center" mb={3}>
+                  <Icon as={FaVideo} boxSize={8} mr={3} />
+                  <Box>
+                    <Text fontWeight="900" fontSize="lg">SOLICITUD DE VIDEOLLAMADA</Text>
+                    <Text fontSize="sm">Paramédico: {data.from?.id || 'EC-Paramedico'}</Text>
+                    {data.callId && <Text fontSize="xs" opacity={0.9}>Folio: {data.callId}</Text>}
+                    <Text fontSize="xs" opacity={0.9}>Sala: {sessionId}</Text>
+                  </Box>
+                </Flex>
+                <HStack spacing={2}>
+                  <Button
+                    flex={1} h="50px" bg="white" color="#0ea5e9" fontWeight="900"
+                    _hover={{ bg: 'gray.100' }}
+                    onClick={() => {
+                      onClose();
+                      socket.send(JSON.stringify({ type: 'video_call_accept', sessionId }));
+                      window.open(`/videollamada?room=${sessionId}&role=doctor&user=EC-Doctor`, '_blank');
+                    }}
+                  >
+                    ACEPTAR
+                  </Button>
+                  <Button
+                    flex={0.6} h="50px" bg="transparent" color="white"
+                    border="2px solid white" fontWeight="900"
+                    _hover={{ bg: 'rgba(255,255,255,0.2)' }}
+                    onClick={() => {
+                      onClose();
+                      socket.send(JSON.stringify({ type: 'video_call_reject', sessionId, reason: 'No disponible' }));
+                    }}
+                  >
+                    RECHAZAR
+                  </Button>
+                </HStack>
+              </Box>
+            )
+          });
+        }
 
         if (data.type === 'prehospital_report_broadcast') {
           setUnreadReports(prev => prev + 1);
@@ -111,7 +112,8 @@ function DoctorLayoutContent() {
     return () => { try { socket.close(); } catch (_) {} };
   }, [toast]);
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    await clearEmergencyDB();
     setAuth(false);
     deleteCookie("role");
     if (ws.current) try { ws.current.close(); } catch (_) {}
@@ -122,14 +124,12 @@ function DoctorLayoutContent() {
 
   return (
     <Box display="flex" w="100%" minH="100vh" bg="#09090b" color="#f8fafc">
-      {/* SIDEBAR */}
       <Box as="nav" w="260px" bg="#18181b" borderRight="1px solid #27272a" display="flex" flexDirection="column" py={4} flexShrink={0}>
         <Flex justify="center" p={4} mb={6} borderBottom="1px solid #27272a">
           <img src={logo} alt="EmergenCity" style={{ maxWidth: '100px', maxHeight: '100px' }} />
         </Flex>
 
         <VStack spacing={2} align="stretch" px={3} flex={1}>
-          {/* Estado WS */}
           <Badge
             display="flex" alignItems="center" gap={2} px={3} py={2} borderRadius="lg"
             bg={wsConnected ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)'}
@@ -140,7 +140,6 @@ function DoctorLayoutContent() {
             {wsConnected ? 'EN LÍNEA' : 'DESCONECTADO'}
           </Badge>
 
-          {/* Botón videollamada manual */}
           <Button
             id="botonLlamada"
             w="100%" h="55px"
@@ -153,7 +152,6 @@ function DoctorLayoutContent() {
             VIDEOLLAMADA
           </Button>
 
-          {/* NavLink Reportes */}
           <NavLink
             to="/doctor/records"
             style={({ isActive }) => ({
@@ -178,7 +176,6 @@ function DoctorLayoutContent() {
           </NavLink>
         </VStack>
 
-        {/* Logout */}
         <Box px={3} mt="auto">
           <Button
             w="100%" h="50px"
@@ -194,7 +191,6 @@ function DoctorLayoutContent() {
         </Box>
       </Box>
 
-      {/* CONTENIDO */}
       <Box flex={1} p={6} overflowY="auto" bg="#09090b">
         <Outlet />
       </Box>

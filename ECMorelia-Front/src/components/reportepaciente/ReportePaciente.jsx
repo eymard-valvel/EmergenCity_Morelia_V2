@@ -75,7 +75,6 @@ const ReportePaciente = () => {
   });
   const [listaAmbulancias, setListaAmbulancias] = useState([]);
   const [ambulanciasCargadas, setAmbulanciasCargadas] = useState(false);
-
   const [casoFinalizado, setCasoFinalizado] = useState(false);
 
   const [hospitalAceptado, setHospitalAceptado] = useState(
@@ -109,12 +108,12 @@ const ReportePaciente = () => {
   const wsRef = useRef(null);
   const heartbeatRef = useRef(null);
   const reporteRef = useRef(reporte);
+  const enviarVersionRef = useRef(null);
 
   useEffect(() => { reporteRef.current = reporte; }, [reporte]);
   useEffect(() => { saveLocal('paramedico', 'hospitalAceptado', hospitalAceptado); }, [hospitalAceptado]);
   useEffect(() => { saveLocal('paramedico', 'reporte', reporte); }, [reporte]);
 
-  // ==================== WS PERMANENTE (con heartbeat y case recovery) ====================
   useEffect(() => {
     const ws = new WebSocket(WS_URL);
     wsRef.current = ws;
@@ -145,14 +144,8 @@ const ReportePaciente = () => {
                 ...prev,
                 callId: data.callId,
                 seccionA: { ...prev.seccionA, folio: data.callId },
-                seccionC: {
-                  ...prev.seccionC,
-                  direccion: data.address || prev.seccionC.direccion
-                },
-                seccionF: {
-                  ...prev.seccionF,
-                  tipo_urgencia: data.emergencyType || prev.seccionF.tipo_urgencia
-                }
+                seccionC: { ...prev.seccionC, direccion: data.address || prev.seccionC.direccion },
+                seccionF: { ...prev.seccionF, tipo_urgencia: data.emergencyType || prev.seccionF.tipo_urgencia }
               };
               if (data.patientInfo) {
                 patch.seccionD = {
@@ -168,21 +161,14 @@ const ReportePaciente = () => {
             });
           }
           if (data.hospitalId) {
-            setHospitalAceptado({
-              callId: data.callId,
-              hospitalId: data.hospitalId,
-              hospitalInfo: data.hospitalInfo || null
-            });
+            setHospitalAceptado({ callId: data.callId, hospitalId: data.hospitalId, hospitalInfo: data.hospitalInfo || null });
             setHospitalSeleccionado(data.hospitalId);
           }
         }
 
         if (data.type === 'emergency_case_closed') {
           setCasoFinalizado(true);
-          setMensajeNotificacion({
-            texto: `Servicio ${data.callId || ''} cerrado. Puede enviar el reporte final.`,
-            tipo: 'info'
-          });
+          setMensajeNotificacion({ texto: `Servicio ${data.callId || ''} cerrado. Puede enviar el reporte final.`, tipo: 'info' });
           setTimeout(() => setMensajeNotificacion({ texto: '', tipo: '' }), 8000);
         }
       } catch (_) {}
@@ -243,7 +229,6 @@ const ReportePaciente = () => {
     }
   };
 
-  // ==================== WS OPERATIVO ====================
   useEffect(() => {
     if (!isConfigured) return;
     const ws = wsRef.current;
@@ -264,11 +249,7 @@ const ReportePaciente = () => {
         nombre: configInicial.paramedico1,
         ambulanceId: configInicial.ambulanciaId
       });
-      safeSend({
-        type: 'request_my_case',
-        role: 'paramedic',
-        ambulanceId: configInicial.ambulanciaId
-      });
+      safeSend({ type: 'request_my_case', role: 'paramedic', ambulanceId: configInicial.ambulanciaId });
     };
 
     const handleMessage = async (event) => {
@@ -319,10 +300,7 @@ const ReportePaciente = () => {
               activacion: prev.seccionB.activacion || ahoraHHMM(),
               salida_base: prev.seccionB.salida_base || ahoraHHMM()
             },
-            seccionC: {
-              ...prev.seccionC,
-              direccion: parsed.address || prev.seccionC.direccion
-            },
+            seccionC: { ...prev.seccionC, direccion: parsed.address || prev.seccionC.direccion },
             seccionD: {
               ...prev.seccionD,
               sexo: prev.seccionD.sexo || parsed.patientInfo?.sexo || '',
@@ -344,20 +322,13 @@ const ReportePaciente = () => {
             ...prev,
             callId: parsed.callId,
             seccionA: { ...prev.seccionA, folio: parsed.callId },
-            seccionB: {
-              ...prev.seccionB,
-              activacion: prev.seccionB.activacion || ahoraHHMM()
-            }
+            seccionB: { ...prev.seccionB, activacion: prev.seccionB.activacion || ahoraHHMM() }
           }));
           mostrarNotificacion(`Folio asignado: ${parsed.callId}`, 'success');
         }
 
         if (parsed.type === 'hospital_accepted_for_call') {
-          setHospitalAceptado({
-            callId: parsed.callId,
-            hospitalId: parsed.hospitalId,
-            hospitalInfo: parsed.hospitalInfo
-          });
+          setHospitalAceptado({ callId: parsed.callId, hospitalId: parsed.hospitalId, hospitalInfo: parsed.hospitalInfo });
           setHospitalSeleccionado(parsed.hospitalId);
           if (parsed.callId === callIdActual) {
             mostrarNotificacion(`Hospital ${parsed.hospitalInfo?.nombre || ''} aceptó — reporte habilitado`, 'success');
@@ -453,10 +424,7 @@ const ReportePaciente = () => {
     if (intervencionActual.tipo_intervencion.trim() || intervencionActual.descripcion.trim()) {
       setReporte(prev => ({
         ...prev,
-        intervenciones: [...prev.intervenciones, {
-          ...intervencionActual,
-          hora_intervencion: intervencionActual.hora_intervencion || ahoraHHMM()
-        }]
+        intervenciones: [...prev.intervenciones, { ...intervencionActual, hora_intervencion: intervencionActual.hora_intervencion || ahoraHHMM() }]
       }));
       setIntervencionActual({ tipo_intervencion: '', descripcion: '', hora_intervencion: '' });
       mostrarNotificacion('Intervención agregada', 'success');
@@ -485,7 +453,8 @@ const ReportePaciente = () => {
 
     setReporte(prev => {
       const actualizado = { ...prev };
-      if (secciones.signos) {
+
+      if (secciones.signos && Object.keys(secciones.signos).length > 0) {
         actualizado.seccionI = {
           ...actualizado.seccionI,
           fc: secciones.signos.frecuencia_cardiaca ?? actualizado.seccionI.fc,
@@ -497,11 +466,13 @@ const ReportePaciente = () => {
           hora_toma: ahoraHHMM()
         };
       }
+
       if (secciones.glasgow) {
         if (secciones.glasgow.ocular) setOcular(secciones.glasgow.ocular);
         if (secciones.glasgow.verbal) setVerbal(secciones.glasgow.verbal);
         if (secciones.glasgow.motor) setMotor(secciones.glasgow.motor);
       }
+
       if (secciones.demografia) {
         actualizado.seccionD = {
           ...actualizado.seccionD,
@@ -510,6 +481,7 @@ const ReportePaciente = () => {
           sexo: secciones.demografia.sexo || actualizado.seccionD.sexo
         };
       }
+
       if (secciones.motivo?.motivo_urgencia) {
         actualizado.seccionF = {
           ...actualizado.seccionF,
@@ -518,12 +490,11 @@ const ReportePaciente = () => {
             : secciones.motivo.motivo_urgencia
         };
       }
+
       if (secciones.lesiones?.descripcion_lesion) {
-        actualizado.seccionH = {
-          ...actualizado.seccionH,
-          lesiones_exposicion: secciones.lesiones.descripcion_lesion
-        };
+        actualizado.seccionH = { ...actualizado.seccionH, lesiones_exposicion: secciones.lesiones.descripcion_lesion };
       }
+
       if (Array.isArray(secciones.intervenciones) && secciones.intervenciones.length > 0) {
         const existentes = new Set(actualizado.intervenciones.map(i => i.tipo_intervencion));
         const nuevas = secciones.intervenciones
@@ -531,6 +502,7 @@ const ReportePaciente = () => {
           .map(i => ({ ...i, hora_intervencion: i.hora_intervencion || ahoraHHMM() }));
         actualizado.intervenciones = [...actualizado.intervenciones, ...nuevas];
       }
+
       return actualizado;
     });
 
@@ -538,10 +510,10 @@ const ReportePaciente = () => {
       : acciones.includes('enviar_completo') ? 'enviar_completo' : null);
 
     if (accion === 'enviar_urgente') {
-      if (hospitalAceptado) setTimeout(() => enviarVersion(true), 800);
+      if (hospitalAceptado) setTimeout(() => enviarVersionRef.current?.(true), 800);
       else mostrarNotificacion('Aún no hay hospital asignado.', 'warning');
     } else if (accion === 'enviar_completo') {
-      if (hospitalAceptado) setTimeout(() => enviarVersion(false), 800);
+      if (hospitalAceptado) setTimeout(() => enviarVersionRef.current?.(false), 800);
       else mostrarNotificacion('Aún no hay hospital asignado.', 'warning');
     }
   }, [hospitalAceptado, setOcular, setVerbal, setMotor]);
@@ -560,10 +532,7 @@ const ReportePaciente = () => {
     wsRef.current.send(JSON.stringify({
       type: 'video_call_request',
       sessionId,
-      from: {
-        role: 'paramedic',
-        id: `pm_${configInicial.paramedico1 || 'EC-Paramedico'}_${configInicial.ambulanciaId}`
-      },
+      from: { role: 'paramedic', id: `pm_${configInicial.paramedico1 || 'EC-Paramamedico'}_${configInicial.ambulanciaId}` },
       to: { role: 'doctor', id: 'any' },
       callId: reporte.callId,
       ambulanceId: configInicial.ambulanciaId
@@ -612,6 +581,8 @@ const ReportePaciente = () => {
     mostrarNotificacion(urgentOnly ? 'Enviando versión urgente...' : 'Enviando hoja de atención...', 'info');
   };
 
+  enviarVersionRef.current = enviarVersion;
+
   const handleSubmit = async (e) => {
     if (e) e.preventDefault();
     if (!hospitalAceptado) {
@@ -652,11 +623,7 @@ const ReportePaciente = () => {
     mostrarNotificacion('Servicio cerrado manualmente', 'info');
 
     setTimeout(() => {
-      setReporte(prev => ({
-        ...REPORTE_INICIAL,
-        id_ambulancia: prev.id_ambulancia,
-        tripulacion: prev.tripulacion
-      }));
+      setReporte(prev => ({ ...REPORTE_INICIAL, id_ambulancia: prev.id_ambulancia, tripulacion: prev.tripulacion }));
       setHospitalAceptado(null);
       setHospitalSeleccionado('');
       setCasoFinalizado(false);
@@ -669,33 +636,17 @@ const ReportePaciente = () => {
     navigate('/login');
   };
 
-  // ==================== ESTADO DEL BOTÓN ÚNICO DINÁMICO ====================
   const puedeEnviar = !!hospitalAceptado;
 
-  const buttonState = useMemo(() => {
+  const buttonState = (() => {
     if (!reporte.callId) {
-      return {
-        label: 'ESPERANDO ASIGNACIÓN',
-        disabled: true,
-        variant: 'waiting',
-        title: 'Esperando que el sistema asigne un folio'
-      };
+      return { label: 'ESPERANDO ASIGNACIÓN', disabled: true, variant: 'waiting', title: 'Esperando que el sistema asigne un folio' };
     }
     if (casoFinalizado) {
-      return {
-        label: 'SERVICIO CERRADO',
-        disabled: true,
-        variant: 'closed',
-        title: 'El servicio fue cerrado por el centro regulador'
-      };
+      return { label: 'SERVICIO CERRADO', disabled: true, variant: 'closed', title: 'El servicio fue cerrado por el centro regulador' };
     }
     if (!puedeEnviar) {
-      return {
-        label: 'ESPERANDO HOSPITAL',
-        disabled: true,
-        variant: 'waiting',
-        title: 'Esperando aceptación del hospital para habilitar el envío'
-      };
+      return { label: 'ESPERANDO HOSPITAL', disabled: true, variant: 'waiting', title: 'Esperando aceptación del hospital para habilitar el envío' };
     }
     if (isReportComplete) {
       return {
@@ -713,38 +664,17 @@ const ReportePaciente = () => {
       title: 'Enviar versión urgente/parcial al hospital',
       action: () => enviarVersion(true)
     };
-  }, [reporte.callId, casoFinalizado, puedeEnviar, isReportComplete]);
+  })();
 
-const buttonStyles = {
-  waiting: {
-    background: 'linear-gradient(135deg, #1e293b, #0f172a)',
-    color: '#94a3b8',
-    border: '2px solid #334155',
-    boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
-  },
-  closed: {
-    background: 'linear-gradient(135deg, #334155, #1e293b)',
-    color: '#94a3b8',
-    border: '2px solid #475569',
-    boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
-  },
-  urgent: {
-    background: 'linear-gradient(135deg, #fbbf24, #f59e0b)',
-    color: '#000000',
-    border: '2px solid #d97706',
-    boxShadow: '0 8px 24px rgba(251, 191, 36, 0.6), 0 0 0 4px rgba(251, 191, 36, 0.15)',
-  },
-  final: {
-    background: 'linear-gradient(135deg, #10b981, #059669)',
-    color: '#ffffff',
-    border: '2px solid #047857',
-    boxShadow: '0 8px 24px rgba(16, 185, 129, 0.6), 0 0 0 4px rgba(16, 185, 129, 0.15)',
-  },
-};
+  const buttonStyles = {
+    waiting: { background: 'linear-gradient(135deg, #1e293b, #0f172a)', color: '#94a3b8', border: '2px solid #334155', boxShadow: '0 4px 12px rgba(0,0,0,0.3)' },
+    closed:  { background: 'linear-gradient(135deg, #334155, #1e293b)', color: '#94a3b8', border: '2px solid #475569', boxShadow: '0 4px 12px rgba(0,0,0,0.3)' },
+    urgent:  { background: 'linear-gradient(135deg, #fbbf24, #f59e0b)', color: '#000000', border: '2px solid #d97706', boxShadow: '0 8px 24px rgba(251, 191, 36, 0.6), 0 0 0 4px rgba(251, 191, 36, 0.15)' },
+    final:   { background: 'linear-gradient(135deg, #10b981, #059669)', color: '#ffffff', border: '2px solid #047857', boxShadow: '0 8px 24px rgba(16, 185, 129, 0.6), 0 0 0 4px rgba(16, 185, 129, 0.15)' },
+  };
 
   const buttonStyle = buttonStyles[buttonState.variant] || buttonStyles.waiting;
 
-  // ==================== VISTA 1: VINCULACIÓN ====================
   if (!isConfigured) {
     return (
       <div className="reporte-root" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', background: '#0f172a', color: '#f1f5f9', padding: '20px' }}>
@@ -788,9 +718,7 @@ const buttonStyles = {
                   onClick={() => setConfigInicial({ ...configInicial, ambulanciaId: amb.id })}
                 >
                   <div style={{ fontWeight: 900, fontSize: '1rem' }}>{amb.id} — {amb.nombre || amb.placa}</div>
-                  <div className="status-line">
-                    {amb.tipo || 'UVI Móvil'} · {(amb.status || '').replace('_', ' ').toUpperCase()}
-                  </div>
+                  <div className="status-line">{amb.tipo || 'UVI Móvil'} · {(amb.status || '').replace('_', ' ').toUpperCase()}</div>
                 </button>
               ))}
             </div>
@@ -883,37 +811,17 @@ const buttonStyles = {
           .toast.success { background: var(--success); }
           .toast.error { background: var(--danger); }
           .toast.info { background: var(--accent); }
-
-          .destino-prioritario {
-            background: linear-gradient(135deg, rgba(16,185,129,0.15), rgba(16,185,129,0.05));
-            border: 2px solid #10b981;
-            border-left: 6px solid #10b981;
-            border-radius: 12px;
-            padding: 16px;
-            margin-bottom: 16px;
-            box-shadow: 0 4px 16px rgba(16,185,129,0.2);
-          }
-          .destino-icon {
-            width: 48px; height: 48px; border-radius: 50%;
-            background: #10b981; color: white;
-            display: flex; align-items: center; justify-content: center;
-            font-size: 1.5rem; font-weight: 900;
-          }
+          .destino-prioritario { background: linear-gradient(135deg, rgba(16,185,129,0.15), rgba(16,185,129,0.05)); border: 2px solid #10b981; border-left: 6px solid #10b981; border-radius: 12px; padding: 16px; margin-bottom: 16px; box-shadow: 0 4px 16px rgba(16,185,129,0.2); }
+          .destino-icon { width: 48px; height: 48px; border-radius: 50%; background: #10b981; color: white; display: flex; align-items: center; justify-content: center; font-size: 1.5rem; font-weight: 900; }
           .chip { display: inline-flex; align-items: center; padding: 4px 10px; border-radius: 6px; font-size: 0.7rem; font-weight: 900; letter-spacing: 0.5px; }
           .chip-op { background: #7c3aed; color: white; }
           .chip-f { background: #0ea5e9; color: white; }
-
           @keyframes pulseUrgent {
-    0%, 100% { box-shadow: 0 8px 24px rgba(251, 191, 36, 0.6), 0 0 0 4px rgba(251, 191, 36, 0.15); }
-    50%      { box-shadow: 0 8px 28px rgba(251, 191, 36, 0.9), 0 0 0 6px rgba(251, 191, 36, 0.25); }
-  }
-  .main-btn.urgent {
-    animation: pulseUrgent 2.2s ease-in-out infinite;
-  }
-
-          @media (max-width: 480px) {
-            .grid-3 { grid-template-columns: 1fr 1fr; }
+            0%, 100% { box-shadow: 0 8px 24px rgba(251, 191, 36, 0.6), 0 0 0 4px rgba(251, 191, 36, 0.15); }
+            50%      { box-shadow: 0 8px 28px rgba(251, 191, 36, 0.9), 0 0 0 6px rgba(251, 191, 36, 0.25); }
           }
+          .main-btn.urgent { animation: pulseUrgent 2.2s ease-in-out infinite; }
+          @media (max-width: 480px) { .grid-3 { grid-template-columns: 1fr 1fr; } }
         `}</style>
 
         {mensajeNotificacion.texto && (
@@ -947,15 +855,11 @@ const buttonStyles = {
               <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                 <div className="destino-icon">H</div>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: '0.72rem', fontWeight: 900, letterSpacing: '1px', opacity: 0.85 }}>
-                    HOSPITAL DESTINO CONFIRMADO
-                  </div>
+                  <div style={{ fontSize: '0.72rem', fontWeight: 900, letterSpacing: '1px', opacity: 0.85 }}>HOSPITAL DESTINO CONFIRMADO</div>
                   <div style={{ fontSize: '1.25rem', fontWeight: 900, color: '#10b981', marginTop: '2px' }}>
                     {hospitalAceptado.hospitalInfo?.nombre || hospitalAceptado.hospitalId}
                   </div>
-                  <div style={{ fontSize: '0.75rem', opacity: 0.75, fontWeight: 700, marginTop: '2px' }}>
-                    Folio: {reporte.callId}
-                  </div>
+                  <div style={{ fontSize: '0.75rem', opacity: 0.75, fontWeight: 700, marginTop: '2px' }}>Folio: {reporte.callId}</div>
                 </div>
               </div>
             </div>
@@ -968,12 +872,8 @@ const buttonStyles = {
                   {reporte.callId.startsWith('OP-') && <span className="chip chip-op" style={{ marginLeft: 8 }}>OPERADOR</span>}
                   {reporte.callId.startsWith('F-') && <span className="chip chip-f" style={{ marginLeft: 8 }}>RECEPTOR</span>}
                 </div>
-                <div style={{ fontSize: '0.82rem', marginTop: 4 }}>
-                  El caso ha sido marcado como finalizado por el centro regulador.
-                </div>
-                <div style={{ fontSize: '0.78rem', opacity: 0.85, marginTop: 2, fontWeight: 700 }}>
-                  Puede completar y enviar el informe final.
-                </div>
+                <div style={{ fontSize: '0.82rem', marginTop: 4 }}>El caso ha sido marcado como finalizado por el centro regulador.</div>
+                <div style={{ fontSize: '0.78rem', opacity: 0.85, marginTop: 2, fontWeight: 700 }}>Puede completar y enviar el informe final.</div>
               </div>
             ) : hospitalAceptado ? (
               <div className="status-banner banner-success">
@@ -984,9 +884,7 @@ const buttonStyles = {
                 <div style={{ fontSize: '0.82rem', marginTop: 4 }}>
                   Hospital destino: <strong>{hospitalAceptado.hospitalInfo?.nombre || hospitalAceptado.hospitalId}</strong>
                 </div>
-                <div style={{ fontSize: '0.78rem', opacity: 0.85, marginTop: 2 }}>
-                  Puede enviar versiones del reporte prehospitalario.
-                </div>
+                <div style={{ fontSize: '0.78rem', opacity: 0.85, marginTop: 2 }}>Puede enviar versiones del reporte prehospitalario.</div>
               </div>
             ) : (
               <div className="status-banner banner-warn">
@@ -994,16 +892,12 @@ const buttonStyles = {
                   {reporte.callId.startsWith('OP-') && <span className="chip chip-op" style={{ marginLeft: 8 }}>OPERADOR</span>}
                   {reporte.callId.startsWith('F-') && <span className="chip chip-f" style={{ marginLeft: 8 }}>RECEPTOR</span>}
                 </div>
-                <div style={{ fontSize: '0.85rem', marginTop: 4 }}>
-                  Esperando aceptación del hospital para habilitar el envío.
-                </div>
+                <div style={{ fontSize: '0.85rem', marginTop: 4 }}>Esperando aceptación del hospital para habilitar el envío.</div>
               </div>
             )
           ) : (
             <div className="status-banner banner-warn">
-              <div style={{ fontSize: '0.85rem' }}>
-                Esperando asignación del sistema central (Unidad: {configInicial.ambulanciaId}).
-              </div>
+              <div style={{ fontSize: '0.85rem' }}>Esperando asignación del sistema central (Unidad: {configInicial.ambulanciaId}).</div>
             </div>
           )}
 
@@ -1061,17 +955,12 @@ const buttonStyles = {
                             }
                           }}
                           style={{
-                            width: '100%',
-                            padding: '18px 14px',
-                            borderRadius: '12px',
+                            width: '100%', padding: '18px 14px', borderRadius: '12px',
                             background: completo ? 'rgba(16,185,129,0.15)' : 'rgba(14,165,233,0.15)',
                             border: `2px solid ${completo ? '#10b981' : '#0ea5e9'}`,
                             color: completo ? '#10b981' : '#0ea5e9',
-                            fontWeight: 900,
-                            fontSize: '0.95rem',
-                            letterSpacing: '1px',
-                            cursor: completo ? 'default' : 'pointer',
-                            transition: 'all 0.15s',
+                            fontWeight: 900, fontSize: '0.95rem', letterSpacing: '1px',
+                            cursor: completo ? 'default' : 'pointer', transition: 'all 0.15s'
                           }}
                         >
                           {completo ? '✓ TODAS LAS MARCAS REGISTRADAS' : `▶ MARCAR: ${pasoActual.label}`}
@@ -1082,14 +971,11 @@ const buttonStyles = {
                             const hecho = !!reporte.seccionB[p.key];
                             return (
                               <span key={p.key} style={{
-                                padding: '4px 10px',
-                                borderRadius: 20,
-                                fontSize: '0.7rem',
-                                fontWeight: 900,
-                                letterSpacing: '0.5px',
+                                padding: '4px 10px', borderRadius: 20, fontSize: '0.7rem',
+                                fontWeight: 900, letterSpacing: '0.5px',
                                 background: hecho ? 'rgba(16,185,129,0.15)' : 'rgba(100,116,139,0.15)',
                                 border: `1px solid ${hecho ? '#10b981' : '#475569'}`,
-                                color: hecho ? '#10b981' : '#94a3b8',
+                                color: hecho ? '#10b981' : '#94a3b8'
                               }}>
                                 {hecho ? '✓ ' : '○ '}{p.short} {hecho && reporte.seccionB[p.key]}
                               </span>
@@ -1217,30 +1103,26 @@ const buttonStyles = {
           <Outlet />
         </div>
 
-        {/* ==================== BOTONERA ÚNICA DINÁMICA ==================== */}
         <div className="bottom-action-area">
-          
-        <button
-  type="button"
-  onClick={buttonState.action || undefined}
-  disabled={buttonState.disabled}
-  className={`main-btn ${buttonState.variant === 'urgent' ? 'urgent' : ''}`}
-  style={buttonStyle}
-  title={buttonState.title}
->
-  {buttonState.label}
-</button>
+          <button
+            type="button"
+            onClick={buttonState.action || undefined}
+            disabled={buttonState.disabled}
+            className={`main-btn ${buttonState.variant === 'urgent' ? 'urgent' : ''}`}
+            style={buttonStyle}
+            title={buttonState.title}
+          >
+            {buttonState.label}
+          </button>
 
           {puedeEnviar && !casoFinalizado && (
             <button
               type="button"
               onClick={solicitarMedico}
               style={{
-                width: '100%', padding: '14px',
-                background: '#0ea5e9', color: 'white',
-                border: 'none', borderRadius: '12px',
-                fontSize: '0.95rem', fontWeight: 900, letterSpacing: '1px',
-                cursor: 'pointer', textTransform: 'uppercase'
+                width: '100%', padding: '14px', background: '#0ea5e9', color: 'white',
+                border: 'none', borderRadius: '12px', fontSize: '0.95rem',
+                fontWeight: 900, letterSpacing: '1px', cursor: 'pointer', textTransform: 'uppercase'
               }}
             >
               SOLICITAR MÉDICO
@@ -1253,13 +1135,11 @@ const buttonStyles = {
               onClick={handleDarConcluido}
               disabled={casoFinalizado}
               style={{
-                width: '100%', padding: '12px',
-                background: 'transparent',
+                width: '100%', padding: '12px', background: 'transparent',
                 color: casoFinalizado ? '#52525b' : '#ef4444',
                 border: `1px solid ${casoFinalizado ? '#334155' : '#ef4444'}`,
-                borderRadius: '10px',
-                fontSize: '0.75rem', fontWeight: 900, letterSpacing: '0.5px',
-                cursor: casoFinalizado ? 'not-allowed' : 'pointer',
+                borderRadius: '10px', fontSize: '0.75rem', fontWeight: 900,
+                letterSpacing: '0.5px', cursor: casoFinalizado ? 'not-allowed' : 'pointer',
                 textTransform: 'uppercase'
               }}
             >

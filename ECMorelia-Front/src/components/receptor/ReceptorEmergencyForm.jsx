@@ -19,11 +19,9 @@ mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN ||
 
 const DEFAULT_CENTER = { lat: 19.7024, lng: -101.1969 };
 const SEARCH_DEBOUNCE_MS = 250;
-// Helper de logging para debug del WS (receptor → server, server → receptor)
 const logWS = (dir, type, payload) => {
   const arrow = dir === 'out' ? '📤 [RECEPTOR → WS]' : '📥 [WS → RECEPTOR]';
   const color = dir === 'out' ? 'color:#38bdf8;font-weight:900' : 'color:#10b981;font-weight:900';
-  // eslint-disable-next-line no-console
   console.log(`%c${arrow} ${type}`, color, payload);
 };
 const SUCCESS_BANNER_MS = 3500;
@@ -130,7 +128,6 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
     }
   }, []);
 
-  // ===== Init del mapa =====
   useEffect(() => {
     if (!mapContainer.current) return;
     const mapInstance = new mapboxgl.Map({
@@ -161,7 +158,6 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
     return () => mapInstance.remove();
   }, [reverseGeocode]);
 
-  // ===== FIX: preservar centro del mapa cuando cambia el tamaño del contenedor =====
   useEffect(() => {
     if (!mapContainer.current) return;
     const container = mapContainer.current;
@@ -172,7 +168,6 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
         if (!map.current) return;
         const center = map.current.getCenter();
         map.current.resize();
-        // Preservar el centro geográfico: el crosshair queda sobre el mismo punto
         map.current.setCenter(center);
       });
     });
@@ -183,7 +178,6 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
     };
   }, []);
 
-  // ===== Marcadores de ambulancias =====
   useEffect(() => {
     if (!map.current) return;
     const activeIds = new Set();
@@ -237,55 +231,56 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
     });
   }, [activeAmbulances]);
 
-  // ===== Búsqueda =====
-const searchAddresses = useCallback((query) => {
-  if (searchDebounceTimer.current) clearTimeout(searchDebounceTimer.current);
-  if (!query || query.trim().length < 2) {
-    setSearchResults([]);
-    setHighlightedIndex(-1);
-    setIsSearching(false);
-    return;
-  }
-  setIsSearching(true);
-  searchDebounceTimer.current = setTimeout(async () => {
-    if (searchAbortRef.current) searchAbortRef.current.abort();
-    const controller = new AbortController();
-    searchAbortRef.current = controller;
-    const reqId = ++searchRequestId.current;
-
-    try {
-      const respuesta = await searchPlaces(query, {
-        proximity: selectedLocation,
-        mapboxToken: mapboxgl.accessToken,
-        signal: controller.signal,
-        mode: 'address-only'
-      });
-
-      if (reqId !== searchRequestId.current) return;
-
-      const planas = [
-        ...respuesta.addresses.map((r) => ({ ...r, section: 'address' })),
-        ...respuesta.places.map((r) => ({ ...r, section: 'place' }))
-      ];
-
-      setSearchResults(planas);
-      setHighlightedIndex(planas.length > 0 ? 0 : -1);
-    } catch (e) {
-      if (e.name !== 'AbortError' && reqId === searchRequestId.current) {
-        setSearchResults([]);
-        setHighlightedIndex(-1);
-      }
-    } finally {
-      if (reqId === searchRequestId.current) setIsSearching(false);
+  const searchAddresses = useCallback((query) => {
+    if (searchDebounceTimer.current) clearTimeout(searchDebounceTimer.current);
+    if (!query || query.trim().length < 2) {
+      setSearchResults([]);
+      setHighlightedIndex(-1);
+      setIsSearching(false);
+      return;
     }
-  }, SEARCH_DEBOUNCE_MS);
-}, [selectedLocation]);
+    setIsSearching(true);
+    searchDebounceTimer.current = setTimeout(async () => {
+      if (searchAbortRef.current) searchAbortRef.current.abort();
+      const controller = new AbortController();
+      searchAbortRef.current = controller;
+      const reqId = ++searchRequestId.current;
 
+      try {
+        const respuesta = await searchPlaces(query, {
+          proximity: selectedLocation,
+          mapboxToken: mapboxgl.accessToken,
+          signal: controller.signal,
+          mode: 'all'
+        });
+
+        if (reqId !== searchRequestId.current) return;
+
+        const planas = [
+          ...respuesta.places.map((r) => ({ ...r, section: 'place' })),
+          ...respuesta.addresses.map((r) => ({ ...r, section: 'address' }))
+        ];
+
+        setSearchResults(planas);
+        setHighlightedIndex(planas.length > 0 ? 0 : -1);
+      } catch (e) {
+        if (e.name !== 'AbortError' && reqId === searchRequestId.current) {
+          setSearchResults([]);
+          setHighlightedIndex(-1);
+        }
+      } finally {
+        if (reqId === searchRequestId.current) setIsSearching(false);
+      }
+    }, SEARCH_DEBOUNCE_MS);
+  }, [selectedLocation]);
 
   const selectSearchResult = useCallback((result) => {
     if (!result) return;
     skipNextReverseGeocode.current = true;
-    setAddressQuery(result.place_name);
+    const formattedAddress = result.section === 'place' && result.subtitle
+      ? `${result.place_name} (${result.subtitle.replace(/ · a \d+(\.\d+)? km$/, '')})`
+      : result.place_name;
+    setAddressQuery(formattedAddress);
     setSearchResults([]);
     setHighlightedIndex(-1);
     setSelectedLocation({ lat: result.lat, lng: result.lng });
@@ -449,8 +444,7 @@ const searchAddresses = useCallback((query) => {
     };
 
     try {
-
-            logWS('out', 'emergency_call', {
+      logWS('out', 'emergency_call', {
         requestId,
         location: selectedLocation,
         address: addressQuery,
@@ -489,7 +483,6 @@ const searchAddresses = useCallback((query) => {
   return (
     <Flex h="100%" w="100%" bg="#09090b" direction={{ base: 'column-reverse', xl: 'row' }}>
 
-      {/* PANEL IZQUIERDO */}
       <Flex w={{ base: '100%', xl: '680px' }} flexShrink={0} direction="column" bg="#09090b" borderRight="1px solid #27272a" h="100%" zIndex={2}>
         <Box p={5} borderBottom="1px solid #27272a" bg="#09090b">
           <Heading fontSize="18px" color="#f8fafc" fontWeight="900" letterSpacing="1px">MATRIZ DE CAPTURA</Heading>
@@ -499,7 +492,6 @@ const searchAddresses = useCallback((query) => {
         <Box flex={1} overflowY="auto" sx={{ '&::-webkit-scrollbar': { width: '8px' }, '&::-webkit-scrollbar-thumb': { bg: '#3f3f46', borderRadius: '4px' } }}>
           <Accordion index={[activeAccordion]} onChange={(idx) => setActiveAccordion(idx)} allowToggle>
 
-            {/* 1. REFERENCIAS */}
             <AccordionItem border="none" borderBottom="1px solid #27272a">
               <AccordionButton py={5} bg={activeAccordion === 0 ? '#18181b' : 'transparent'} _hover={{ bg: '#18181b' }}>
                 <Box flex="1" textAlign="left">
@@ -530,7 +522,6 @@ const searchAddresses = useCallback((query) => {
               </AccordionPanel>
             </AccordionItem>
 
-            {/* 2. TIPO DE INCIDENTE */}
             <AccordionItem border="none" borderBottom="1px solid #27272a">
               <AccordionButton py={5} bg={activeAccordion === 1 ? '#18181b' : 'transparent'} _hover={{ bg: '#18181b' }}>
                 <Box flex="1" textAlign="left">
@@ -576,7 +567,6 @@ const searchAddresses = useCallback((query) => {
               </AccordionPanel>
             </AccordionItem>
 
-            {/* 3. PERSONAS AFECTADAS */}
             <AccordionItem border="none" borderBottom="1px solid #27272a">
               <AccordionButton py={5} bg={activeAccordion === 2 ? '#18181b' : 'transparent'} _hover={{ bg: '#18181b' }}>
                 <Box flex="1" textAlign="left">
@@ -644,7 +634,6 @@ const searchAddresses = useCallback((query) => {
               </AccordionPanel>
             </AccordionItem>
 
-            {/* 4. RIESGOS */}
             <AccordionItem border="none">
               <AccordionButton
                 py={5}
@@ -697,7 +686,6 @@ const searchAddresses = useCallback((query) => {
         </Box>
       </Flex>
 
-      {/* PANEL DERECHO: MAPA */}
       <Box flex={1} position="relative" h={{ base: '50vh', xl: '100%' }} minW={0}>
         <Box position="absolute" top={0} left={0} right={0} zIndex={10} bg="rgba(9,9,11,0.9)" borderBottom="1px solid #27272a" p={4} backdropFilter="blur(10px)">
           <InputGroup size="lg" w="100%" h="60px">
@@ -720,72 +708,72 @@ const searchAddresses = useCallback((query) => {
           </InputGroup>
 
           {searchResults.length > 0 && (
-  <List
-    w="100%" mt={2} bg="#18181b" border="1px solid #3f3f46"
-    borderRadius="md" shadow="2xl" maxH="400px" overflowY="auto"
-  >
-    {searchResults.map((res, idx) => {
-      const isHighlighted = idx === highlightedIndex;
-      const typeLabel = getPlaceTypeLabel(res.type, res.source, res.categories);
-      const showSectionHeader =
-        (idx === 0 && res.section === 'address') ||
-        (idx > 0 && searchResults[idx - 1].section !== res.section);
-
-      return (
-        <React.Fragment key={res.id}>
-          {showSectionHeader && (
-            <ListItem
-              px={4} py={2}
-              bg="#0f0f10"
-              borderTop={idx > 0 ? '1px solid #27272a' : 'none'}
-              borderBottom="1px solid #27272a"
+            <List
+              w="100%" mt={2} bg="#18181b" border="1px solid #3f3f46"
+              borderRadius="md" shadow="2xl" maxH="400px" overflowY="auto"
             >
-              <Text fontSize="10px" fontWeight="900" letterSpacing="1px" color="#71717a">
-                {res.section === 'address' ? 'DIRECCIONES' : 'LUGARES Y ESTABLECIMIENTOS'}
-              </Text>
-            </ListItem>
+              {searchResults.map((res, idx) => {
+                const isHighlighted = idx === highlightedIndex;
+                const typeLabel = getPlaceTypeLabel(res.type, res.source, res.categories);
+                const showSectionHeader =
+                  (idx === 0 && res.section === 'address') ||
+                  (idx === 0 && res.section === 'place') ||
+                  (idx > 0 && searchResults[idx - 1].section !== res.section);
+
+                return (
+                  <React.Fragment key={res.id}>
+                    {showSectionHeader && (
+                      <ListItem
+                        px={4} py={2}
+                        bg="#0f0f10"
+                        borderTop={idx > 0 ? '1px solid #27272a' : 'none'}
+                        borderBottom="1px solid #27272a"
+                      >
+                        <Text fontSize="10px" fontWeight="900" letterSpacing="1px" color="#71717a">
+                          {res.section === 'address' ? 'DIRECCIONES' : 'LUGARES Y ESTABLECIMIENTOS'}
+                        </Text>
+                      </ListItem>
+                    )}
+                    <ListItem
+                      p={4}
+                      borderBottom={idx < searchResults.length - 1 ? '1px solid #27272a' : 'none'}
+                      cursor="pointer"
+                      bg={isHighlighted ? '#27272a' : 'transparent'}
+                      _hover={{ bg: '#27272a' }}
+                      onMouseEnter={() => setHighlightedIndex(idx)}
+                      onClick={() => selectSearchResult(res)}
+                    >
+                      <HStack align="start" spacing={3}>
+                        <Icon
+                          as={res.section === 'address' ? FaMapMarkerAlt : FaBuilding}
+                          color={isHighlighted ? '#38bdf8' : (res.section === 'address' ? '#ef4444' : '#10b981')}
+                          boxSize={5}
+                          mt={0.5}
+                        />
+                        <VStack align="start" spacing={1} flex={1} minW={0}>
+                          <HStack spacing={2}>
+                            <Box px={2} py={0.5} bg="#27272a" borderRadius="sm">
+                              <Text fontSize="9px" fontWeight="900" color={res.section === 'address' ? '#38bdf8' : '#10b981'} letterSpacing="0.5px">
+                                {typeLabel}
+                              </Text>
+                            </Box>
+                          </HStack>
+                          <Text fontSize="15px" fontWeight="900" color="#f8fafc" textAlign="left">
+                            {res.place_name}
+                          </Text>
+                          {res.subtitle && res.subtitle !== res.place_name && (
+                            <Text fontSize="12px" fontWeight="700" color="#a1a1aa" noOfLines={2} textAlign="left">
+                              {res.subtitle}
+                            </Text>
+                          )}
+                        </VStack>
+                      </HStack>
+                    </ListItem>
+                  </React.Fragment>
+                );
+              })}
+            </List>
           )}
-          <ListItem
-            p={4}
-            borderBottom={idx < searchResults.length - 1 ? '1px solid #27272a' : 'none'}
-            cursor="pointer"
-            bg={isHighlighted ? '#27272a' : 'transparent'}
-            _hover={{ bg: '#27272a' }}
-            onMouseEnter={() => setHighlightedIndex(idx)}
-            onClick={() => selectSearchResult(res)}
-          >
-            <HStack align="start" spacing={3}>
-              <Icon
-                as={res.section === 'address' ? FaMapMarkerAlt : FaBuilding}
-                color={isHighlighted ? '#38bdf8' : (res.section === 'address' ? '#ef4444' : '#10b981')}
-                boxSize={5}
-                mt={0.5}
-              />
-              <VStack align="start" spacing={1} flex={1} minW={0}>
-                <HStack spacing={2}>
-                  <Box px={2} py={0.5} bg="#27272a" borderRadius="sm">
-                    <Text fontSize="9px" fontWeight="900" color={res.section === 'address' ? '#38bdf8' : '#10b981'} letterSpacing="0.5px">
-                      {typeLabel}
-                    </Text>
-                  </Box>
-                </HStack>
-                <Text fontSize="15px" fontWeight="900" color="#f8fafc" textAlign="left">
-                  {res.place_name}
-                </Text>
-                {res.subtitle && res.subtitle !== res.place_name && (
-                  <Text fontSize="12px" fontWeight="700" color="#a1a1aa" noOfLines={2} textAlign="left">
-                    {res.subtitle}
-                  </Text>
-                )}
-              </VStack>
-            </HStack>
-          </ListItem>
-        </React.Fragment>
-      );
-    })}
-  </List>
-)}
-          
         </Box>
 
         <div ref={mapContainer} style={{ width: '100%', height: '100%' }} />
@@ -828,13 +816,10 @@ const searchAddresses = useCallback((query) => {
   );
 };
 
-// ==================== SUB-COMPONENTES ====================
-
 const PacienteFields = ({ paciente, onChange }) => {
   const [edadError, setEdadError] = React.useState('');
 
   const handleEdadChange = (valor) => {
-    // Permitir vacío y solo dígitos hasta 3 caracteres
     if (valor === '') { setEdadError(''); onChange('edad', ''); return; }
     if (!/^\d{1,3}$/.test(valor)) return;
     const n = Number(valor);
