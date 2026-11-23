@@ -1,8 +1,7 @@
-// websocket-server.js — Servidor WS standalone para desarrollo (puerto 3002)
 const express = require('express')
 const http = require('http')
 const fetch = require('node-fetch')
-const { attachV2WebSocket, PROTOCOL_VERSION } = require('./ws-core')
+const { attachV2WebSocket, PROTOCOL_VERSION, getHealthStats } = require('./ws-core')
 
 const app = express()
 const server = http.createServer(app)
@@ -11,7 +10,6 @@ const MAPBOX_TOKEN =
   process.env.MAPBOX_TOKEN ||
   'pk.eyJ1IjoiZXltYXJkMjkiLCJhIjoiY21tcDY4YzNpMGw3bjJzb203YmZyNTVnMyJ9.OvZlnCMfUkUYe6Ib83DUVw'
 
-// CORS
 app.use(express.json())
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*')
@@ -21,32 +19,22 @@ app.use((req, res, next) => {
 })
 app.options('*', (req, res) => res.sendStatus(200))
 
-// Adjuntamos el WS v2
 const attached = attachV2WebSocket(server, { path: '/ws' })
-const state = attached.state
 
-// HTTP auxiliares (útiles para dev local)
+app.get('/ping', (req, res) => res.status(200).type('text/plain').send('ok'))
+
 app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    protocolVersion: PROTOCOL_VERSION,
-    activeAmbulances: state.activeAmbulances.size,
-    activeHospitals: state.activeHospitals.size,
-    activeReceptors: state.activeReceptors.size,
-    activeParamedics: state.activeParamedics.size,
-    activeDoctors: state.activeDoctors.size,
-    activeEmergencies: state.activeEmergencies.size,
-    timestamp: new Date().toISOString()
-  })
+  res.status(200).json(getHealthStats())
 })
 
 app.get('/api/status', (req, res) => {
+  const s = attached.state
   res.json({
-    ambulances: Array.from(state.activeAmbulances.values()).map(a => ({
+    ambulances: Array.from(s.activeAmbulances.values()).map(a => ({
       id: a.id, placa: a.placa, nombre: a.nombre, status: a.status, location: a.location
     })),
-    hospitals: Array.from(state.activeHospitals.keys()),
-    emergencies: Array.from(state.activeEmergencies.values()),
+    hospitals: Array.from(s.activeHospitals.keys()),
+    emergencies: Array.from(s.activeEmergencies.values()),
     timestamp: new Date().toISOString()
   })
 })
@@ -98,8 +86,7 @@ const PORT = process.env.PORT || 3002
 server.listen(PORT, () => {
   console.log(`🚀 WS standalone v${PROTOCOL_VERSION} en puerto ${PORT}`)
   console.log(`📡 WebSocket: ws://localhost:${PORT}/ws`)
-  console.log(`🏥 Health:    http://localhost:${PORT}/health`)
-  console.log(`📊 Status:    http://localhost:${PORT}/api/status`)
+  console.log(`❤️  Keep-alive: http://localhost:${PORT}/ping`)
 })
 
 process.on('SIGTERM', () => {
