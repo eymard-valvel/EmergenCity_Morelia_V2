@@ -132,6 +132,24 @@ export default function MapaOperador() {
   const toast = useToast();
   const navigate = useNavigate();
 
+  // Cuenta los toasts activos para ocultar el header mientras haya notificaciones
+  const [activeToastCount, setActiveToastCount] = useState(0);
+  const toastSequenceRef = useRef(0);
+
+  const showToast = useCallback((options = {}) => {
+    const id = `mapa-operador-${++toastSequenceRef.current}`;
+    const { onCloseComplete } = options;
+
+    return toast({
+      ...options,
+      id,
+      onCloseComplete: () => {
+        setActiveToastCount((count) => Math.max(0, count - 1));
+        if (typeof onCloseComplete === 'function') onCloseComplete();
+      },
+    });
+  }, [toast]);
+
   const [searchingHospital, setSearchingHospital] = useState(false);
 
   const wsRef = useRef(null);
@@ -377,7 +395,7 @@ export default function MapaOperador() {
                   });
                 }
 
-                toast({
+                showToast({
                   title: 'Caso recuperado',
                   description: `Folio ${em.callId}`,
                   status: 'info',
@@ -387,7 +405,7 @@ export default function MapaOperador() {
               } else if (em.location) {
                 // Sin ruta cacheada → recalcular
                 startNavigationEngine(em.location, 'emergency', em.address);
-                toast({
+                showToast({
                   title: 'Caso recuperado',
                   description: `Folio ${em.callId}`,
                   status: 'info',
@@ -453,7 +471,7 @@ export default function MapaOperador() {
                 }
               }
 
-              toast({
+              showToast({
                 title: 'Folio generado',
                 description: data.callId,
                 status: 'success',
@@ -472,7 +490,7 @@ export default function MapaOperador() {
                 callId: data.callId,
                 sentAt: new Date().toISOString()
               });
-              toast({
+              showToast({
                 title: 'Solicitud enviada',
                 description: `${data.hospitalName} (${data.distanceKm} km)`,
                 status: 'success',
@@ -491,7 +509,7 @@ export default function MapaOperador() {
                 callId: data.callId,
                 sentAt: new Date().toISOString()
               }));
-              toast({
+              showToast({
                 title: 'Solicitud enviada',
                 description: `${data.hospitalName} · ${data.distanceKm} km`,
                 status: 'success',
@@ -502,7 +520,7 @@ export default function MapaOperador() {
 
             case 'hospital_search_failed':
               setSearchingHospital(false);
-              toast({
+              showToast({
                 title: 'Sin hospitales conectados',
                 description: 'No hay hospitales con capacidad disponible.',
                 status: 'warning',
@@ -535,7 +553,7 @@ export default function MapaOperador() {
               if (offerTimerRef.current) clearInterval(offerTimerRef.current);
               setAssignedEmergency(data);
               if (data.location) startNavigationEngine(data.location, 'emergency', data.address);
-              toast({ title: 'Emergencia asignada', description: data.address || 'Diríjase al punto', status: 'error', duration: 10000, position: 'bottom' });
+              showToast({ title: 'Emergencia asignada', description: data.address || 'Diríjase al punto', status: 'error', duration: 10000, position: 'bottom' });
               break;
 
             case 'patient_accepted_with_route': {
@@ -543,7 +561,7 @@ export default function MapaOperador() {
               const hospitalLat = data.hospitalInfo?.lat;
               const hospitalLng = data.hospitalInfo?.lng;
 
-              toast({
+              showToast({
                 title: 'Hospital aceptó',
                 description: `Redirigiendo a ${hospitalName}`,
                 status: 'success',
@@ -598,7 +616,7 @@ const route = await computeRouteCached(currentLoc, dest);
             }
 
             case 'patient_accepted': {
-              toast({
+              showToast({
                 title: 'Hospital aceptó',
                 description: data.hospitalInfo?.nombre || data.hospitalId,
                 status: 'success',
@@ -610,21 +628,21 @@ const route = await computeRouteCached(currentLoc, dest);
             }
 
             case 'patient_rejected':
-              toast({ title: 'Hospital rechazó', description: 'Seleccione otra alternativa.', status: 'error', duration: 8000, position: 'bottom' });
+              showToast({ title: 'Hospital rechazó', description: 'Seleccione otra alternativa.', status: 'error', duration: 8000, position: 'bottom' });
               silentCleanupNavigation();
               break;
             case 'automatic_redirect':
-              toast({ title: 'Reenvío automático', description: `Nueva solicitud a ${data.hospitalInfo?.nombre || data.newHospitalId}`, status: 'info', duration: 5000, position: 'bottom' });
+              showToast({ title: 'Reenvío automático', description: `Nueva solicitud a ${data.hospitalInfo?.nombre || data.newHospitalId}`, status: 'info', duration: 5000, position: 'bottom' });
               break;
             case 'no_hospitals_available':
-              toast({ title: 'Sin hospitales', description: 'Todos los hospitales rechazaron.', status: 'warning', duration: 8000, position: 'bottom' });
+              showToast({ title: 'Sin hospitales', description: 'Todos los hospitales rechazaron.', status: 'warning', duration: 8000, position: 'bottom' });
               break;
             case 'navigation_cancelled':
-              toast({ title: 'Ruta cancelada', description: 'El CRUM canceló el servicio.', status: 'info', duration: 5000, position: 'bottom' });
+              showToast({ title: 'Ruta cancelada', description: 'El CRUM canceló el servicio.', status: 'info', duration: 5000, position: 'bottom' });
               silentCleanupNavigation();
               break;
             case 'paramedic_paired':
-              toast({ title: 'Paramédico vinculado', description: `${data.nombre || data.paramedicId} en esta unidad`, status: 'success', duration: 5000, position: 'bottom' });
+              showToast({ title: 'Paramédico vinculado', description: `${data.nombre || data.paramedicId} en esta unidad`, status: 'success', duration: 5000, position: 'bottom' });
               break;
             case 'error':
               console.warn('[WS error]', data.message);
@@ -910,12 +928,12 @@ const route = await computeRouteCached(currentLoc, dest);
         if (stepsPendientes.length > 0) setCurrentManeuver(stepsPendientes[0]);
         setRouteProgress({ distanceRemaining: route.distance, durationRemaining: route.duration });
         lastRouteCalcRef.current = { loc: { ...myLocationRef.current }, time: Date.now() };
-        if (!silent) toast({ title: 'Ruta actualizada', status: 'info', duration: 2000, position: 'bottom' });
+        if (!silent) showToast({ title: 'Ruta actualizada', status: 'info', duration: 2000, position: 'bottom' });
       }
     } finally {
       setIsRecalculating(false);
     }
-  }, [computeRouteCached, drawRoute, isRecalculating, toast]);
+  }, [computeRouteCached, drawRoute, isRecalculating, showToast]);
 
     const startNavigationEngine = async (targetLoc, mode = 'manual', address = '') => {
     let loc = myLocationRef.current;
@@ -932,7 +950,7 @@ const route = await computeRouteCached(currentLoc, dest);
           myLocationRef.current = loc;
         } else loc = null;
       } catch {
-        toast({ title: 'Sin GPS', description: 'No se pudo obtener ubicación.', status: 'warning', duration: 5000, position: 'bottom' });
+        showToast({ title: 'Sin GPS', description: 'No se pudo obtener ubicación.', status: 'warning', duration: 5000, position: 'bottom' });
         loc = null;
       }
     }
@@ -964,7 +982,7 @@ const route = await computeRouteCached(currentLoc, dest);
         setRouteProgress({ distanceRemaining: route.distance, durationRemaining: route.duration });
         lastRouteCalcRef.current = { loc: { ...loc }, time: Date.now() };
       } else {
-        toast({ title: 'Ruta no disponible', description: 'Reintente al moverse.', status: 'warning', duration: 5000, position: 'bottom' });
+        showToast({ title: 'Ruta no disponible', description: 'Reintente al moverse.', status: 'warning', duration: 5000, position: 'bottom' });
       }
     }
   };
@@ -1058,7 +1076,7 @@ const route = await computeRouteCached(currentLoc, dest);
     if (!callId && !activeDestination.current) {
       silentCleanupNavigation();
       changeStatus('disponible');
-      toast({ title: 'Sin servicio activo', status: 'info', duration: 3000, position: 'bottom' });
+      showToast({ title: 'Sin servicio activo', status: 'info', duration: 3000, position: 'bottom' });
       return;
     }
 
@@ -1072,7 +1090,7 @@ const route = await computeRouteCached(currentLoc, dest);
       setAssignedEmergency(null);
       setHospitalRequest(null);
       changeStatus('disponible');
-      toast({ title: 'Servicio completado', status: 'success', duration: 4000, position: 'bottom' });
+      showToast({ title: 'Servicio completado', status: 'success', duration: 4000, position: 'bottom' });
       return;
     }
 
@@ -1092,7 +1110,7 @@ const route = await computeRouteCached(currentLoc, dest);
 
     if (reasonCode === 'averia' || reasonCode === 'pinchadura') {
       changeStatus('fuera_de_servicio');
-      toast({
+      showToast({
         title: 'Unidad fuera de servicio',
         description: 'Servicio reasignado a otra unidad',
         status: 'warning',
@@ -1101,7 +1119,7 @@ const route = await computeRouteCached(currentLoc, dest);
       });
     } else {
       changeStatus('disponible');
-      toast({
+      showToast({
         title: 'Servicio cancelado',
         description: 'Unidad disponible para nuevo despacho',
         status: 'info',
@@ -1109,7 +1127,7 @@ const route = await computeRouteCached(currentLoc, dest);
         position: 'bottom'
       });
     }
-  }, [assignedEmergency, ambulancia, sendWS, changeStatus, toast, silentCleanupNavigation]);
+  }, [assignedEmergency, ambulancia, sendWS, changeStatus, showToast, silentCleanupNavigation]);
 
   // ==================== TRANSFERENCIA Y HOSPITAL ====================
   const handleSendTransfer = async () => {
@@ -1132,7 +1150,7 @@ const route = await computeRouteCached(currentLoc, dest);
       ambulanceLocation: myLocationRef.current,
       emergencyMode: 'trasladar_paciente'
     });
-    toast({ title: 'Solicitud enviada', description: `Esperando confirmación de ${hospital.nombre}`, status: 'success', duration: 4000, position: 'bottom' });
+    showToast({ title: 'Solicitud enviada', description: `Esperando confirmación de ${hospital.nombre}`, status: 'success', duration: 4000, position: 'bottom' });
     setIsSending(false);
     onDrawerClose();
   };
@@ -1146,7 +1164,7 @@ const route = await computeRouteCached(currentLoc, dest);
       emergencyType: assignedEmergency?.emergencyType || 'Urgencia',
       notes: assignedEmergency?.notes || ''
     })) {
-      toast({
+      showToast({
         title: 'Sin conexión',
         description: 'Reintente cuando vuelva la señal.',
         status: 'error',
@@ -1156,19 +1174,19 @@ const route = await computeRouteCached(currentLoc, dest);
       return;
     }
     setSearchingHospital(true);
-    toast({
+    showToast({
       title: 'Buscando hospital conectado...',
       status: 'info',
       duration: 3000,
       position: 'bottom'
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [assignedEmergency, ambulancia, sendWS, toast]);
+  }, [assignedEmergency, ambulancia, sendWS, showToast]);
 
   // ==================== CREAR EMERGENCIA OPERADOR ====================
   const handleCreateOperatorEmergency = useCallback(async () => {
     if (!myLocationRef.current) {
-      toast({
+      showToast({
         title: 'Sin ubicación GPS',
         description: 'Esperando señal para registrar la emergencia.',
         status: 'warning', duration: 4000, position: 'bottom',
@@ -1177,7 +1195,7 @@ const route = await computeRouteCached(currentLoc, dest);
     }
     const validPacientes = operatorPatientData.pacientes.filter(p => p.sexo && p.consciente);
     if (validPacientes.length === 0) {
-      toast({
+      showToast({
         title: 'Datos incompletos',
         description: 'Registre sexo y estado de conciencia del primer paciente.',
         status: 'warning', duration: 4000, position: 'bottom',
@@ -1209,7 +1227,7 @@ const route = await computeRouteCached(currentLoc, dest);
       notes: operatorPatientData.notas || '',
     });
 
-    toast({
+    showToast({
       title: 'Emergencia registrada',
       description: 'Trazando ruta al hospital más cercano.',
       status: 'success', duration: 4000, position: 'bottom',
@@ -1217,7 +1235,7 @@ const route = await computeRouteCached(currentLoc, dest);
     setIsCreatingEmergency(false);
     onDrawerClose();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [operatorPatientData, ambulancia, sendWS, toast, onDrawerClose]);
+  }, [operatorPatientData, ambulancia, sendWS, showToast, onDrawerClose]);
 
   // ==================== CONFIRMACIONES ====================
   const confirmAction = useCallback((action, title, body) => {
@@ -1245,8 +1263,8 @@ const route = await computeRouteCached(currentLoc, dest);
     if (offerTimerRef.current) clearInterval(offerTimerRef.current);
     setPendingOffer(null);
     setOfferRejecting(false);
-    toast({ title: 'Rechazo enviado', description: 'Se buscará otra unidad', status: 'info', duration: 3000, position: 'bottom' });
-  }, [pendingOffer, sendWS, toast]);
+    showToast({ title: 'Rechazo enviado', description: 'Se buscará otra unidad', status: 'info', duration: 3000, position: 'bottom' });
+  }, [pendingOffer, sendWS, showToast]);
 
   // ==================== UTILIDADES ====================
   const getManeuverIcon = (step) => {
@@ -1510,72 +1528,80 @@ const route = await computeRouteCached(currentLoc, dest);
 
       {!isNavigating && (
         <>
-          <Box
-            position="absolute" top="16px" left="16px" right="16px"
-            bg="#2C2C2C" borderRadius="16px" px="16px" py="10px"
-            zIndex={10} boxShadow="0 4px 16px rgba(0,0,0,0.45)"
+          <SlideFade
+            in={activeToastCount === 0}
+            unmountOnExit
+            offsetY={-8}
+            zIndex={10}
+            transition={{ enter: { duration: 0.18 }, exit: { duration: 0.12 } }}
           >
-            <Flex align="center" justify="space-between" gap="12px">
-              <HStack spacing="10px" minW={0} flex={1}>
-                <Box w="10px" h="10px" borderRadius="full" bg={wsDotColor} flexShrink={0} />
-                <Box minW={0} flex={1}>
-                  <Text color="#FFFFFF" fontSize="15px" fontWeight="900" letterSpacing="0.3px" lineHeight="1.15" noOfLines={1}>
-                    {ambulancia.id}
-                  </Text>
-                  <Text color="#B0B0B0" fontSize="10px" fontWeight="700" letterSpacing="0.4px" lineHeight="1.15" noOfLines={1}>
-                    {ambulancia.tipo}
-                  </Text>
-                </Box>
-              </HStack>
+            <Box
+              position="absolute" top="16px" left="16px" right="16px"
+              bg="#2C2C2C" borderRadius="16px" px="16px" py="10px"
+              zIndex={10} boxShadow="0 4px 16px rgba(0,0,0,0.45)"
+            >
+              <Flex align="center" justify="space-between" gap="12px">
+                <HStack spacing="10px" minW={0} flex={1}>
+                  <Box w="10px" h="10px" borderRadius="full" bg={wsDotColor} flexShrink={0} />
+                  <Box minW={0} flex={1}>
+                    <Text color="#FFFFFF" fontSize="15px" fontWeight="900" letterSpacing="0.3px" lineHeight="1.15" noOfLines={1}>
+                      {ambulancia.id}
+                    </Text>
+                    <Text color="#B0B0B0" fontSize="10px" fontWeight="700" letterSpacing="0.4px" lineHeight="1.15" noOfLines={1}>
+                      {ambulancia.tipo}
+                    </Text>
+                  </Box>
+                </HStack>
 
-              <HStack spacing="6px" flexShrink={0}>
-                <Select
-                  value={ambulanceStatus}
-                  onChange={(e) => changeStatus(e.target.value)}
-                  bg="#1E1E1E" border="1px solid #3f3f46" color={currentStatusOpt.color}
-                  borderRadius="10px" h="34px" fontSize="11px" fontWeight="900" w="108px"
-                  _focus={{ boxShadow: 'none' }}
-                >
-                  {STATUS_OPTIONS.map(s => (
-                    <option key={s.value} value={s.value} style={{ background: '#1E1E1E', color: s.color }}>
-                      {s.label}
-                    </option>
-                  ))}
-                </Select>
+                <HStack spacing="6px" flexShrink={0}>
+                  <Select
+                    value={ambulanceStatus}
+                    onChange={(e) => changeStatus(e.target.value)}
+                    bg="#1E1E1E" border="1px solid #3f3f46" color={currentStatusOpt.color}
+                    borderRadius="10px" h="34px" fontSize="11px" fontWeight="900" w="108px"
+                    _focus={{ boxShadow: 'none' }}
+                  >
+                    {STATUS_OPTIONS.map(s => (
+                      <option key={s.value} value={s.value} style={{ background: '#1E1E1E', color: s.color }}>
+                        {s.label}
+                      </option>
+                    ))}
+                  </Select>
+                  <IconButton
+                    aria-label="Cerrar sesión" icon={<FaSignOutAlt />}
+                    onClick={() => confirmAction(() => {
+                      if (wsRef.current) wsRef.current.close();
+                      clearAmbulance(); setAmbulancia(null);
+                    }, 'FINALIZAR TURNO', '¿Desconectar unidad?')}
+                    bg="transparent" color="#B0B0B0" borderRadius="10px"
+                    w="34px" h="34px" minW="34px" fontSize="14px"
+                    _hover={{ bg: 'rgba(239,68,68,0.2)', color: '#ef4444' }}
+                  />
+                </HStack>
+              </Flex>
+            </Box>
+
+            {!isDrawerOpen && (
+              <VStack position="absolute" right="16px" top="88px" spacing="12px" zIndex={5}>
                 <IconButton
-                  aria-label="Cerrar sesión" icon={<FaSignOutAlt />}
-                  onClick={() => confirmAction(() => {
-                    if (wsRef.current) wsRef.current.close();
-                    clearAmbulance(); setAmbulancia(null);
-                  }, 'FINALIZAR TURNO', '¿Desconectar unidad?')}
-                  bg="transparent" color="#B0B0B0" borderRadius="10px"
-                  w="34px" h="34px" minW="34px" fontSize="14px"
-                  _hover={{ bg: 'rgba(239,68,68,0.2)', color: '#ef4444' }}
+                  aria-label="Centrar GPS" icon={<MdCenterFocusStrong />}
+                  onClick={centerMapAction}
+                  w="48px" h="48px" minW="48px" borderRadius="full"
+                  bg="#2C2C2C" color={isFollowing ? '#0ea5e9' : '#FFFFFF'}
+                  fontSize="22px" boxShadow="0 4px 14px rgba(0,0,0,0.5)"
+                  _hover={{ bg: '#3A3A3A' }}
                 />
-              </HStack>
-            </Flex>
-          </Box>
-
-          {!isDrawerOpen && (
-            <VStack position="absolute" right="16px" top="88px" spacing="12px" zIndex={5}>
-              <IconButton
-                aria-label="Centrar GPS" icon={<MdCenterFocusStrong />}
-                onClick={centerMapAction}
-                w="48px" h="48px" minW="48px" borderRadius="full"
-                bg="#2C2C2C" color={isFollowing ? '#0ea5e9' : '#FFFFFF'}
-                fontSize="22px" boxShadow="0 4px 14px rgba(0,0,0,0.5)"
-                _hover={{ bg: '#3A3A3A' }}
-              />
-              <IconButton
-                aria-label="Alternar vista" icon={isGpsMode ? <FaMap /> : <FaLocationArrow />}
-                onClick={toggleCameraAction}
-                w="48px" h="48px" minW="48px" borderRadius="full"
-                bg="#2C2C2C" color={isGpsMode ? '#0ea5e9' : '#FFFFFF'}
-                fontSize="18px" boxShadow="0 4px 14px rgba(0,0,0,0.5)"
-                _hover={{ bg: '#3A3A3A' }}
-              />
-            </VStack>
-          )}
+                <IconButton
+                  aria-label="Alternar vista" icon={isGpsMode ? <FaMap /> : <FaLocationArrow />}
+                  onClick={toggleCameraAction}
+                  w="48px" h="48px" minW="48px" borderRadius="full"
+                  bg="#2C2C2C" color={isGpsMode ? '#0ea5e9' : '#FFFFFF'}
+                  fontSize="18px" boxShadow="0 4px 14px rgba(0,0,0,0.5)"
+                  _hover={{ bg: '#3A3A3A' }}
+                />
+              </VStack>
+            )}
+          </SlideFade>
 
           {!isDrawerOpen && (
             <Box position="absolute" bottom="20px" left="16px" right="16px" zIndex={10}>
