@@ -13,9 +13,11 @@ import logo from '../img/Logo.png';
 import ReceptorEmergencyForm from './ReceptorEmergencyForm';
 import { useAuth } from '../../auth/useAuth.js';
 import { deleteCookie } from '../../helpers/cookies.js';
-
-
 import { readLocal, saveLocal } from '../../helpers/persistence.js';
+import { detectCurrentRegion, getCachedRegion } from '../../helpers/placeSearch.js';
+
+const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN ||
+  'pk.eyJ1IjoiZXltYXJkMjkiLCJhIjoiY21tcDY4YzNpMGw3bjJzb203YmZyNTVnMyI';
 
 const RECONNECT_DELAY_MS = 3000;
 const MAX_RECONNECT_ATTEMPTS = 5;
@@ -36,7 +38,6 @@ const STATUS_META = {
   failed:       { label: 'OFFLINE',        color: '#ef4444', icon: FiWifiOff  },
 };
 
-// Colores semánticos: verde = OK, ámbar = en proceso, rojo = problema, azul = info, slate = cerrado
 const EMERGENCY_STATUS_COLORS = {
   assigned: '#10b981',
   offering: '#38bdf8',
@@ -66,6 +67,7 @@ const ReceptorDashboard = () => {
   const reconnectTimerRef = useRef(null);
 
   const [connectionStatus, setConnectionStatus] = useState('connecting');
+  const [detectedRegion, setDetectedRegion] = useState(() => getCachedRegion());
 
   const [monitorOpen, setMonitorOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('emergencies');
@@ -73,20 +75,31 @@ const ReceptorDashboard = () => {
   const wsConnected = connectionStatus === 'connected';
 
   const [activeEmergencies, setActiveEmergencies] = useState(
-  () => readLocal('receptor', 'activeEmergencies', [])
-);
-const [activeAmbulances, setActiveAmbulances] = useState(
-  () => readLocal('receptor', 'activeAmbulances', [])
-);
-const [serviceHistory, setServiceHistory] = useState(
-  () => readLocal('receptor', 'serviceHistory', [])
-);
+    () => readLocal('receptor', 'activeEmergencies', [])
+  );
+  const [activeAmbulances, setActiveAmbulances] = useState(
+    () => readLocal('receptor', 'activeAmbulances', [])
+  );
+  const [serviceHistory, setServiceHistory] = useState(
+    () => readLocal('receptor', 'serviceHistory', [])
+  );
 
-useEffect(() => { saveLocal('receptor', 'activeEmergencies', activeEmergencies); }, [activeEmergencies]);
-useEffect(() => { saveLocal('receptor', 'activeAmbulances', activeAmbulances); }, [activeAmbulances]);
-useEffect(() => { saveLocal('receptor', 'serviceHistory', serviceHistory); }, [serviceHistory]);
+  useEffect(() => { saveLocal('receptor', 'activeEmergencies', activeEmergencies); }, [activeEmergencies]);
+  useEffect(() => { saveLocal('receptor', 'activeAmbulances', activeAmbulances); }, [activeAmbulances]);
+  useEffect(() => { saveLocal('receptor', 'serviceHistory', serviceHistory); }, [serviceHistory]);
 
-  // ---------- CONEXIÓN WS ----------
+  useEffect(() => {
+    let active = true;
+    const ambWithLoc = activeAmbulances.find(a => a.location?.lat && a.location?.lng);
+    detectCurrentRegion({
+      mapboxToken: MAPBOX_TOKEN,
+      fallbackCenter: ambWithLoc ? ambWithLoc.location : null
+    }).then((region) => {
+      if (active && region) setDetectedRegion(region);
+    });
+    return () => { active = false; };
+  }, []);
+
   useEffect(() => {
     isMountedRef.current = true;
 
@@ -137,21 +150,16 @@ useEffect(() => { saveLocal('receptor', 'serviceHistory', serviceHistory); }, [s
         wsRef.current.close(1000, 'Component unmounted');
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [receptorId]);
 
-  // ---------- MANEJO DE MENSAJES DEL SERVER ----------
   const handleServerMessage = useCallback((data, socket) => {
     switch (data.type) {
-      // -------- Handshake --------
       case 'connection_established':
         if (data.protocolVersion) {
-          // eslint-disable-next-line no-console
           console.info(`[WS] Protocolo v${data.protocolVersion} · ${data.message || ''}`);
         }
         break;
 
-      // -------- Listas globales --------
       case 'active_emergencies_update':
         setActiveEmergencies(data.emergencies || []);
         break;
@@ -160,19 +168,16 @@ useEffect(() => { saveLocal('receptor', 'serviceHistory', serviceHistory); }, [s
         setActiveAmbulances(data.ambulances || []);
         break;
 
-      // -------- Alta de emergencia (broadcast a otros receptores) --------
       case 'new_emergency_broadcast':
       case 'emergency_pending_broadcast':
         socket.send(JSON.stringify({ type: 'request_active_emergencies' }));
         break;
 
-      // -------- Confirmaciones al receptor emisor --------
       case 'emergency_assigned_ack':
       case 'emergency_assignment_failed':
         socket.send(JSON.stringify({ type: 'request_active_emergencies' }));
         break;
 
-      // -------- Asignación confirmada (broadcast a todos) --------
       case 'emergency_assigned_broadcast':
         setActiveEmergencies(prev => {
           const exists = prev.some(em => em.callId === data.callId);
@@ -187,11 +192,9 @@ useEffect(() => { saveLocal('receptor', 'serviceHistory', serviceHistory); }, [s
               }
             : em);
         });
-        // Refresco defensivo por si el broadcast llega antes que el update general
         socket.send(JSON.stringify({ type: 'request_active_emergencies' }));
         break;
 
-      // -------- Reasignación por imprevisto de unidad --------
       case 'emergency_reassigned_broadcast':
         setActiveEmergencies(prev => prev.map(em => em.callId === data.callId
           ? {
@@ -211,24 +214,21 @@ useEffect(() => { saveLocal('receptor', 'serviceHistory', serviceHistory); }, [s
           : em));
         break;
 
-      // -------- Cierre de emergencia --------
-            case 'emergency_completed_broadcast': {
-  setActiveEmergencies(prev => {
-    const finished = prev.find(em => em.callId === data.callId);
-    if (finished) {
-      setServiceHistory(h => [{
-        ...finished,
-        completedAt: data.timestamp || new Date().toISOString(),
-        completedBy: data.completedBy || 'operador'
-      }, ...h].slice(0, 50));
-    }
-    return prev.filter(em => em.callId !== data.callId);
-  });
-  break;
-}
+      case 'emergency_completed_broadcast': {
+        setActiveEmergencies(prev => {
+          const finished = prev.find(em => em.callId === data.callId);
+          if (finished) {
+            setServiceHistory(h => [{
+              ...finished,
+              completedAt: data.timestamp || new Date().toISOString(),
+              completedBy: data.completedBy || 'operador'
+            }, ...h].slice(0, 50));
+          }
+          return prev.filter(em => em.callId !== data.callId);
+        });
+        break;
+      }
 
-
-      // -------- Estado y ubicación de ambulancias --------
       case 'ambulance_status_changed':
         setActiveAmbulances(prev => prev.map(a =>
           a.id === data.ambulanceId ? { ...a, status: data.newStatus } : a
@@ -267,7 +267,6 @@ useEffect(() => { saveLocal('receptor', 'serviceHistory', serviceHistory); }, [s
     }
   }, []);
 
-  // ---------- LOGOUT ----------
   const handleLogout = useCallback(() => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.close(1000, 'Logout');
@@ -280,18 +279,17 @@ useEffect(() => { saveLocal('receptor', 'serviceHistory', serviceHistory); }, [s
     navigate('/login');
   }, [navigate, setAuth]);
 
-  // ---------- MÉTRICAS ----------
   const pendingCount = activeEmergencies.filter(e =>
     e.status === 'pending' || e.status === 'pending_no_ambulance' || e.status === 'offering'
   ).length;
   const assignedCount = activeEmergencies.filter(e => e.status === 'assigned').length;
   const disponiblesCount = activeAmbulances.filter(a => a.status === 'disponible').length;
   const statusMeta = STATUS_META[connectionStatus];
+  const cityHeaderName = (detectedRegion?.city || 'MORELIA').toUpperCase();
 
   return (
     <Box h="100vh" w="100vw" bg="#09090b" overflow="hidden" display="flex" flexDirection="column">
 
-      {/* ==================== HEADER ==================== */}
       <Flex as="nav" h="85px" w="100%" bg="#09090b" px={6} alignItems="center" justifyContent="space-between" borderBottom="1px solid #27272a" zIndex="1100">
         <HStack spacing={4}>
           <Box p={2} bg="#18181b" borderRadius="xl" border="1px solid #27272a" display="flex" alignItems="center" justifyContent="center">
@@ -299,7 +297,7 @@ useEffect(() => { saveLocal('receptor', 'serviceHistory', serviceHistory); }, [s
           </Box>
           <VStack align="start" spacing={0}>
             <Heading size="sm" color="#f8fafc" fontSize="20px" fontWeight="900" letterSpacing="1.5px">CONSOLA DE DESPACHO UNIFICADO</Heading>
-            <Text color="#38bdf8" fontSize="12px" fontWeight="800" letterSpacing="1px">CENTRO REGULADOR DE URGENCIAS MÉDICAS (CRUM) - MORELIA</Text>
+            <Text color="#38bdf8" fontSize="12px" fontWeight="800" letterSpacing="1px">CENTRO REGULADOR DE URGENCIAS MÉDICAS (CRUM) - {cityHeaderName}</Text>
           </VStack>
         </HStack>
 
@@ -351,15 +349,15 @@ useEffect(() => { saveLocal('receptor', 'serviceHistory', serviceHistory); }, [s
         </HStack>
       </Flex>
 
-      {/* ==================== CUERPO ==================== */}
       <Flex flex={1} w="100%" overflow="hidden" position="relative">
         <Box flex={1} h="100%" overflow="hidden" minW={0}>
           <ReceptorEmergencyForm
-  wsRef={wsRef}
-  wsConnected={wsConnected}
-  onEmergencySent={requestRefresh}
-  activeAmbulances={activeAmbulances}
-/>
+            wsRef={wsRef}
+            wsConnected={wsConnected}
+            onEmergencySent={requestRefresh}
+            activeAmbulances={activeAmbulances}
+            detectedRegion={detectedRegion}
+          />
         </Box>
 
         {!monitorOpen && (
@@ -445,17 +443,17 @@ useEffect(() => { saveLocal('receptor', 'serviceHistory', serviceHistory); }, [s
                   UNIDADES ({activeAmbulances.length})
                 </Button>
                 <Button
-  flex={1}
-  bg={activeTab === 'history' ? '#0284c7' : '#18181b'}
-  color={activeTab === 'history' ? 'white' : '#a1a1aa'}
-  borderColor="#27272a"
-  onClick={() => setActiveTab('history')}
-  _hover={{ bg: activeTab === 'history' ? '#0369a1' : '#27272a' }}
-  fontSize="12px"
-  fontWeight="800"
->
-  HISTORIAL ({serviceHistory.length})
-</Button>
+                  flex={1}
+                  bg={activeTab === 'history' ? '#0284c7' : '#18181b'}
+                  color={activeTab === 'history' ? 'white' : '#a1a1aa'}
+                  borderColor="#27272a"
+                  onClick={() => setActiveTab('history')}
+                  _hover={{ bg: activeTab === 'history' ? '#0369a1' : '#27272a' }}
+                  fontSize="12px"
+                  fontWeight="800"
+                >
+                  HISTORIAL ({serviceHistory.length})
+                </Button>
               </ButtonGroup>
             </Flex>
 
@@ -479,17 +477,16 @@ useEffect(() => { saveLocal('receptor', 'serviceHistory', serviceHistory); }, [s
                     </Box>
                   ) : (
                     activeEmergencies.map((em) => (
-  <EmergencyCard
-    key={em.callId}
-    emergency={em}
-    onComplete={(callId) => {
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify({ type: 'receptor_complete_service', callId }));
-      }
-    }}
-  />
-))
-                    
+                      <EmergencyCard
+                        key={em.callId}
+                        emergency={em}
+                        onComplete={(callId) => {
+                          if (wsRef.current?.readyState === WebSocket.OPEN) {
+                            wsRef.current.send(JSON.stringify({ type: 'receptor_complete_service', callId }));
+                          }
+                        }}
+                      />
+                    ))
                   )}
                 </VStack>
               )}
@@ -517,28 +514,28 @@ useEffect(() => { saveLocal('receptor', 'serviceHistory', serviceHistory); }, [s
                 </VStack>
               )}
 
-                {activeTab === 'history' && (
-    <VStack spacing={4} align="stretch">
-      {serviceHistory.length === 0 ? (
-        <Box p={8} bg="#18181b" color="#a1a1aa" borderRadius="lg" border="1px dashed #3f3f46" textAlign="center">
-          <Text fontSize="14px" fontWeight="800">Sin servicios finalizados en esta sesión</Text>
-        </Box>
-      ) : (
-        serviceHistory.map((em) => (
-          <Box key={em.callId} p={4} borderRadius="xl" bg="#18181b" border="1px solid #27272a" borderLeft="6px solid #64748b">
-            <Flex justify="space-between" align="center" mb={2}>
-              <Text fontWeight="900" color="#f8fafc" fontSize="14px">{em.callId}</Text>
-              <Text fontSize="11px" color="#64748b" fontWeight="800">
-                {new Date(em.completedAt).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })}
-              </Text>
-            </Flex>
-            <Text fontSize="13px" color="#38bdf8" mb={1}>{em.emergencyType}</Text>
-            {em.address && <Text fontSize="12px" color="#a1a1aa" noOfLines={1}>{em.address}</Text>}
-          </Box>
-        ))
-      )}
-    </VStack>
-  )}
+              {activeTab === 'history' && (
+                <VStack spacing={4} align="stretch">
+                  {serviceHistory.length === 0 ? (
+                    <Box p={8} bg="#18181b" color="#a1a1aa" borderRadius="lg" border="1px dashed #3f3f46" textAlign="center">
+                      <Text fontSize="14px" fontWeight="800">Sin servicios finalizados en esta sesión</Text>
+                    </Box>
+                  ) : (
+                    serviceHistory.map((em) => (
+                      <Box key={em.callId} p={4} borderRadius="xl" bg="#18181b" border="1px solid #27272a" borderLeft="6px solid #64748b">
+                        <Flex justify="space-between" align="center" mb={2}>
+                          <Text fontWeight="900" color="#f8fafc" fontSize="14px">{em.callId}</Text>
+                          <Text fontSize="11px" color="#64748b" fontWeight="800">
+                            {new Date(em.completedAt).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })}
+                          </Text>
+                        </Flex>
+                        <Text fontSize="13px" color="#38bdf8" mb={1}>{em.emergencyType}</Text>
+                        {em.address && <Text fontSize="12px" color="#a1a1aa" noOfLines={1}>{em.address}</Text>}
+                      </Box>
+                    ))
+                  )}
+                </VStack>
+              )}
 
             </Box>
           </VStack>
@@ -548,7 +545,6 @@ useEffect(() => { saveLocal('receptor', 'serviceHistory', serviceHistory); }, [s
   );
 };
 
-// ---------- SUB-COMPONENTES ----------
 const EmergencyCard = ({ emergency: em, onComplete }) => {
   const statusColor = EMERGENCY_STATUS_COLORS[em.status] || '#64748b';
   const statusLabel = EMERGENCY_STATUS_LABELS[em.status] || (em.status || '').toUpperCase();
@@ -556,7 +552,6 @@ const EmergencyCard = ({ emergency: em, onComplete }) => {
 
   return (
     <Box p={4} borderRadius="xl" bg="#18181b" border="1px solid #27272a" borderLeft="6px solid" borderLeftColor={statusColor}>
-      {/* ── FILA DEL FOLIO + BADGE ESTADO + CHIP ORIGEN ── */}
       <Flex justify="space-between" align="center" mb={2}>
         <HStack spacing={2} minW={0}>
           <Text fontWeight="900" color="#f8fafc" fontSize="16px" noOfLines={1}>

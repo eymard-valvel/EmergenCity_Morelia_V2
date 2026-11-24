@@ -1,5 +1,11 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { searchPlaces, getPlaceTypeLabel } from '../../helpers/placeSearch.js';
+import {
+  searchPlaces,
+  getPlaceTypeLabel,
+  detectCurrentRegion,
+  getCachedRegion,
+  resolveRegionFromCoords
+} from '../../helpers/placeSearch.js';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import {
@@ -70,8 +76,13 @@ const formatResumenPaciente = (p, idx) => {
   return parts.join(' · ');
 };
 
-const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbulances = [] }) => {
+const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbulances = [], detectedRegion = null }) => {
   const toast = useToast();
+
+  const initialRegion = detectedRegion || getCachedRegion();
+  const initialCenter = initialRegion
+    ? { lat: initialRegion.lat, lng: initialRegion.lng }
+    : DEFAULT_CENTER;
 
   const mapContainer = useRef(null);
   const map = useRef(null);
@@ -81,13 +92,16 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
   const skipNextReverseGeocode = useRef(false);
   const ambulanceMarkersRef = useRef({});
   const searchAbortRef = useRef(null);
+  const hasCenteredOnDetected = useRef(Boolean(initialRegion));
 
+  const [currentRegion, setCurrentRegion] = useState(initialRegion);
+  const [cityCenter, setCityCenter] = useState(initialCenter);
   const [activeAccordion, setActiveAccordion] = useState(0);
   const [addressQuery, setAddressQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
   const [isSearching, setIsSearching] = useState(false);
-  const [selectedLocation, setSelectedLocation] = useState(DEFAULT_CENTER);
+  const [selectedLocation, setSelectedLocation] = useState(initialCenter);
 
   const [referencias, setReferencias] = useState('');
   const [tipoIncidente, setTipoIncidente] = useState('');
@@ -115,6 +129,36 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
     p.sexo !== '' || p.consciente !== '' || p.edad !== '' || p.respira !== ''
   );
 
+  const applyDetectedRegion = useCallback((region) => {
+    if (!region || !Number.isFinite(region.lat) || !Number.isFinite(region.lng)) return;
+    setCurrentRegion(region);
+    setCityCenter({ lat: region.lat, lng: region.lng });
+    if (!hasCenteredOnDetected.current) {
+      hasCenteredOnDetected.current = true;
+      setSelectedLocation({ lat: region.lat, lng: region.lng });
+      if (map.current) {
+        skipNextReverseGeocode.current = true;
+        map.current.jumpTo({ center: [region.lng, region.lat], zoom: 14 });
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    if (detectedRegion) {
+      applyDetectedRegion(detectedRegion);
+      return;
+    }
+    let active = true;
+    const ambWithLoc = activeAmbulances.find(a => a.location?.lat && a.location?.lng);
+    detectCurrentRegion({
+      mapboxToken: mapboxgl.accessToken,
+      fallbackCenter: ambWithLoc ? ambWithLoc.location : null
+    }).then((region) => {
+      if (active && region) applyDetectedRegion(region);
+    });
+    return () => { active = false; };
+  }, [detectedRegion, applyDetectedRegion]);
+
   const reverseGeocode = useCallback(async (lng, lat) => {
     const reqId = ++reverseGeocodeRequestId.current;
     try {
@@ -133,7 +177,7 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
     const mapInstance = new mapboxgl.Map({
       container: mapContainer.current,
       style: 'mapbox://styles/mapbox/dark-v11',
-      center: [DEFAULT_CENTER.lng, DEFAULT_CENTER.lat],
+      center: [initialCenter.lng, initialCenter.lat],
       zoom: 15,
       attributionControl: false,
     });
@@ -146,11 +190,20 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
     });
 
     mapInstance.on('moveend', () => {
+      const center = mapInstance.getCenter();
+      resolveRegionFromCoords(center.lat, center.lng, mapboxgl.accessToken)
+        .then((reg) => {
+          if (reg) {
+            setCurrentRegion(reg);
+            setCityCenter({ lat: reg.lat, lng: reg.lng });
+          }
+        })
+        .catch(() => {});
+
       if (skipNextReverseGeocode.current) {
         skipNextReverseGeocode.current = false;
         return;
       }
-      const center = mapInstance.getCenter();
       reverseGeocode(center.lng, center.lat);
     });
 
@@ -251,7 +304,8 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
           proximity: selectedLocation,
           mapboxToken: mapboxgl.accessToken,
           signal: controller.signal,
-          mode: 'all'
+          mode: 'all',
+          region: currentRegion
         });
 
         if (reqId !== searchRequestId.current) return;
@@ -272,7 +326,7 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
         if (reqId === searchRequestId.current) setIsSearching(false);
       }
     }, SEARCH_DEBOUNCE_MS);
-  }, [selectedLocation]);
+  }, [selectedLocation, currentRegion]);
 
   const selectSearchResult = useCallback((result) => {
     if (!result) return;
@@ -317,7 +371,7 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
   const handleCityView = () => {
     if (!map.current) return;
     map.current.flyTo({
-      center: [DEFAULT_CENTER.lng, DEFAULT_CENTER.lat],
+      center: [cityCenter.lng, cityCenter.lat],
       zoom: 11.5, pitch: 0, bearing: 0, duration: 1200
     });
   };
@@ -785,7 +839,7 @@ const ReceptorEmergencyForm = ({ wsRef, wsConnected, onEmergencySent, activeAmbu
         </Box>
 
         <Box position="absolute" bottom={100} right={16} zIndex={8}>
-          <Tooltip label="Ver Morelia completa" placement="left" hasArrow bg="#18181b" color="white" fontWeight="bold">
+          <Tooltip label={`Ver ${currentRegion?.city || 'ciudad'} completa`} placement="left" hasArrow bg="#18181b" color="white" fontWeight="bold">
             <IconButton
               aria-label="Vista panorámica"
               icon={<FaCity />}

@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Outlet, useNavigate } from 'react-router-dom';
 import VoiceAssistant from '../pln/VoiceAssistant';
+import ResumenDictado from '../pln/ResumenDictado';
+import { aplicarDictado, aplicarCambios } from '../pln/aplicarDictado';
 import { useGlasgow } from '../hooks/useGlasgow';
 import { resolveWsUrl } from '../../helpers/wsUrl.js';
 import { readLocal, saveLocal } from '../../helpers/persistence.js';
@@ -447,76 +449,45 @@ const ReportePaciente = () => {
     });
   }, [reporte]);
 
+  const dictadoRef = useRef({ sesion: null, campos: {}, glasgow: '', interv: new Map() });
+
   const handleNLPData = useCallback((parsed, meta = {}) => {
     if (!parsed) return;
-    const { secciones = {}, acciones = [] } = parsed;
 
-    setReporte(prev => {
-      const actualizado = { ...prev };
-
-      if (secciones.signos && Object.keys(secciones.signos).length > 0) {
-        actualizado.seccionI = {
-          ...actualizado.seccionI,
-          fc: secciones.signos.frecuencia_cardiaca ?? actualizado.seccionI.fc,
-          fr: secciones.signos.frecuencia_respiratoria ?? actualizado.seccionI.fr,
-          ta: secciones.signos.tension_arterial ?? actualizado.seccionI.ta,
-          spo2: secciones.signos.saturacion_oxigeno ?? actualizado.seccionI.spo2,
-          temp: secciones.signos.temperatura ?? actualizado.seccionI.temp,
-          glucemia: secciones.signos.glucemia ?? actualizado.seccionI.glucemia,
-          hora_toma: ahoraHHMM()
-        };
+    if (meta.action === 'enviar_urgente' || meta.action === 'enviar_completo') {
+      if (!hospitalAceptado) {
+        mostrarNotificacion('Aún no hay hospital asignado.', 'warning');
+        return;
       }
+      const urgente = meta.action === 'enviar_urgente';
+      setTimeout(() => enviarVersionRef.current?.(urgente), 800);
+      return;
+    }
 
-      if (secciones.glasgow) {
-        if (secciones.glasgow.ocular) setOcular(secciones.glasgow.ocular);
-        if (secciones.glasgow.verbal) setVerbal(secciones.glasgow.verbal);
-        if (secciones.glasgow.motor) setMotor(secciones.glasgow.motor);
-      }
+    const secciones = parsed.secciones || {};
+    if (Object.keys(secciones).length === 0) return;
 
-      if (secciones.demografia) {
-        actualizado.seccionD = {
-          ...actualizado.seccionD,
-          nombre: secciones.demografia.nombre || actualizado.seccionD.nombre,
-          edad: secciones.demografia.edad ?? actualizado.seccionD.edad,
-          sexo: secciones.demografia.sexo || actualizado.seccionD.sexo
-        };
-      }
-
-      if (secciones.motivo?.motivo_urgencia) {
-        actualizado.seccionF = {
-          ...actualizado.seccionF,
-          motivo_principal: actualizado.seccionF.motivo_principal
-            ? `${actualizado.seccionF.motivo_principal} ${secciones.motivo.motivo_urgencia}`.trim()
-            : secciones.motivo.motivo_urgencia
-        };
-      }
-
-      if (secciones.lesiones?.descripcion_lesion) {
-        actualizado.seccionH = { ...actualizado.seccionH, lesiones_exposicion: secciones.lesiones.descripcion_lesion };
-      }
-
-      if (Array.isArray(secciones.intervenciones) && secciones.intervenciones.length > 0) {
-        const existentes = new Set(actualizado.intervenciones.map(i => i.tipo_intervencion));
-        const nuevas = secciones.intervenciones
-          .filter(i => !existentes.has(i.tipo_intervencion))
-          .map(i => ({ ...i, hora_intervencion: i.hora_intervencion || ahoraHHMM() }));
-        actualizado.intervenciones = [...actualizado.intervenciones, ...nuevas];
-      }
-
-      return actualizado;
+    const resultado = aplicarDictado(reporteRef.current, secciones, dictadoRef.current, {
+      sesion: meta.sesion ?? 0,
+      hora: ahoraHHMM(),
+      ahora: new Date(),
+      hospitales: listaHospitales,
+      hospitalBloqueado: !!hospitalAceptado || !!hospitalSeleccionado
     });
 
-    const accion = meta.action || (acciones.includes('enviar_urgente') ? 'enviar_urgente'
-      : acciones.includes('enviar_completo') ? 'enviar_completo' : null);
-
-    if (accion === 'enviar_urgente') {
-      if (hospitalAceptado) setTimeout(() => enviarVersionRef.current?.(true), 800);
-      else mostrarNotificacion('Aún no hay hospital asignado.', 'warning');
-    } else if (accion === 'enviar_completo') {
-      if (hospitalAceptado) setTimeout(() => enviarVersionRef.current?.(false), 800);
-      else mostrarNotificacion('Aún no hay hospital asignado.', 'warning');
+    if (resultado.cambios.length > 0 || resultado.intervenciones.length > 0) {
+      reporteRef.current = aplicarCambios(reporteRef.current, resultado.cambios, resultado.intervenciones);
+      setReporte(prev => aplicarCambios(prev, resultado.cambios, resultado.intervenciones));
     }
-  }, [hospitalAceptado, setOcular, setVerbal, setMotor]);
+
+    if (resultado.glasgow) {
+      setOcular(resultado.glasgow.ocular);
+      setVerbal(resultado.glasgow.verbal);
+      setMotor(resultado.glasgow.motor);
+    }
+
+    if (resultado.hospitalId) setHospitalSeleccionado(resultado.hospitalId);
+  }, [hospitalAceptado, hospitalSeleccionado, listaHospitales, setOcular, setVerbal, setMotor]);
 
   const solicitarMedico = () => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
@@ -1099,6 +1070,8 @@ const ReportePaciente = () => {
               </div>
             </details>
           </form>
+
+          <ResumenDictado reporte={reporte} onChange={handleChange} onEliminarIntervencion={eliminarIntervencion} />
 
           <Outlet />
         </div>

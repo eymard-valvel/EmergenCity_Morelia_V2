@@ -1,5 +1,12 @@
-const MORELIA_CENTER = { lat: 19.7024, lng: -101.1969 };
-const MORELIA_BBOX = '-101.35,19.60,-101.05,19.80';
+const FALLBACK_REGION = {
+  lat: 19.7024,
+  lng: -101.1969,
+  city: 'Morelia',
+  state: 'Michoacán'
+};
+
+const REGION_CACHE_KEY = 'emergencity_detected_region_v1';
+const REGION_CACHE_TTL_MS = 30 * 60 * 1000;
 
 const CATEGORY_MAP = {
   cinema: 'CINE',
@@ -70,6 +77,159 @@ const GENERIC_PREFIXES = new Set([
   'tienda', 'restaurante', 'cine', 'hotel', 'escuela', 'universidad', 'banco'
 ]);
 
+const STATE_ABBR_MAP = {
+  pue: 'Puebla',
+  mich: 'Michoacán',
+  cdmx: 'Ciudad de México',
+  df: 'Ciudad de México',
+  edomex: 'Estado de México',
+  mex: 'Estado de México',
+  jal: 'Jalisco',
+  nl: 'Nuevo León',
+  gto: 'Guanajuato',
+  qro: 'Querétaro',
+  ver: 'Veracruz',
+  tlax: 'Tlaxcala',
+  mor: 'Morelia',
+  hgo: 'Hidalgo',
+  oax: 'Oaxaca',
+  chis: 'Chiapas',
+  tab: 'Tabasco',
+  yuc: 'Yucatán',
+  qroo: 'Quintana Roo',
+  slp: 'San Luis Potosí',
+  ags: 'Aguascalientes',
+  zac: 'Zacatecas',
+  dgo: 'Durango',
+  coah: 'Coahuila',
+  chih: 'Chihuahua',
+  son: 'Sonora',
+  sin: 'Sinaloa',
+  nay: 'Nayarit',
+  col: 'Colima',
+  gro: 'Guerrero',
+  camp: 'Campeche',
+  tamps: 'Tamaulipas',
+  bc: 'Baja California',
+  bcs: 'Baja California Sur'
+};
+
+function buildBboxFromCenter(lat, lng) {
+  const minLng = Number((lng - 0.20).toFixed(4));
+  const minLat = Number((lat - 0.16).toFixed(4));
+  const maxLng = Number((lng + 0.20).toFixed(4));
+  const maxLat = Number((lat + 0.16).toFixed(4));
+  return {
+    bboxStr: `${minLng},${minLat},${maxLng},${maxLat}`,
+    viewboxStr: `${minLng},${maxLat},${maxLng},${minLat}`
+  };
+}
+
+export function getCachedRegion() {
+  try {
+    const raw = sessionStorage.getItem(REGION_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && Number.isFinite(parsed.lat) && Number.isFinite(parsed.lng)) {
+      return {
+        ...parsed,
+        ...buildBboxFromCenter(parsed.lat, parsed.lng)
+      };
+    }
+  } catch (_) {}
+  return null;
+}
+
+function saveCachedRegion(region) {
+  try {
+    sessionStorage.setItem(REGION_CACHE_KEY, JSON.stringify({
+      ...region,
+      timestamp: Date.now()
+    }));
+  } catch (_) {}
+}
+
+export async function resolveRegionFromCoords(lat, lng, mapboxToken) {
+  let city = '';
+  let state = '';
+
+  if (mapboxToken) {
+    try {
+      const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${lng},${lat}.json?access_token=${mapboxToken}&types=place,region&language=es&limit=2`;
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        const features = data.features || [];
+        const placeFeat = features.find(f => f.place_type?.includes('place'));
+        const regionFeat = features.find(f => f.place_type?.includes('region'));
+        city = placeFeat?.text || '';
+        state = regionFeat?.text || '';
+        if (!state && placeFeat?.context) {
+          const ctxReg = placeFeat.context.find(c => c.id.startsWith('region'));
+          if (ctxReg) state = ctxReg.text;
+        }
+      }
+    } catch (_) {}
+  }
+
+  if (!city) {
+    try {
+      const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=jsonv2&zoom=10&accept-language=es`;
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        const addr = data.address || {};
+        city = addr.city || addr.town || addr.municipality || addr.county || '';
+        state = state || addr.state || '';
+      }
+    } catch (_) {}
+  }
+
+  const region = {
+    lat,
+    lng,
+    city: city || FALLBACK_REGION.city,
+    state: state || FALLBACK_REGION.state,
+    ...buildBboxFromCenter(lat, lng)
+  };
+  saveCachedRegion(region);
+  return region;
+}
+
+export async function detectCurrentRegion({ mapboxToken, fallbackCenter } = {}) {
+  const cached = getCachedRegion();
+  if (cached && cached.timestamp && Date.now() - cached.timestamp < REGION_CACHE_TTL_MS) {
+    return cached;
+  }
+
+  const getPosition = () =>
+    new Promise((resolve, reject) => {
+      if (typeof navigator === 'undefined' || !navigator.geolocation) {
+        reject(new Error('Geolocation unavailable'));
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+        (err) => reject(err),
+        { enableHighAccuracy: false, timeout: 5500, maximumAge: 300000 }
+      );
+    });
+
+  try {
+    const coords = await getPosition();
+    return await resolveRegionFromCoords(coords.lat, coords.lng, mapboxToken);
+  } catch (_) {
+    if (fallbackCenter && Number.isFinite(fallbackCenter.lat) && Number.isFinite(fallbackCenter.lng)) {
+      return await resolveRegionFromCoords(fallbackCenter.lat, fallbackCenter.lng, mapboxToken);
+    }
+    if (cached) return cached;
+    return {
+      ...FALLBACK_REGION,
+      ...buildBboxFromCenter(FALLBACK_REGION.lat, FALLBACK_REGION.lng)
+    };
+  }
+}
+
 export function getPlaceTypeLabel(type, source, categories = []) {
   const keys = [type, ...(Array.isArray(categories) ? categories : [categories])]
     .filter(Boolean)
@@ -105,6 +265,80 @@ function toTitleCase(str) {
       return lower.charAt(0).toUpperCase() + lower.slice(1);
     })
     .join(' ');
+}
+
+export function cleanMexicanAddress(rawAddress) {
+  let cleaned = String(rawAddress || '').trim();
+  if (!cleaned) return '';
+
+  cleaned = cleaned
+    .replace(/,?\s*zona sin asignaci[oó]n de nombre de col(?:onia)?\.?\s*\d*/gi, '')
+    .replace(/\bNte\.?(?=\s|,|$)/gi, 'Norte')
+    .replace(/\bOte\.?(?=\s|,|$)/gi, 'Oriente')
+    .replace(/\bPte\.?(?=\s|,|$)/gi, 'Poniente')
+    .replace(/\bAv\.?(?=\s)/gi, 'Avenida')
+    .replace(/\bBlvd\.?(?=\s)/gi, 'Boulevard')
+    .replace(/\bCalz\.?(?=\s)/gi, 'Calzada')
+    .replace(/\bProl\.?(?=\s)/gi, 'Prolongación')
+    .replace(/\bFracc?\.?(?=\s)/gi, 'Fraccionamiento')
+    .replace(/\bCol\.?(?=\s)/gi, 'Colonia')
+    .replace(/,\s*([A-Za-zÁÉÍÓÚÑáéíóúñ]{2,6})\.?\s*$/g, (_, abbr) => {
+      const key = normalizeText(abbr);
+      return STATE_ABBR_MAP[key] ? `, ${STATE_ABBR_MAP[key]}` : `, ${abbr}`;
+    })
+    .replace(/\s+,/g, ',')
+    .replace(/,\s*,+/g, ',')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return cleaned;
+}
+
+function parseAddressComponents(cleanedAddress) {
+  const parts = cleanedAddress.split(',').map(p => p.trim()).filter(Boolean);
+  const firstSegment = parts[0] || '';
+  const numMatch = firstSegment.match(/^(.*?)\s+(?:no\.?\s*|num\.?\s*|#\s*)?(\d+[a-zA-Z]?)(?:\s|$)/i);
+
+  const street = numMatch ? numMatch[1].trim() : firstSegment;
+  const houseNumber = numMatch ? numMatch[2].trim() : '';
+
+  const cpMatch = cleanedAddress.match(/\b(\d{5})\b/);
+  const postalCode = cpMatch ? cpMatch[1] : '';
+
+  let neighborhood = '';
+  let city = '';
+  let state = '';
+
+  for (let i = 1; i < parts.length; i++) {
+    const seg = parts[i];
+    const normSeg = normalizeText(seg);
+    if (!seg) continue;
+
+    if (postalCode && seg.includes(postalCode)) {
+      const withoutCp = seg.replace(postalCode, '').trim();
+      if (withoutCp && !city) city = withoutCp;
+      continue;
+    }
+
+    if (i === parts.length - 1 && parts.length >= 3) {
+      state = seg;
+      continue;
+    }
+
+    if (!neighborhood && (normSeg.startsWith('barrio') || normSeg.startsWith('colonia') || normSeg.startsWith('fraccionamiento') || normSeg.startsWith('unidad') || i === 1)) {
+      neighborhood = seg.replace(/^(?:colonia|col\.?)\s+/i, '').trim();
+      continue;
+    }
+
+    if (!city) {
+      city = seg;
+    }
+  }
+
+  if (normalizeText(city).includes('puebla')) city = 'Puebla';
+  if (normalizeText(city).includes('morelia')) city = 'Morelia';
+
+  return { street, houseNumber, postalCode, neighborhood, city, state };
 }
 
 function formatUniformPlaceName(rawName, street, colonia, isPOI) {
@@ -168,10 +402,193 @@ function isSameLocation(a, b) {
   return false;
 }
 
-async function fetchPhotonPOIs(query, proximity, signal, limit = 10) {
-  const lat = proximity?.lat || MORELIA_CENTER.lat;
-  const lng = proximity?.lng || MORELIA_CENTER.lng;
-  const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&lat=${lat}&lon=${lng}&bbox=${MORELIA_BBOX}&limit=${limit}`;
+export async function geocodeExactAddress(rawAddress, { mapboxToken, proximity, regionHint } = {}) {
+  const cleaned = cleanMexicanAddress(rawAddress);
+  if (!cleaned) return null;
+
+  const parsed = parseAddressComponents(cleaned);
+  const activeRegion = regionHint || getCachedRegion();
+  const effectiveCity = parsed.city || activeRegion?.city || '';
+  const effectiveState = parsed.state || activeRegion?.state || '';
+
+  const fullQuery = effectiveCity && !normalizeText(cleaned).includes(normalizeText(effectiveCity))
+    ? `${cleaned}, ${effectiveCity}${effectiveState ? `, ${effectiveState}` : ''}, México`
+    : `${cleaned}, México`;
+
+  const targetedStreetQuery = parsed.street
+    ? [
+        `${parsed.street}${parsed.houseNumber ? ` ${parsed.houseNumber}` : ''}`,
+        parsed.postalCode,
+        effectiveCity,
+        effectiveState,
+        'México'
+      ].filter(Boolean).join(', ')
+    : '';
+
+  const proxParam = proximity && Number.isFinite(proximity.lng) && Number.isFinite(proximity.lat)
+    ? `&proximity=${proximity.lng},${proximity.lat}`
+    : (activeRegion && !parsed.city ? `&proximity=${activeRegion.lng},${activeRegion.lat}` : '');
+
+  const candidates = [];
+  const tasks = [];
+
+  if (mapboxToken) {
+    const fetchMb = async (qStr, types, weightBonus) => {
+      if (!qStr) return;
+      const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(qStr)}.json?access_token=${mapboxToken}&country=mx&types=${types}&routing=true&language=es&limit=5${proxParam}`;
+      const res = await fetch(url);
+      if (!res.ok) return;
+      const data = await res.json();
+      (data.features || []).forEach((f, idx) => {
+        const routable = f.routable_points?.points?.[0]?.coordinates;
+        const coords = Array.isArray(routable) && routable.length >= 2 ? routable : f.center;
+        if (!coords) return;
+        candidates.push({
+          lat: coords[1],
+          lng: coords[0],
+          place_name: f.place_name || cleaned,
+          housenumber: f.address || '',
+          street: f.text || '',
+          postalCode: (f.context || []).find(c => c.id.startsWith('postcode'))?.text || '',
+          neighborhood: (f.context || []).find(c => c.id.startsWith('neighborhood') || c.id.startsWith('locality'))?.text || '',
+          city: (f.context || []).find(c => c.id.startsWith('place'))?.text || '',
+          placeType: f.place_type?.[0] || '',
+          relevance: f.relevance || 0,
+          weightBonus: weightBonus - idx * 3,
+          source: 'mapbox'
+        });
+      });
+    };
+
+    tasks.push(fetchMb(fullQuery, 'address,poi', 25).catch(() => {}));
+    if (targetedStreetQuery && targetedStreetQuery !== fullQuery) {
+      tasks.push(fetchMb(targetedStreetQuery, 'address', 30).catch(() => {}));
+    }
+  }
+
+  if (parsed.street) {
+    tasks.push((async () => {
+      const params = new URLSearchParams({
+        street: parsed.houseNumber ? `${parsed.houseNumber} ${parsed.street}` : parsed.street,
+        country: 'Mexico',
+        format: 'jsonv2',
+        addressdetails: '1',
+        limit: '5',
+        'accept-language': 'es'
+      });
+      if (parsed.postalCode) params.set('postalcode', parsed.postalCode);
+      if (effectiveCity) params.set('city', effectiveCity);
+      if (effectiveState) params.set('state', effectiveState);
+
+      const res = await fetch(`https://nominatim.openstreetmap.org/search?${params.toString()}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      (Array.isArray(data) ? data : []).forEach((item, idx) => {
+        const lat = parseFloat(item.lat);
+        const lng = parseFloat(item.lon);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+        const addr = item.address || {};
+        candidates.push({
+          lat,
+          lng,
+          place_name: item.display_name || cleaned,
+          housenumber: addr.house_number || '',
+          street: addr.road || '',
+          postalCode: addr.postcode || '',
+          neighborhood: addr.neighbourhood || addr.suburb || addr.quarter || '',
+          city: addr.city || addr.town || addr.municipality || '',
+          placeType: item.type || item.category || '',
+          relevance: 0.9,
+          weightBonus: 35 - idx * 3,
+          source: 'nominatim_structured'
+        });
+      });
+    })().catch(() => {}));
+  }
+
+  tasks.push((async () => {
+    const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(fullQuery)}&format=jsonv2&addressdetails=1&limit=5&accept-language=es`);
+    if (!res.ok) return;
+    const data = await res.json();
+    (Array.isArray(data) ? data : []).forEach((item, idx) => {
+      const lat = parseFloat(item.lat);
+      const lng = parseFloat(item.lon);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+      const addr = item.address || {};
+      candidates.push({
+        lat,
+        lng,
+        place_name: item.display_name || cleaned,
+        housenumber: addr.house_number || '',
+        street: addr.road || '',
+        postalCode: addr.postcode || '',
+        neighborhood: addr.neighbourhood || addr.suburb || addr.quarter || '',
+        city: addr.city || addr.town || addr.municipality || '',
+        placeType: item.type || item.category || '',
+        relevance: 0.85,
+        weightBonus: 20 - idx * 3,
+        source: 'nominatim'
+      });
+    });
+  })().catch(() => {}));
+
+  await Promise.all(tasks);
+  if (candidates.length === 0) return null;
+
+  const normStreetTokens = normalizeText(parsed.street).split(' ').filter(Boolean);
+  const normHouse = normalizeText(parsed.houseNumber);
+  const normNeighborhood = normalizeText(parsed.neighborhood);
+  const normCity = normalizeText(effectiveCity);
+
+  let best = null;
+  let bestScore = -Infinity;
+
+  for (const c of candidates) {
+    let score = (c.weightBonus || 0) + (c.relevance || 0) * 30;
+    const normCandFull = normalizeText(`${c.street} ${c.housenumber} ${c.place_name}`);
+    const normCandStreet = normalizeText(c.street || c.place_name);
+    const normCandHouse = normalizeText(c.housenumber);
+
+    if (normHouse) {
+      if (normCandHouse === normHouse) score += 160;
+      else if (new RegExp(`\\b${normHouse}\\b`).test(normCandFull)) score += 120;
+    }
+
+    if (normStreetTokens.length > 0) {
+      const matched = normStreetTokens.filter(t => normCandStreet.includes(t) || normCandFull.includes(t)).length;
+      score += (matched / normStreetTokens.length) * 110;
+    }
+
+    if (parsed.postalCode && String(c.postalCode || c.place_name).includes(parsed.postalCode)) {
+      score += 95;
+    }
+
+    if (normNeighborhood && normalizeText(`${c.neighborhood} ${c.place_name}`).includes(normNeighborhood)) {
+      score += 55;
+    }
+
+    if (normCity && normalizeText(`${c.city} ${c.place_name}`).includes(normCity)) {
+      score += 45;
+    }
+
+    if (['address', 'house', 'building', 'residential', 'yes'].includes(c.placeType)) {
+      score += 50;
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      best = c;
+    }
+  }
+
+  return best ? { lat: best.lat, lng: best.lng, place_name: best.place_name } : null;
+}
+
+async function fetchPhotonPOIs(query, proximity, region, signal, limit = 10) {
+  const lat = proximity?.lat || region.lat;
+  const lng = proximity?.lng || region.lng;
+  const { bboxStr } = buildBboxFromCenter(lat, lng);
+  const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&lat=${lat}&lon=${lng}&bbox=${bboxStr}&limit=${limit}`;
   const res = await fetch(url, { signal });
   if (!res.ok) return [];
   const data = await res.json();
@@ -187,7 +604,7 @@ async function fetchPhotonPOIs(query, proximity, signal, limit = 10) {
 
       const streetLine = [p.street, p.housenumber].filter(Boolean).join(' ');
       const colonia = p.district || p.suburb || p.locality || '';
-      const city = p.city || 'Morelia';
+      const city = p.city || region.city;
       const distNum = calcDistanceKm(lat, lng, fLat, fLng);
       const dist = distNum.toFixed(1);
 
@@ -221,38 +638,41 @@ async function fetchPhotonPOIs(query, proximity, signal, limit = 10) {
     .filter(Boolean);
 }
 
-async function fetchMapboxPlaces(query, proximity, mapboxToken, signal, mode, limit = 10) {
+async function fetchMapboxPlaces(query, proximity, region, mapboxToken, signal, mode, limit = 10) {
   if (!mapboxToken) return [];
-  const lat = proximity?.lat || MORELIA_CENTER.lat;
-  const lng = proximity?.lng || MORELIA_CENTER.lng;
+  const lat = proximity?.lat || region.lat;
+  const lng = proximity?.lng || region.lng;
+  const { bboxStr } = buildBboxFromCenter(lat, lng);
   const types = mode === 'address-only'
     ? 'address,place,locality,neighborhood'
     : mode === 'poi-only'
       ? 'poi'
       : 'poi,address,place,locality,neighborhood';
 
-  const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?access_token=${mapboxToken}&country=mx&bbox=${MORELIA_BBOX}&proximity=${lng},${lat}&types=${types}&language=es&limit=${limit}`;
+  const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?access_token=${mapboxToken}&country=mx&bbox=${bboxStr}&proximity=${lng},${lat}&types=${types}&routing=true&language=es&limit=${limit}`;
   const res = await fetch(url, { signal });
   if (!res.ok) return [];
   const data = await res.json();
 
   return (data.features || []).map((f) => {
-    const [fLng, fLat] = f.center;
+    const routable = f.routable_points?.points?.[0]?.coordinates;
+    const [fLng, fLat] = Array.isArray(routable) && routable.length >= 2 ? routable : f.center;
     const isPOI = f.place_type?.includes('poi');
     const neighborhoodCtx = (f.context || []).find(c => c.id.startsWith('neighborhood') || c.id.startsWith('locality'));
     const placeCtx = (f.context || []).find(c => c.id.startsWith('place'));
     const colonia = neighborhoodCtx?.text || '';
-    const addressLine = f.properties?.address || '';
+    const streetNum = f.address || '';
+    const addressLine = [f.properties?.address || (!isPOI ? f.text : ''), streetNum].filter(Boolean).join(' ');
     const distNum = calcDistanceKm(lat, lng, fLat, fLng);
     const dist = distNum.toFixed(1);
 
-    const rawName = f.text || f.place_name;
+    const rawName = !isPOI && streetNum ? `${f.text} ${streetNum}` : (f.text || f.place_name);
     const uniformName = formatUniformPlaceName(rawName, addressLine, colonia, isPOI);
 
     const subtitleParts = [
-      addressLine,
+      addressLine && addressLine !== rawName ? addressLine : '',
       colonia ? `Col. ${colonia}` : '',
-      placeCtx?.text || 'Morelia',
+      placeCtx?.text || region.city,
       `a ${dist} km`
     ].filter(Boolean);
 
@@ -270,10 +690,16 @@ async function fetchMapboxPlaces(query, proximity, mapboxToken, signal, mode, li
   });
 }
 
-async function fetchNominatimPOIs(query, proximity, signal) {
-  const lat = proximity?.lat || MORELIA_CENTER.lat;
-  const lng = proximity?.lng || MORELIA_CENTER.lng;
-  const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(`${query} Morelia`)}&format=jsonv2&addressdetails=1&viewbox=-101.35,19.80,-101.05,19.60&bounded=1&limit=8&accept-language=es`;
+async function fetchNominatimPOIs(query, proximity, region, signal) {
+  const lat = proximity?.lat || region.lat;
+  const lng = proximity?.lng || region.lng;
+  const { viewboxStr } = buildBboxFromCenter(lat, lng);
+  const cityLabel = region.city || '';
+  const searchQuery = cityLabel && !normalizeText(query).includes(normalizeText(cityLabel))
+    ? `${query} ${cityLabel}`
+    : query;
+
+  const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(searchQuery)}&format=jsonv2&addressdetails=1&viewbox=${viewboxStr}&bounded=1&limit=8&accept-language=es`;
   const res = await fetch(url, { signal });
   if (!res.ok) return [];
   const data = await res.json();
@@ -285,20 +711,20 @@ async function fetchNominatimPOIs(query, proximity, signal) {
       if (!Number.isFinite(fLat) || !Number.isFinite(fLng)) return null;
 
       const addr = item.address || {};
-      const rawName = item.name || addr.amenity || addr.shop || addr.building || item.display_name?.split(',')[0];
+      const streetWithNum = [addr.road, addr.house_number].filter(Boolean).join(' ');
+      const rawName = item.name || streetWithNum || addr.amenity || addr.shop || addr.building || item.display_name?.split(',')[0];
       if (!rawName) return null;
 
-      const streetLine = [addr.road, addr.house_number].filter(Boolean).join(' ');
       const colonia = addr.neighbourhood || addr.suburb || addr.quarter || '';
       const distNum = calcDistanceKm(lat, lng, fLat, fLng);
       const dist = distNum.toFixed(1);
-      const isPOI = Boolean(item.name && item.category && !['highway', 'place', 'boundary'].includes(item.category));
+      const isPOI = Boolean(item.name && item.category && !['highway', 'place', 'boundary', 'building'].includes(item.category));
 
-      const uniformName = formatUniformPlaceName(rawName, streetLine, colonia, isPOI);
+      const uniformName = formatUniformPlaceName(rawName, streetWithNum, colonia, isPOI);
       const subtitleParts = [
-        streetLine && streetLine !== rawName ? streetLine : '',
+        streetWithNum && streetWithNum !== rawName ? streetWithNum : '',
         colonia ? `Col. ${colonia}` : '',
-        'Morelia',
+        addr.city || addr.town || cityLabel,
         `a ${dist} km`
       ].filter(Boolean);
 
@@ -346,26 +772,35 @@ function scoreAndSort(items, normQuery, tokens) {
     .map(({ _distKm, _score, _allMatched, ...clean }) => clean);
 }
 
-export async function searchPlaces(query, { proximity, mapboxToken, signal, mode = 'all' } = {}) {
-  const cleanQuery = (query || '').trim();
-  if (cleanQuery.length < 2) return { addresses: [], places: [] };
+export async function searchPlaces(query, { proximity, mapboxToken, signal, mode = 'all', region } = {}) {
+  const rawInput = (query || '').trim();
+  if (rawInput.length < 2) return { addresses: [], places: [] };
+
+  const cleanQuery = cleanMexicanAddress(rawInput);
+  const activeRegion = region || getCachedRegion() || {
+    ...FALLBACK_REGION,
+    ...buildBboxFromCenter(FALLBACK_REGION.lat, FALLBACK_REGION.lng)
+  };
 
   const normQuery = normalizeText(cleanQuery);
   const tokens = normQuery.split(' ').filter(Boolean);
-  const hasMultiWord = mode !== 'address-only' && tokens.length >= 2;
+  const hasDigits = /\d/.test(cleanQuery);
+  const hasMultiWord = mode !== 'address-only' && !hasDigits && tokens.length >= 2;
   const primaryQuery = hasMultiWord
     ? (GENERIC_PREFIXES.has(tokens[0]) ? tokens.slice(0, 2).join(' ') : tokens[0])
     : cleanQuery;
 
   const tasks = [
-    mode === 'address-only' ? Promise.resolve([]) : fetchPhotonPOIs(cleanQuery, proximity, signal, 10).catch(() => []),
-    fetchMapboxPlaces(cleanQuery, proximity, mapboxToken, signal, mode, 10).catch(() => [])
+    mode === 'address-only' ? Promise.resolve([]) : fetchPhotonPOIs(cleanQuery, proximity, activeRegion, signal, 10).catch(() => []),
+    fetchMapboxPlaces(cleanQuery, proximity, activeRegion, mapboxToken, signal, mode, 10).catch(() => [])
   ];
 
-  if (hasMultiWord && primaryQuery !== normQuery) {
-    tasks.push(fetchPhotonPOIs(primaryQuery, proximity, signal, 15).catch(() => []));
-    tasks.push(fetchMapboxPlaces(primaryQuery, proximity, mapboxToken, signal, 'poi-only', 10).catch(() => []));
-    tasks.push(fetchNominatimPOIs(cleanQuery, proximity, signal).catch(() => []));
+  if (hasDigits) {
+    tasks.push(fetchNominatimPOIs(cleanQuery, proximity, activeRegion, signal).catch(() => []));
+  } else if (hasMultiWord && primaryQuery !== normQuery) {
+    tasks.push(fetchPhotonPOIs(primaryQuery, proximity, activeRegion, signal, 15).catch(() => []));
+    tasks.push(fetchMapboxPlaces(primaryQuery, proximity, activeRegion, mapboxToken, signal, 'poi-only', 10).catch(() => []));
+    tasks.push(fetchNominatimPOIs(cleanQuery, proximity, activeRegion, signal).catch(() => []));
   }
 
   const resultsArrays = await Promise.all(tasks);

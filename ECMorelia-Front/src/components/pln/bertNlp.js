@@ -1,33 +1,18 @@
-import { VOCABULARIO, COMANDOS } from './glosario';
+import { COMANDOS } from './glosario';
 
 export const CLAVE_OPCION = 'emergencity_bert';
 
-const MODELOS = {
-  sentimiento: 'Xenova/distilbert-base-multilingual-cased-sentiments-student',
-  similaridad: 'Xenova/multilingual-e5-small',
-  ner: 'Xenova/bert-base-multilingual-cased-ner-hrl'
-};
-
-const TAREAS = {
-  sentimiento: 'text-classification',
-  similaridad: 'feature-extraction',
-  ner: 'token-classification'
-};
-
-const PLANTILLAS_SECCION = {
-  motivo: 'El motivo de urgencia o motivo de consulta es un dolor que presenta el paciente al acudir',
-  signos: 'Los signos vitales del paciente son frecuencia cardiaca, frecuencia respiratoria, tension arterial, saturacion y temperatura',
-  glasgow: 'La escala de coma de Glasgow mide apertura ocular, respuesta verbal y respuesta motora con un total de puntos',
-  lesiones: 'El paciente presenta una lesion descrita como herida, fractura, trauma o quemadura',
-  intervenciones: 'Se le administro oxigeno, se coloco via intravenosa, se realizaron maniobras rcp e inmovilizacion',
-  demografia: 'Los datos del paciente son nombre, edad en anos y sexo masculino o femenino',
-  destino: 'El paciente se traslada a un hospital destino de la ciudad para su atencion'
-};
+const MODELO = 'Xenova/multilingual-e5-small';
+const UMBRAL_COMANDO = 0.88;
+const MARGEN_COMANDO = 0.03;
+const MAX_PALABRAS_COMANDO = 7;
 
 let modulo = null;
-let cargaEnCurso = null;
-const pipelines = {};
-const fallos = {};
+let cargaModulo = null;
+let pipelineSimilaridad = null;
+let cargaPipeline = null;
+let fallo = false;
+const cacheEmbeddings = new Map();
 
 function enNavegador() {
   return typeof window !== 'undefined' && typeof localStorage !== 'undefined';
@@ -44,10 +29,7 @@ function esClienteLigero() {
 
 export function bertHabilitado() {
   if (!enNavegador()) return false;
-  const guardado = localStorage.getItem(CLAVE_OPCION);
-  if (guardado === '0') return false;
-  if (guardado === '1') return true;
-  return !esClienteLigero();
+  return localStorage.getItem(CLAVE_OPCION) === '1';
 }
 
 export function setBertOpcion(activo) {
@@ -60,232 +42,104 @@ export function getEstadoBert() {
   return {
     habilitado,
     ligero: esClienteLigero(),
-    cargando: !!(cargaEnCurso || Object.keys(pipelines).length === 0) && habilitado,
-    listo: Object.keys(pipelines).length > 0,
-    modelos: {
-      sentimiento: !!pipelines.sentimiento,
-      similaridad: !!pipelines.similaridad,
-      ner: !!pipelines.ner
-    },
-    fallos: { ...fallos }
+    cargando: habilitado && !!cargaPipeline,
+    listo: !!pipelineSimilaridad,
+    modelos: { sentimiento: false, similaridad: !!pipelineSimilaridad, ner: false },
+    fallos: fallo ? { similaridad: true } : {}
   };
 }
 
-async function cargarModulo() {
-  if (modulo) return modulo;
-  if (!cargaEnCurso) {
-    cargaEnCurso = import('@huggingface/transformers')
-      .then((m) => {
-        modulo = m;
-        return m;
-      })
-      .finally(() => {
-        cargaEnCurso = null;
-      });
+async function obtenerPipeline() {
+  if (pipelineSimilaridad) return pipelineSimilaridad;
+  if (fallo) return null;
+  if (!cargaPipeline) {
+    cargaPipeline = (async () => {
+      try {
+        if (!modulo) {
+          cargaModulo = cargaModulo || import('@huggingface/transformers');
+          modulo = await cargaModulo;
+        }
+        pipelineSimilaridad = await modulo.pipeline('feature-extraction', MODELO, {});
+        return pipelineSimilaridad;
+      } catch (_) {
+        fallo = true;
+        return null;
+      } finally {
+        cargaPipeline = null;
+      }
+    })();
   }
-  return cargaEnCurso;
+  return cargaPipeline;
 }
 
-async function obtenerPipeline(tarea) {
-  if (pipelines[tarea]) return pipelines[tarea];
-  if (fallos[tarea]) return null;
-  try {
-    const { pipeline } = await cargarModulo();
-    pipelines[tarea] = await pipeline(TAREAS[tarea], MODELOS[tarea], {});
-    return pipelines[tarea];
-  } catch (_) {
-    fallos[tarea] = true;
-    return null;
-  }
-}
-
-function productoPunto(a, b) {
+const productoPunto = (a, b) => {
   let suma = 0;
   for (let i = 0; i < a.length; i++) suma += a[i] * b[i];
   return suma;
-}
-
-function norma(v) {
-  return Math.sqrt(productoPunto(v, v));
-}
+};
 
 export function coseno(a, b) {
   if (!a || !b || a.length === 0 || a.length !== b.length) return 0;
-  const na = norma(a);
-  const nb = norma(b);
+  const na = Math.sqrt(productoPunto(a, a));
+  const nb = Math.sqrt(productoPunto(b, b));
   if (na === 0 || nb === 0) return 0;
   return productoPunto(a, b) / (na * nb);
 }
 
 async function obtenerEmbedding(texto, prefijo) {
-  const pipe = await obtenerPipeline('similaridad');
+  const llave = `${prefijo}${texto}`;
+  if (cacheEmbeddings.has(llave)) return cacheEmbeddings.get(llave);
+  const pipe = await obtenerPipeline();
   if (!pipe) return null;
-  const salida = await pipe((prefijo || '') + texto, {
-    pooling: 'mean',
-    normalize: true
-  });
-  return Array.from(salida.data);
-}
-
-async function analizarSentimiento(texto) {
-  const pipe = await obtenerPipeline('sentimiento');
-  if (!pipe) return null;
-  const [resultado] = await pipe(texto.substring(0, 400));
-  const etiqueta = (resultado.label || '').toLowerCase();
-  const traduccion = {
-    positive: 'positivo',
-    neutral: 'neutro',
-    negative: 'negativo'
-  };
-  return {
-    valor: traduccion[etiqueta] || etiqueta || 'neutro',
-    label: etiqueta,
-    confianza: Math.round((resultado.score || 0) * 1000) / 1000
-  };
-}
-
-async function confianzaPorSeccion(texto) {
-  const pipe = await obtenerPipeline('similaridad');
-  if (!pipe) return null;
-  const vectorTexto = await obtenerEmbedding(texto, 'query: ');
-  if (!vectorTexto) return null;
-
-  const resultado = {};
-  let principal = null;
-  let max = -1;
-
-  for (const [seccion, plantilla] of Object.entries(PLANTILLAS_SECCION)) {
-    const vectorPlantilla = await obtenerEmbedding(plantilla, 'passage: ');
-    const similitud = coseno(vectorTexto, vectorPlantilla);
-    resultado[seccion] = Math.round(similitud * 1000) / 1000;
-    if (similitud > max) {
-      max = similitud;
-      principal = seccion;
-    }
-  }
-
-  return { confianza: resultado, principal };
-}
-
-async function extraerEntidadesNER(texto) {
-  const pipe = await obtenerPipeline('ner');
-  if (!pipe) return null;
-  const resultado = await pipe(texto.substring(0, 500), { aggregation_strategy: 'simple' });
-  const personas = [];
-  const ubicaciones = [];
-  const organizaciones = [];
-  const fechas = [];
-
-  for (const entidad of resultado || []) {
-    if (!entidad.entity_group || (entidad.score || 0) < 0.6) continue;
-    const palabra = (entidad.word || '').replace(/^##/, '');
-    const etiqueta = entidad.entity_group;
-    if (etiqueta === 'PER') personas.push(palabra);
-    else if (etiqueta === 'LOC') ubicaciones.push(palabra);
-    else if (etiqueta === 'ORG') organizaciones.push(palabra);
-    else if (etiqueta === 'DATE') fechas.push(palabra);
-  }
-
-  return {
-    nombres: [...new Set(personas)],
-    ubicaciones: [...new Set(ubicaciones)],
-    organizaciones: [...new Set(organizaciones)],
-    fechas: [...new Set(fechas)]
-  };
-}
-
-function entidadesMedicas(texto) {
-  const encontradas = [];
-  for (const [clave, sinonimos] of Object.entries(VOCABULARIO)) {
-    for (const sinonimo of sinonimos) {
-      const regex = new RegExp(`\\b${sinonimo}\\b`, 'i');
-      if (regex.test(texto)) {
-        encontradas.push(clave);
-        break;
-      }
-    }
-  }
-  return [...new Set(encontradas)];
+  const salida = await pipe(llave, { pooling: 'mean', normalize: true });
+  const vector = Array.from(salida.data);
+  cacheEmbeddings.set(llave, vector);
+  return vector;
 }
 
 export async function encontrarSimilares(frase, candidatas, tope) {
-  const pipe = await obtenerPipeline('similaridad');
-  if (!pipe) return [];
   const vectorFrase = await obtenerEmbedding(frase, 'query: ');
   if (!vectorFrase) return [];
-
-  const conSimilitud = [];
+  const resultado = [];
   for (const candidata of candidatas) {
-    const vectorCandidata = await obtenerEmbedding(candidata, 'passage: ');
-    conSimilitud.push({
-      texto: candidata,
-      similitud: Math.round(coseno(vectorFrase, vectorCandidata) * 1000) / 1000
-    });
+    const vector = await obtenerEmbedding(candidata, 'passage: ');
+    if (!vector) continue;
+    resultado.push({ texto: candidata, similitud: Math.round(coseno(vectorFrase, vector) * 1000) / 1000 });
   }
-
-  conSimilitud.sort((a, b) => b.similitud - a.similitud);
-  if (tope && tope > 0) return conSimilitud.slice(0, tope);
-  return conSimilitud;
+  resultado.sort((a, b) => b.similitud - a.similitud);
+  return tope && tope > 0 ? resultado.slice(0, tope) : resultado;
 }
 
 export async function detectarComandoSemantico(texto) {
-  const frasesTotal = [];
-  for (const sinonimos of Object.values(COMANDOS)) {
-    frasesTotal.push(...sinonimos);
+  if (!bertHabilitado() || !texto) return null;
+  if (texto.trim().split(/\s+/).length > MAX_PALABRAS_COMANDO) return null;
+  const frases = Object.values(COMANDOS).flat();
+  const similares = await encontrarSimilares(texto, frases, 2);
+  if (!similares.length || similares[0].similitud < UMBRAL_COMANDO) return null;
+  if (similares[1] && similares[0].similitud - similares[1].similitud < MARGEN_COMANDO) {
+    const accionA = accionDe(similares[0].texto);
+    const accionB = accionDe(similares[1].texto);
+    if (accionA !== accionB) return null;
   }
-  const similares = await encontrarSimilares(texto, frasesTotal, 1);
-  if (similares.length > 0 && similares[0].similitud > 0.55) {
-    const encontrada = similares[0].texto;
-    for (const [accion, frases] of Object.entries(COMANDOS)) {
-      if (frases.includes(encontrada)) return accion;
-    }
-  }
+  return accionDe(similares[0].texto);
+}
+
+function accionDe(frase) {
+  for (const [accion, frases] of Object.entries(COMANDOS)) if (frases.includes(frase)) return accion;
   return null;
 }
 
-export async function enriquecer(texto, resultadoBase, opciones) {
+export async function enriquecer(texto, resultadoBase) {
   if (!bertHabilitado() || !texto || !texto.trim()) {
     return { ...resultadoBase, bert: { habilitado: false, fuentes: ['regex'] } };
   }
-
-  const usaLigero = esClienteLigero();
-  const usarNer = opciones?.ner !== false && !usaLigero;
-  const textoRecortado = texto.trim();
-
-  const tareas = [
-    analizarSentimiento(textoRecortado),
-    confianzaPorSeccion(textoRecortado)
-  ];
-  if (usarNer) tareas.push(extraerEntidadesNER(textoRecortado));
-
-  const [sentimiento, secciones, entidadesNER] = await Promise.all(tareas);
-
-  const entidades = {
-    ...(entidadesNER || { nombres: [], ubicaciones: [], organizaciones: [], fechas: [] }),
-    medicas: entidadesMedicas(textoRecortado)
-  };
-
-  const comando = await detectarComandoSemantico(textoRecortado);
-
+  const comando = await detectarComandoSemantico(texto);
   const fuentes = [...new Set([...(resultadoBase?.nlpFuentes || []), 'bert'])];
-  if (fallos.similaridad) fuentes.push('sin_similaridad');
-  if (fallos.sentimiento) fuentes.push('sin_sentimiento');
-  if (fallos.ner) fuentes.push('sin_ner');
-
+  if (fallo) fuentes.push('sin_similaridad');
   return {
     ...resultadoBase,
-    acciones: comando && !(resultadoBase?.acciones || []).includes(comando)
-      ? [...(resultadoBase?.acciones || []), comando]
-      : (resultadoBase?.acciones || []),
+    acciones: comando && !(resultadoBase?.acciones || []).includes(comando) ? [...(resultadoBase?.acciones || []), comando] : resultadoBase?.acciones || [],
     nlpFuentes: fuentes,
-    bert: {
-      habilitado: true,
-      ligero: usaLigero,
-      sentimiento,
-      seccionPrincipal: secciones?.principal || null,
-      confianzaSecciones: secciones?.confianza || {},
-      entidades,
-      comandoSemantico: comando
-    }
+    bert: { habilitado: true, ligero: esClienteLigero(), comandoSemantico: comando }
   };
 }

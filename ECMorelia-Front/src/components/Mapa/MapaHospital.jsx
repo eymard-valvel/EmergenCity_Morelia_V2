@@ -7,6 +7,7 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../auth/useAuth.js";
 import { deleteCookie } from "../../helpers/cookies.js";
 import { resolveWsUrl } from "../../helpers/wsUrl.js";
+import { geocodeExactAddress, detectCurrentRegion, getCachedRegion } from "../../helpers/placeSearch.js";
 import logo from "../img/Logo.png";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db, upsertReport, upsertManyReports, clearEmergencyDB } from "../db/emergencyDB";
@@ -139,6 +140,7 @@ export default function MapaHospitalOptimizado() {
   const sidebarWidth = isMobile ? "100%" : isTablet ? "400px" : "480px";
 
   const [hospitalInfo, setHospitalInfo] = useState(null);
+  const [detectedRegion, setDetectedRegion] = useState(() => getCachedRegion());
   const [ambulances, setAmbulances] = useState([]);
   const [wsConnected, setWsConnected] = useState(false);
   const [activeRoutes, setActiveRoutes] = useState([]);
@@ -222,21 +224,13 @@ export default function MapaHospitalOptimizado() {
     return () => clearTimeout(timer);
   }, [pdfExportReport, exportarElementoAPDF]);
 
-  const geocodeHospitalAddress = useCallback(async (address) => {
+  const geocodeHospitalAddress = useCallback(async (address, regionHint) => {
     if (!address || address.trim() === '') return null;
     try {
-      const q = encodeURIComponent(`${address.trim()}, Morelia, Michoacán, México`);
-      const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${q}.json?access_token=${mapboxgl.accessToken}&country=mx&types=address,poi,place&limit=1&language=es`;
-      const res = await fetch(url);
-      if (!res.ok) return null;
-      const data = await res.json();
-      const feature = data.features?.[0];
-      if (!feature) return null;
-      return {
-        lat: feature.center[1],
-        lng: feature.center[0],
-        place_name: feature.place_name
-      };
+      return await geocodeExactAddress(address, {
+        mapboxToken: mapboxgl.accessToken,
+        regionHint
+      });
     } catch (err) {
       console.warn('Geocoding falló:', err.message);
       return null;
@@ -270,6 +264,15 @@ export default function MapaHospitalOptimizado() {
           return;
         }
 
+        const fallbackCoords = stored.lat && stored.lng ? { lat: stored.lat, lng: stored.lng } : null;
+        const region = await detectCurrentRegion({
+          mapboxToken: mapboxgl.accessToken,
+          fallbackCenter: fallbackCoords
+        });
+        if (isMounted.current && region) {
+          setDetectedRegion(region);
+        }
+
         const beds = JSON.parse(localStorage.getItem('hospitalBeds') || 'null');
 
         const h = {
@@ -284,19 +287,25 @@ export default function MapaHospitalOptimizado() {
           telefono: stored.telefono || ''
         };
 
-        if ((!h.lat || !h.lng) && h.direccion) {
-          const geo = await geocodeHospitalAddress(h.direccion);
+        const needsGeocode = h.direccion && (!h.lat || !h.lng || stored.geocodePrecision !== 'exact_v2');
+        if (needsGeocode) {
+          const geo = await geocodeHospitalAddress(h.direccion, region);
           if (geo) {
             h.lat = geo.lat;
             h.lng = geo.lng;
-            const updated = { ...stored, lat: geo.lat, lng: geo.lng, direccion: geo.place_name || stored.direccion };
+            const updated = {
+              ...stored,
+              lat: geo.lat,
+              lng: geo.lng,
+              geocodePrecision: 'exact_v2'
+            };
             localStorage.setItem('hospitalInfo', JSON.stringify(updated));
           }
         }
 
         if (!h.lat || !h.lng) {
-          h.lat = 19.7024;
-          h.lng = -101.1969;
+          h.lat = region?.lat || 19.7024;
+          h.lng = region?.lng || -101.1969;
         }
 
         if (isMounted.current) {
@@ -601,7 +610,7 @@ export default function MapaHospitalOptimizado() {
       container: mapContainer.current,
       style: 'mapbox://styles/mapbox/dark-v11',
       center: [hospitalInfo.lng, hospitalInfo.lat],
-      zoom: 15,
+      zoom: 16,
       pitch: 45
     });
 
@@ -1097,6 +1106,7 @@ export default function MapaHospitalOptimizado() {
     const hasEvaluacion = hasValue(reporteData.paciente?.motivo_urgencia) || hasValue(reporteData.paciente?.descripcion_lesion);
     const intervencionesValidas = (reporteData.intervenciones || []).filter(iv => hasValue(iv.tipo_intervencion) || hasValue(iv.descripcion));
     const observacionesLimpias = limpiarTexto(reporteData.paciente?.observaciones);
+    const activeCityTitle = (detectedRegion?.city || 'MORELIA').toUpperCase();
 
     return (
       <Box ref={refTarget} p={5} bg="#ffffff" color="#0f172a" fontFamily="system-ui, -apple-system, sans-serif">
@@ -1108,7 +1118,7 @@ export default function MapaHospitalOptimizado() {
               </Box>
               <Box>
                 <Text fontSize="19px" fontWeight="900" color="#0c4a6e" letterSpacing="1px" lineHeight="1.1">
-                  EMERGENCITY MORELIA
+                  EMERGENCITY
                 </Text>
                 <Text fontSize="11px" fontWeight="800" color="#0284c7" letterSpacing="1px">
                   REPORTE DE ATENCIÓN PREHOSPITALARIA

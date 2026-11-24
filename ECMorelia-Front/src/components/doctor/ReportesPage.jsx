@@ -394,7 +394,7 @@ const ReportesPage = () => {
                         </Box>
                         <Box>
                           <Text fontSize="22px" fontWeight="900" color="#0c4a6e" letterSpacing="1px" lineHeight="1.1">
-                            EMERGENCITY MORELIA
+                            EMERGENCITY
                           </Text>
                           <Text fontSize="12px" fontWeight="800" color="#0284c7" letterSpacing="1px">
                             REPORTE DE ATENCIÓN PREHOSPITALARIA

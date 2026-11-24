@@ -1,64 +1,65 @@
-// src/pln/nlpService.js
-// Orquesta el parser local con el backend opcional.
-// El parser local siempre se ejecuta porque es rápido y confiable.
-// El backend (si existe) se usa para enriquecer el resultado.
-
 import { parseTextLocal } from './localParser';
 import { enriquecer } from './bertNlp';
 
 export { getEstadoBert, setBertOpcion } from './bertNlp';
 
 const API_URL = import.meta.env.VITE_API || 'http://localhost:3000/api';
+const TIMEOUT_MS = 2500;
+const PAUSA_FALLO_MS = 60000;
 
-export async function parseText(text) {
-  if (!text || !text.trim()) {
-    return {
-      secciones: {},
-      acciones: [],
-      seccionesCompletas: [],
-      textoNormalizado: '',
-      textoOriginal: '',
-      nlpFuentes: []
-    };
-  }
+let backendPausadoHasta = 0;
 
-  // Parser local primero: siempre disponible, sin latencia de red
-  const local = parseTextLocal(text);
+const vacio = () => ({
+  secciones: {},
+  acciones: [],
+  seccionesCompletas: [],
+  textoNormalizado: '',
+  textoOriginal: '',
+  nlpFuentes: []
+});
 
-  // Si el backend está disponible, intentar enriquecer con NER/ML
+async function consultarBackend(local, text) {
+  if (Date.now() < backendPausadoHasta) return null;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 2500);
-
     const response = await fetch(`${API_URL}/nlp/parse`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: local.textoNormalizado || text }),
+      body: JSON.stringify({ text: local.textoNormalizado || text, textoOriginal: text }),
       signal: controller.signal
     });
-
-    clearTimeout(timeout);
-
-    if (response.ok) {
-      const backend = await response.json();
-      // Fusionar: el resultado local gana en campos que ya extrajo,
-      // el backend rellena los vacíos.
-      try {
-        return fusionarResultados(local, backend);
-      } catch (e) {
-        // Si la fusión falla, preferir el mejor resultado disponible
-        return local;
-      }
+    if (!response.ok) {
+      backendPausadoHasta = Date.now() + PAUSA_FALLO_MS;
+      return null;
     }
+    return await response.json();
   } catch (_) {
-    // Silencioso: el parser local ya cubre el caso
+    backendPausadoHasta = Date.now() + PAUSA_FALLO_MS;
+    return null;
+  } finally {
+    clearTimeout(timeout);
   }
+}
 
-  return local;
+export async function parseText(text, opciones = {}) {
+  if (!text || !text.trim()) return vacio();
+
+  const local = parseTextLocal(text);
+  if (opciones.backend === false) return local;
+
+  const backend = await consultarBackend(local, text);
+  if (!backend) return local;
+
+  try {
+    return fusionarResultados(local, backend);
+  } catch (_) {
+    return local;
+  }
 }
 
 export async function parseTextConBert(text, opciones) {
-  const base = await parseText(text);
+  const base = await parseText(text, opciones);
   return enriquecer(base.textoNormalizado || text, base, opciones);
 }
 
@@ -80,9 +81,7 @@ function mapearFormatoMedico(backend, localBase) {
     const sv = {};
     const src = backend.signos_vitales;
     for (const k of ['frecuencia_cardiaca', 'frecuencia_respiratoria', 'tension_arterial', 'saturacion_oxigeno', 'temperatura']) {
-      if (src[k] !== undefined && src[k] !== '') {
-        sv[k] = src[k];
-      }
+      if (src[k] !== undefined && src[k] !== '') sv[k] = src[k];
     }
     if (Object.keys(sv).length > 0) secciones.signos = sv;
   }
@@ -90,9 +89,7 @@ function mapearFormatoMedico(backend, localBase) {
   if (!secciones.glasgow && backend.glasgow) {
     const g = {};
     for (const k of ['ocular', 'verbal', 'motor', 'total']) {
-      if (backend.glasgow[k] !== undefined && backend.glasgow[k] !== null) {
-        g[k] = backend.glasgow[k];
-      }
+      if (backend.glasgow[k] !== undefined && backend.glasgow[k] !== null) g[k] = backend.glasgow[k];
     }
     if (Object.keys(g).length > 0) secciones.glasgow = g;
   }
@@ -106,63 +103,63 @@ function mapearFormatoMedico(backend, localBase) {
   }
 
   if (!secciones.intervenciones && Array.isArray(backend.intervenciones) && backend.intervenciones.length > 0) {
-    secciones.intervenciones = backend.intervenciones.filter(iv => iv && iv.tipo_intervencion);
+    secciones.intervenciones = backend.intervenciones.filter((iv) => iv && iv.tipo_intervencion);
   }
-
-  const acciones = [...new Set([...(backend.acciones || []), ...(localBase?.acciones || [])])];
-  const seccionesCompletas = [...new Set([...(backend.seccionesCompletas || []), ...(localBase?.seccionesCompletas || [])])];
 
   return {
     secciones,
-    acciones,
-    seccionesCompletas,
+    acciones: [...new Set([...(backend.acciones || []), ...(localBase?.acciones || [])])],
+    seccionesCompletas: [...new Set([...(backend.seccionesCompletas || []), ...(localBase?.seccionesCompletas || [])])],
     textoNormalizado: backend.textoNormalizado || localBase?.textoNormalizado || '',
     textoOriginal: backend.textoOriginal || localBase?.textoOriginal || '',
     nlpFuentes: Array.from(new Set([...(backend.nlpFuentes || []), 'local']))
   };
 }
 
+const esVacio = (v) => v === '' || v === null || v === undefined || (Array.isArray(v) && v.length === 0);
+
 function fusionarResultados(local, backend) {
-  const backendEsMedico = !!(backend && (backend.paciente || backend.signos_vitales || backend.motivo_urgencia || backend.descripcion_lesion || backend.intervenciones));
-  const backendNormalizado = backendEsMedico ? mapearFormatoMedico(backend, local) : {
-    secciones: backend.secciones || {},
-    acciones: backend.acciones || [],
-    seccionesCompletas: backend.seccionesCompletas || [],
-    textoNormalizado: backend.textoNormalizado || local.textoNormalizado,
-    textoOriginal: backend.textoOriginal || local.textoOriginal,
-    nlpFuentes: Array.from(new Set([...(backend.nlpFuentes || []), 'local']))
-  };
+  const backendEsMedico = !!(
+    backend &&
+    (backend.paciente || backend.signos_vitales || backend.motivo_urgencia || backend.descripcion_lesion || backend.intervenciones)
+  );
+  const normalizado = backendEsMedico
+    ? mapearFormatoMedico(backend, local)
+    : {
+        secciones: backend.secciones || {},
+        acciones: backend.acciones || [],
+        seccionesCompletas: backend.seccionesCompletas || [],
+        textoNormalizado: backend.textoNormalizado || local.textoNormalizado,
+        textoOriginal: backend.textoOriginal || local.textoOriginal,
+        nlpFuentes: Array.from(new Set([...(backend.nlpFuentes || []), 'local']))
+      };
 
   const fusionado = {
     secciones: { ...local.secciones },
-    acciones: [...new Set([...(local.acciones || []), ...(backendNormalizado.acciones || [])])],
-    seccionesCompletas: [...new Set([...(local.seccionesCompletas || []), ...(backendNormalizado.seccionesCompletas || [])])],
-    textoNormalizado: local.textoNormalizado || backendNormalizado.textoNormalizado,
-    textoOriginal: local.textoOriginal || backendNormalizado.textoOriginal,
-    nlpFuentes: Array.from(new Set([...(local.nlpFuentes || []), ...(backendNormalizado.nlpFuentes || ['backend'])]))
+    acciones: [...new Set([...(local.acciones || []), ...(normalizado.acciones || [])])],
+    seccionesCompletas: [...new Set([...(local.seccionesCompletas || []), ...(normalizado.seccionesCompletas || [])])],
+    textoNormalizado: local.textoNormalizado || normalizado.textoNormalizado,
+    textoOriginal: local.textoOriginal || normalizado.textoOriginal,
+    nlpFuentes: Array.from(new Set([...(local.nlpFuentes || []), ...(normalizado.nlpFuentes || ['backend'])]))
   };
 
-  // Fusionar secciones específicas si el backend trajo datos que el local no
-  const seccionesBackend = backendNormalizado.secciones || {};
-  for (const [id, datos] of Object.entries(seccionesBackend)) {
+  for (const [id, datos] of Object.entries(normalizado.secciones || {})) {
     if (!datos) continue;
-    if (!fusionado.secciones[id]) {
+    const actual = fusionado.secciones[id];
+    if (!actual) {
       fusionado.secciones[id] = Array.isArray(datos) ? datos : { ...datos };
       continue;
     }
-    if (Array.isArray(fusionado.secciones[id]) && Array.isArray(datos)) {
-      fusionado.secciones[id] = [...new Set([...fusionado.secciones[id], ...datos])];
+    if (Array.isArray(actual) && Array.isArray(datos)) {
+      const claves = new Set(actual.map((i) => `${i.clave || i.tipo_intervencion}|${i.descripcion || ''}`));
+      const nuevos = datos.filter((i) => !claves.has(`${i.clave || i.tipo_intervencion}|${i.descripcion || ''}`));
+      fusionado.secciones[id] = [...actual, ...nuevos];
       continue;
     }
-    if (typeof fusionado.secciones[id] === 'object' && typeof datos === 'object' && !Array.isArray(datos)) {
+    if (typeof actual === 'object' && typeof datos === 'object' && !Array.isArray(datos)) {
       for (const [campo, valor] of Object.entries(datos)) {
         if (valor === undefined || valor === null) continue;
-        const actual = fusionado.secciones[id][campo];
-        const vacio = actual === '' || actual === null || actual === undefined ||
-          (Array.isArray(actual) && actual.length === 0);
-        if (vacio || (actual !== valor && vacio)) {
-          fusionado.secciones[id][campo] = valor;
-        }
+        if (esVacio(actual[campo])) actual[campo] = valor;
       }
     }
   }
