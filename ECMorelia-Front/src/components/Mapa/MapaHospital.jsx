@@ -12,15 +12,54 @@ import logo from "../img/Logo.png";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db, upsertReport, upsertManyReports, clearEmergencyDB } from "../db/emergencyDB";
 import {
-  ChakraProvider, Box, Button, VStack, Text, HStack, Badge, Modal, ModalOverlay, ModalContent,
-  ModalHeader, ModalBody, ModalFooter, useDisclosure, useToast, Spinner, SimpleGrid,
-  useMediaQuery, IconButton, Flex, ButtonGroup, Tooltip, Icon, Drawer, DrawerBody, DrawerHeader,
-  DrawerOverlay, DrawerContent, DrawerCloseButton
+  ChakraProvider,
+  Box,
+  Button,
+  VStack,
+  Text,
+  HStack,
+  Badge,
+  Modal,
+  ModalOverlay,
+  ModalContent,
+  ModalHeader,
+  ModalBody,
+  ModalFooter,
+  useDisclosure,
+  useToast,
+  Spinner,
+  SimpleGrid,
+  useMediaQuery,
+  IconButton,
+  Flex,
+  ButtonGroup,
+  Tooltip,
+  Icon,
+  Drawer,
+  DrawerBody,
+  DrawerHeader,
+  DrawerOverlay,
+  DrawerContent,
+  DrawerCloseButton
 } from "@chakra-ui/react";
 import {
-  FaBed, FaAmbulance, FaMapMarkerAlt, FaExclamationTriangle,
-  FaCheckCircle, FaTimes, FaFolderOpen, FaRoute,
-  FaPlus, FaMinus, FaSignOutAlt, FaFilePdf, FaHistory, FaEye
+  FaBed,
+  FaAmbulance,
+  FaMapMarkerAlt,
+  FaExclamationTriangle,
+  FaCheckCircle,
+  FaTimes,
+  FaFolderOpen,
+  FaRoute,
+  FaPlus,
+  FaMinus,
+  FaSignOutAlt,
+  FaFilePdf,
+  FaHistory,
+  FaEye,
+  FaChevronLeft,
+  FaChevronRight,
+  FaLayerGroup
 } from "react-icons/fa";
 import { FiActivity, FiWifiOff } from "react-icons/fi";
 
@@ -29,16 +68,37 @@ mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN ||
 
 const WS_URL = resolveWsUrl();
 
-const styleInject = document.createElement('style');
-styleInject.textContent = `
-  @keyframes pulseRed { 0%,100% { transform: scale(1); box-shadow: 0 0 15px rgba(220,38,38,0.4); } 50% { transform: scale(1.05); box-shadow: 0 0 30px rgba(220,38,38,0.8); } }
-  .mapboxgl-popup-content { background-color: #18181b !important; color: #f8fafc !important; border: 1px solid #3f3f46 !important; border-radius: 8px !important; padding: 15px !important; }
-  .mapboxgl-popup-anchor-bottom .mapboxgl-popup-tip { border-top-color: #3f3f46 !important; }
-  ::-webkit-scrollbar { width: 8px; }
-  ::-webkit-scrollbar-track { background: #09090b; }
-  ::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
-`;
-document.head.appendChild(styleInject);
+if (!document.getElementById('hospital-map-fluid-styles')) {
+  const styleInject = document.createElement('style');
+  styleInject.id = 'hospital-map-fluid-styles';
+  styleInject.textContent = `
+    @keyframes pulseRed {
+      0%, 100% { transform: scale(1); box-shadow: 0 0 15px rgba(220, 38, 38, 0.45); }
+      50% { transform: scale(1.04); box-shadow: 0 0 28px rgba(220, 38, 38, 0.85); }
+    }
+    .mapboxgl-popup-content {
+      background-color: rgba(24, 24, 27, 0.95) !important;
+      backdrop-filter: blur(10px) !important;
+      color: #f8fafc !important;
+      border: 1px solid #3f3f46 !important;
+      border-radius: 12px !important;
+      padding: 14px !important;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.6) !important;
+    }
+    .mapboxgl-popup-anchor-bottom .mapboxgl-popup-tip {
+      border-top-color: #3f3f46 !important;
+    }
+    .mapboxgl-ctrl-top-right {
+      top: 12px !important;
+      right: 12px !important;
+    }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #09090b; }
+    ::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #52525b; }
+  `;
+  document.head.appendChild(styleInject);
+}
 
 const clasificarEspecialidad = (motivo) => {
   const s = (motivo || '').toLowerCase();
@@ -51,15 +111,6 @@ const clasificarEspecialidad = (motivo) => {
   if (/parto|embaraz|sangrado transvaginal/.test(s)) return 'Ginecología';
   return 'Urgencias Médicas';
 };
-
-const RESPUESTAS_RAPIDAS = [
-  "QUIRÓFANO PREPARADO",
-  "RAMPA DE URGENCIAS DESPEJADA",
-  "EQUIPO DE TRAUMA LISTO",
-  "PASAR DIRECTO A SALA DE CHOQUE",
-  "TRAER EXPEDIENTE CLÍNICO PREVIO",
-  "ESPERANDO EN PUERTA PRINCIPAL"
-];
 
 const hasValue = (v) => v !== undefined && v !== null && String(v).trim() !== '' && String(v).trim() !== '--';
 
@@ -134,10 +185,10 @@ export default function MapaHospitalOptimizado() {
   const isConnectingRef = useRef(false);
 
   const [activeCases, setActiveCases] = useState([]);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
   const [isMobile] = useMediaQuery("(max-width: 768px)");
-  const [isTablet] = useMediaQuery("(max-width: 1024px) and (min-width: 769px)");
-  const sidebarWidth = isMobile ? "100%" : isTablet ? "400px" : "480px";
+  const [isDesktopLandscape] = useMediaQuery("(min-width: 1024px)");
 
   const [hospitalInfo, setHospitalInfo] = useState(null);
   const [detectedRegion, setDetectedRegion] = useState(() => getCachedRegion());
@@ -157,7 +208,6 @@ export default function MapaHospitalOptimizado() {
 
   const [patientNotifications, setPatientNotifications] = useState([]);
   const [selectedNotification, setSelectedNotification] = useState(null);
-  const [selectedAmbulance, setSelectedAmbulance] = useState(null);
   const [selectedReport, setSelectedReport] = useState(null);
   const [pdfExportReport, setPdfExportReport] = useState(null);
   const [reportHistory, setReportHistory] = useState([]);
@@ -166,10 +216,10 @@ export default function MapaHospitalOptimizado() {
   const [listaDoctores, setListaDoctores] = useState([]);
   const [confirmReject, setConfirmReject] = useState(false);
 
-  const { isOpen: isNoteOpen, onOpen: onNoteOpen, onClose: onNoteClose } = useDisclosure();
   const { isOpen: isNotificationOpen, onOpen: onNotificationOpen, onClose: onNotificationClose } = useDisclosure();
   const { isOpen: isReportModalOpen, onOpen: onReportModalOpen, onClose: onReportModalClose } = useDisclosure();
   const { isOpen: isExpedientesOpen, onOpen: onExpedientesOpen, onClose: onExpedientesClose } = useDisclosure();
+  const { isOpen: isUnitsDrawerOpen, onOpen: onUnitsDrawerOpen, onClose: onUnitsDrawerClose } = useDisclosure();
 
   const [setupStep, setSetupStep] = useState(() => {
     const setupDone = localStorage.getItem('hospitalSetupComplete');
@@ -252,6 +302,19 @@ export default function MapaHospitalOptimizado() {
       updateAmbulanceMarkers(ambulances);
     }
   }, [ambulances, mapLoaded]);
+
+  useEffect(() => {
+    if (!mapContainer.current) return;
+    const observer = new ResizeObserver(() => {
+      if (map.current) {
+        try {
+          map.current.resize();
+        } catch (_) {}
+      }
+    });
+    observer.observe(mapContainer.current);
+    return () => observer.disconnect();
+  }, [mapLoaded]);
 
   useEffect(() => {
     isMounted.current = true;
@@ -698,16 +761,16 @@ export default function MapaHospitalOptimizado() {
 
       const el = document.createElement('div');
       el.style.cssText = `
-        width:70px; height:70px;
+        width:64px; height:64px;
         background:#09090b;
         border:4px solid #38bdf8;
         border-radius:50%;
         display:flex; align-items:center; justify-content:center;
-        box-shadow:0 0 25px rgba(56,189,248,0.6);
+        box-shadow:0 0 25px rgba(56,189,248,0.65);
         cursor:pointer;
       `;
       const label = document.createElement('span');
-      label.style.cssText = 'color:#38bdf8; font-weight:900; font-size:28px;';
+      label.style.cssText = 'color:#38bdf8; font-weight:900; font-size:26px;';
       label.textContent = 'H';
       el.appendChild(label);
 
@@ -715,7 +778,7 @@ export default function MapaHospitalOptimizado() {
       popupNode.style.textAlign = 'center';
 
       const titleNode = document.createElement('h3');
-      titleNode.style.cssText = 'font-size:18px; font-weight:900; color:#38bdf8; margin-bottom:6px;';
+      titleNode.style.cssText = 'font-size:17px; font-weight:900; color:#38bdf8; margin-bottom:6px;';
       titleNode.textContent = hospitalInfo.nombre || 'Hospital';
 
       const addrNode = document.createElement('p');
@@ -749,16 +812,16 @@ export default function MapaHospitalOptimizado() {
 
       const el = document.createElement('div');
       el.style.cssText = `
-        width:50px; height:50px;
+        width:48px; height:48px;
         background:${color};
-        border:4px solid #18181b;
+        border:3px solid #18181b;
         border-radius:50%;
         display:flex; align-items:center; justify-content:center;
         box-shadow:0 0 20px ${color}99;
         cursor:pointer;
       `;
       const label = document.createElement('span');
-      label.style.cssText = 'color:#fff; font-weight:900; font-size:20px;';
+      label.style.cssText = 'color:#fff; font-weight:900; font-size:19px;';
       label.textContent = 'A';
       el.appendChild(label);
 
@@ -789,7 +852,6 @@ export default function MapaHospitalOptimizado() {
       ambulanceMarkers.current[amb.id] = marker;
 
       el.addEventListener('click', () => {
-        setSelectedAmbulance(amb);
         map.current.flyTo({ center: [amb.location.lng, amb.location.lat], zoom: 16, duration: 800 });
       });
     });
@@ -980,21 +1042,6 @@ export default function MapaHospitalOptimizado() {
     onNotificationClose();
   };
 
-  const enviarRespuestaRapida = (mensaje) => {
-    if (!selectedAmbulance) return;
-    if (!sendWS({
-      type: 'hospital_note',
-      ambulanceId: selectedAmbulance.id,
-      hospitalId: hospitalInfo.id,
-      note: { id: Date.now(), message: mensaje, timestamp: new Date().toLocaleTimeString() }
-    })) {
-      showToast('error', 'Error', 'Sin conexión');
-      return;
-    }
-    showToast('success', 'Aviso Enviado', `Comunicación enviada a la unidad ${selectedAmbulance.id}`);
-    onNoteClose();
-  };
-
   const handlePrehospitalReportUpdate = (data) => {
     const { callId, version, report, patientInfo, urgentOnly, isFinal, ambulanceId, timestamp, hospitalId } = data;
 
@@ -1090,6 +1137,322 @@ export default function MapaHospitalOptimizado() {
     map.current.flyTo({ center: [hospitalInfo.lng, hospitalInfo.lat], zoom: 16, pitch: 45, duration: 1000 });
   };
 
+  const renderSidebarPanel = (compact = false, closeDrawerOnAction = false) => {
+    if (compact) {
+      return (
+        <Flex direction="column" h="100%" w="100%" py={3} align="center" justify="space-between">
+          <VStack spacing={3} w="100%" px={2}>
+            <Tooltip label="Expandir panel de unidades" placement="right" hasArrow bg="#27272a" color="white">
+              <IconButton
+                aria-label="Expandir panel"
+                icon={<FaChevronRight />}
+                size="md"
+                w="100%"
+                h="44px"
+                bg="#18181b"
+                color="#38bdf8"
+                border="1px solid #27272a"
+                _hover={{ bg: '#27272a', borderColor: '#38bdf8' }}
+                onClick={() => setIsSidebarCollapsed(false)}
+              />
+            </Tooltip>
+
+            <Tooltip label={`Rutas en curso (${activeRoutes.length})`} placement="right" hasArrow bg="#27272a" color="white">
+              <Flex
+                position="relative"
+                w="100%"
+                h="48px"
+                bg="#18181b"
+                border="1px solid"
+                borderColor={activeRoutes.length > 0 ? '#38bdf8' : '#27272a'}
+                borderRadius="xl"
+                align="center"
+                justify="center"
+                cursor="pointer"
+                _hover={{ bg: '#27272a' }}
+                onClick={() => setIsSidebarCollapsed(false)}
+              >
+                <Icon as={FaRoute} color={activeRoutes.length > 0 ? '#38bdf8' : '#71717a'} boxSize={4} />
+                {activeRoutes.length > 0 && (
+                  <Badge
+                    position="absolute"
+                    top="-5px"
+                    right="-3px"
+                    bg="#0ea5e9"
+                    color="white"
+                    borderRadius="full"
+                    fontSize="9px"
+                    px={1.5}
+                  >
+                    {activeRoutes.length}
+                  </Badge>
+                )}
+              </Flex>
+            </Tooltip>
+
+            <Tooltip label={`Unidades activas (${ambulances.length})`} placement="right" hasArrow bg="#27272a" color="white">
+              <Flex
+                position="relative"
+                w="100%"
+                h="48px"
+                bg="#18181b"
+                border="1px solid"
+                borderColor={ambulances.length > 0 ? '#10b981' : '#27272a'}
+                borderRadius="xl"
+                align="center"
+                justify="center"
+                cursor="pointer"
+                _hover={{ bg: '#27272a' }}
+                onClick={() => setIsSidebarCollapsed(false)}
+              >
+                <Icon as={FaAmbulance} color={ambulances.length > 0 ? '#10b981' : '#71717a'} boxSize={4} />
+                {ambulances.length > 0 && (
+                  <Badge
+                    position="absolute"
+                    top="-5px"
+                    right="-3px"
+                    bg="#10b981"
+                    color="white"
+                    borderRadius="full"
+                    fontSize="9px"
+                    px={1.5}
+                  >
+                    {ambulances.length}
+                  </Badge>
+                )}
+              </Flex>
+            </Tooltip>
+          </VStack>
+
+          <VStack spacing={3} w="100%" px={2}>
+            <Tooltip label="Centrar en Hospital" placement="right" hasArrow bg="#27272a" color="white">
+              <IconButton
+                aria-label="Centrar en Hospital"
+                icon={<FaMapMarkerAlt />}
+                w="100%"
+                h="48px"
+                bg="#18181b"
+                color="#38bdf8"
+                border="1px solid #27272a"
+                _hover={{ bg: '#27272a', borderColor: '#38bdf8' }}
+                onClick={centerOnHospital}
+              />
+            </Tooltip>
+
+            <Tooltip label={trafficEnabled ? "Ocultar Tráfico" : "Mostrar Tráfico"} placement="right" hasArrow bg="#27272a" color="white">
+              <IconButton
+                aria-label="Alternar Tráfico"
+                icon={<FaLayerGroup />}
+                w="100%"
+                h="48px"
+                bg={trafficEnabled ? "#f59e0b" : "#18181b"}
+                color={trafficEnabled ? "black" : "#a1a1aa"}
+                border="1px solid"
+                borderColor={trafficEnabled ? "#f59e0b" : "#27272a"}
+                _hover={{ bg: trafficEnabled ? '#d97706' : '#27272a' }}
+                onClick={toggleTraffic}
+              />
+            </Tooltip>
+          </VStack>
+        </Flex>
+      );
+    }
+
+    return (
+      <Flex direction="column" h="100%" w="100%">
+        <Flex p={4} borderBottom="1px solid #27272a" align="center" justify="space-between" gap={2}>
+          <Box minW={0}>
+            <Text fontSize="15px" fontWeight="900" color="#f8fafc" letterSpacing="1px" noOfLines={1}>
+              MONITOREO DE UNIDADES
+            </Text>
+            <Text fontSize="11px" color="#a1a1aa" mt={0.5} noOfLines={1}>
+              Seguimiento de ambulancias en campo
+            </Text>
+          </Box>
+          {isDesktopLandscape && !closeDrawerOnAction && (
+            <Tooltip label="Ocultar panel lateral" placement="right" hasArrow bg="#27272a" color="white">
+              <IconButton
+                size="sm"
+                aria-label="Ocultar panel lateral"
+                icon={<FaChevronLeft />}
+                bg="#18181b"
+                color="#a1a1aa"
+                border="1px solid #27272a"
+                _hover={{ bg: '#27272a', color: 'white', borderColor: '#38bdf8' }}
+                onClick={() => setIsSidebarCollapsed(true)}
+              />
+            </Tooltip>
+          )}
+        </Flex>
+
+        <Box flex={1} overflowY="auto" p={4}>
+          {activeRoutes.length > 0 && (
+            <Box mb={6}>
+              <HStack mb={3}>
+                <Icon as={FaRoute} color="#38bdf8" boxSize={4} />
+                <Text fontSize="13px" fontWeight="900" color="#e4e4e7" letterSpacing="0.8px">
+                  RUTAS EN CURSO ({activeRoutes.length})
+                </Text>
+              </HStack>
+              <VStack spacing={3} align="stretch">
+                {activeRoutes.map(route => (
+                  <Box
+                    key={route.ambulanceId}
+                    p={3.5}
+                    bg="#18181b"
+                    borderRadius="xl"
+                    border="1px solid #38bdf8"
+                    transition="all 0.2s ease"
+                    _hover={{ transform: 'translateY(-2px)', boxShadow: '0 8px 20px rgba(56, 189, 248, 0.15)' }}
+                  >
+                    <Flex justify="space-between" align="center" mb={1.5}>
+                      <Text fontSize="16px" fontWeight="900" color="#f8fafc">{route.ambulanceId}</Text>
+                      <Badge bg="#0ea5e9" color="white" fontSize="12px" px={2.5} py={0.5} borderRadius="md" fontWeight="900">
+                        {Math.round((route.duration || 0) / 60)} MIN
+                      </Badge>
+                    </Flex>
+                    <Text fontSize="12px" fontWeight="700" color="#a1a1aa" mb={3}>
+                      DISTANCIA: {((route.distance || 0) / 1000).toFixed(1)} km
+                    </Text>
+                    <HStack spacing={2}>
+                      <Button
+                        flex={1}
+                        size="sm"
+                        h="40px"
+                        bg="#27272a"
+                        color="white"
+                        _hover={{ bg: '#0284c7' }}
+                        fontSize="11px"
+                        fontWeight="900"
+                        onClick={() => {
+                          if (route.geometry && map.current) {
+                            const b = new mapboxgl.LngLatBounds();
+                            route.geometry.forEach(c => b.extend([c[0], c[1]]));
+                            map.current.fitBounds(b, { padding: 80, duration: 900 });
+                          }
+                          if (closeDrawerOnAction) onUnitsDrawerClose();
+                        }}
+                      >
+                        ENFOCAR RUTA
+                      </Button>
+                      <IconButton
+                        size="sm"
+                        h="40px"
+                        w="40px"
+                        aria-label="Limpiar ruta"
+                        icon={<FaTimes />}
+                        bg="#27272a"
+                        color="#ef4444"
+                        _hover={{ bg: '#dc2626', color: 'white' }}
+                        onClick={() => clearAmbulanceRoute(route.ambulanceId)}
+                      />
+                    </HStack>
+                  </Box>
+                ))}
+              </VStack>
+            </Box>
+          )}
+
+          <HStack mb={3}>
+            <Icon as={FaAmbulance} color="#a1a1aa" boxSize={4} />
+            <Text fontSize="13px" fontWeight="900" color="#e4e4e7" letterSpacing="0.8px">
+              TODAS LAS UNIDADES ({ambulances.length})
+            </Text>
+          </HStack>
+
+          {ambulances.length === 0 ? (
+            <Box p={7} bg="#18181b" borderRadius="xl" border="1px dashed #3f3f46" textAlign="center">
+              <Icon as={FaCheckCircle} boxSize={7} color="#52525b" mb={2.5} />
+              <Text fontSize="13px" fontWeight="800" color="#a1a1aa">Sin unidades activas</Text>
+            </Box>
+          ) : (
+            <VStack spacing={3} align="stretch">
+              {ambulances.map(amb => (
+                <Box
+                  key={amb.id}
+                  p={3.5}
+                  bg="#18181b"
+                  borderRadius="xl"
+                  border="1px solid #27272a"
+                  borderLeft="5px solid"
+                  borderLeftColor={amb.status === 'en_ruta' ? '#10b981' : amb.status === 'fuera_de_servicio' ? '#64748b' : '#3EBDF6'}
+                  transition="all 0.2s ease"
+                  _hover={{ transform: 'translateY(-2px)', borderColor: '#3f3f46' }}
+                >
+                  <Flex justify="space-between" align="center" mb={2.5}>
+                    <Text fontSize="16px" fontWeight="900" color="#f8fafc">{amb.id}</Text>
+                    <Badge
+                      bg={amb.status === 'en_ruta' ? '#10b981' : amb.status === 'fuera_de_servicio' ? '#64748b' : '#f59e0b'}
+                      color="white"
+                      px={2.5}
+                      py={0.5}
+                      borderRadius="md"
+                      fontSize="10px"
+                      fontWeight="900"
+                    >
+                      {(amb.status || '').replace('_', ' ').toUpperCase()}
+                    </Badge>
+                  </Flex>
+                  <Button
+                    w="100%"
+                    h="42px"
+                    bg="#27272a"
+                    color="white"
+                    _hover={{ bg: '#3f3f46' }}
+                    fontSize="11px"
+                    fontWeight="900"
+                    onClick={() => {
+                      if (amb.location && map.current) {
+                        map.current.flyTo({ center: [amb.location.lng, amb.location.lat], zoom: 16, duration: 900 });
+                      }
+                      if (closeDrawerOnAction) onUnitsDrawerClose();
+                    }}
+                  >
+                    UBICAR MAPA
+                  </Button>
+                </Box>
+              ))}
+            </VStack>
+          )}
+        </Box>
+
+        <Box p={4} borderTop="1px solid #27272a">
+          <VStack spacing={2.5}>
+            <Button
+              w="100%"
+              h="48px"
+              bg="#27272a"
+              color="white"
+              _hover={{ bg: '#3f3f46' }}
+              fontSize="13px"
+              fontWeight="900"
+              leftIcon={<Icon as={FaMapMarkerAlt} color="#38bdf8" />}
+              onClick={() => {
+                centerOnHospital();
+                if (closeDrawerOnAction) onUnitsDrawerClose();
+              }}
+            >
+              CENTRAR EN HOSPITAL
+            </Button>
+            <Button
+              w="100%"
+              h="48px"
+              bg={trafficEnabled ? "#3EBDF6" : "#27272a"}
+              color={trafficEnabled ? "black" : "white"}
+              _hover={{ bg: trafficEnabled ? '#3397c6' : '#3f3f46' }}
+              fontSize="13px"
+              fontWeight="900"
+              leftIcon={<Icon as={FaLayerGroup} />}
+              onClick={toggleTraffic}
+            >
+              {trafficEnabled ? 'OCULTAR TRÁFICO' : 'MOSTRAR TRÁFICO'}
+            </Button>
+          </VStack>
+        </Box>
+      </Flex>
+    );
+  };
+
   const renderReporteSheet = (reporteData, refTarget) => {
     if (!reporteData) return null;
     const sv = reporteData.signos_vitales || {};
@@ -1106,12 +1469,18 @@ export default function MapaHospitalOptimizado() {
     const hasEvaluacion = hasValue(reporteData.paciente?.motivo_urgencia) || hasValue(reporteData.paciente?.descripcion_lesion);
     const intervencionesValidas = (reporteData.intervenciones || []).filter(iv => hasValue(iv.tipo_intervencion) || hasValue(iv.descripcion));
     const observacionesLimpias = limpiarTexto(reporteData.paciente?.observaciones);
-    const activeCityTitle = (detectedRegion?.city || 'MORELIA').toUpperCase();
 
     return (
-      <Box ref={refTarget} p={5} bg="#ffffff" color="#0f172a" fontFamily="system-ui, -apple-system, sans-serif">
-        <VStack spacing={3} align="stretch">
-          <Flex align="center" justify="space-between" borderBottom="3px solid #0ea5e9" pb={2.5}>
+      <Box ref={refTarget} p={{ base: 4, md: 6 }} bg="#ffffff" color="#0f172a" fontFamily="system-ui, -apple-system, sans-serif">
+        <VStack spacing={4} align="stretch">
+          <Flex
+            align={{ base: "start", sm: "center" }}
+            justify="space-between"
+            direction={{ base: "column", sm: "row" }}
+            gap={3}
+            borderBottom="3px solid #0ea5e9"
+            pb={3}
+          >
             <HStack spacing={3} align="center">
               <Box w="54px" h="54px" display="flex" alignItems="center" justifyContent="center">
                 <img src={logo} alt="EmergenCity" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} crossOrigin="anonymous" />
@@ -1125,7 +1494,7 @@ export default function MapaHospitalOptimizado() {
                 </Text>
               </Box>
             </HStack>
-            <HStack spacing={3}>
+            <HStack spacing={3} wrap="wrap">
               {hasValue(reporteData.triaje?.label) && (
                 <Box bg="#f0f9ff" border="2px solid #0ea5e9" borderRadius="md" px={3} py={1.5} textAlign="center">
                   <Text fontSize="8px" color="#0c4a6e" fontWeight="900" letterSpacing="0.5px">TRIAGE</Text>
@@ -1142,7 +1511,7 @@ export default function MapaHospitalOptimizado() {
                   </Text>
                 </Box>
               )}
-              <VStack align="end" spacing={0.5}>
+              <VStack align={{ base: "start", sm: "end" }} spacing={0.5}>
                 <Box px={2.5} py={0.5} bg="#0c4a6e" color="white" borderRadius="sm">
                   <Text fontSize="9px" fontWeight="900" letterSpacing="1px">FOLIO · v{reporteData.version || 1}</Text>
                 </Box>
@@ -1164,7 +1533,7 @@ export default function MapaHospitalOptimizado() {
                     <Box w="4px" h="14px" bg="#0ea5e9" borderRadius="full" />
                     <Text fontSize="11px" fontWeight="900" color="#0c4a6e" letterSpacing="1px">IDENTIFICACIÓN DEL PACIENTE</Text>
                   </Flex>
-                  <SimpleGrid columns={3} spacing={2}>
+                  <SimpleGrid columns={{ base: 1, sm: 3 }} spacing={2}>
                     {hasValue(reporteData.paciente?.nombre) && (
                       <Box bg="#f8fafc" p={2.5} borderRadius="md" border="1px solid #e2e8f0">
                         <Text fontSize="8px" color="#64748b" fontWeight="900">NOMBRE</Text>
@@ -1232,7 +1601,7 @@ export default function MapaHospitalOptimizado() {
                     <Box w="4px" h="14px" bg="#dc2626" borderRadius="full" />
                     <Text fontSize="11px" fontWeight="900" color="#0c4a6e" letterSpacing="1px">SIGNOS VITALES</Text>
                   </Flex>
-                  <SimpleGrid columns={3} spacing={2}>
+                  <SimpleGrid columns={{ base: 2, sm: 3 }} spacing={2}>
                     {vitals.map((v, i) => (
                       <Box key={i} bg="#fef2f2" p={2} borderRadius="md" border="1px solid #fecaca" textAlign="center">
                         <Text fontSize="8px" color="#991b1b" fontWeight="900">{v.label}</Text>
@@ -1275,7 +1644,7 @@ export default function MapaHospitalOptimizado() {
           </SimpleGrid>
 
           <Box borderTop="1px solid #e2e8f0" pt={2}>
-            <Flex justify="space-between" align="center">
+            <Flex justify="space-between" align="center" wrap="wrap" gap={2}>
               <Text fontSize="9px" color="#64748b" fontWeight="700">
                 EXPEDIENTE CLÍNICO PREHOSPITALARIO · EMERGENCITY
               </Text>
@@ -1292,7 +1661,7 @@ export default function MapaHospitalOptimizado() {
   if (!hospitalInfo) {
     return (
       <ChakraProvider>
-        <Box h="100vh" bg="#09090b" display="flex" alignItems="center" justifyContent="center">
+        <Box h="100dvh" bg="#09090b" display="flex" alignItems="center" justifyContent="center">
           <VStack spacing={6}>
             <Spinner size="xl" color="#38bdf8" thickness="4px" />
             <Text fontSize="20px" fontWeight="900" color="white" letterSpacing="2px">INICIALIZANDO SISTEMA...</Text>
@@ -1305,7 +1674,7 @@ export default function MapaHospitalOptimizado() {
   if (setupStep === 'beds') {
     return (
       <ChakraProvider>
-        <Box h="100vh" bg="#09090b" display="flex" alignItems="center" justifyContent="center" p={4}>
+        <Box h="100dvh" bg="#09090b" display="flex" alignItems="center" justifyContent="center" p={4}>
           <Box maxW="480px" w="100%" bg="#18181b" border="2px solid #38bdf8" borderRadius="2xl" p={6}>
             <VStack spacing={5}>
               <Icon as={FaBed} color="#38bdf8" boxSize={10} />
@@ -1321,8 +1690,10 @@ export default function MapaHospitalOptimizado() {
                   aria-label="Restar"
                   icon={<FaMinus />}
                   onClick={() => setSetupBeds(v => Math.max(0, v - 1))}
-                  w="60px" h="60px"
-                  bg="#27272a" color="white"
+                  w="60px"
+                  h="60px"
+                  bg="#27272a"
+                  color="white"
                   _hover={{ bg: '#3f3f46' }}
                 />
                 <Flex flex={1} h="80px" bg="#09090b" border="2px solid #3f3f46" borderRadius="xl" align="center" justify="center">
@@ -1332,16 +1703,22 @@ export default function MapaHospitalOptimizado() {
                   aria-label="Sumar"
                   icon={<FaPlus />}
                   onClick={() => setSetupBeds(v => v + 1)}
-                  w="60px" h="60px"
-                  bg="#27272a" color="white"
+                  w="60px"
+                  h="60px"
+                  bg="#27272a"
+                  color="white"
                   _hover={{ bg: '#3f3f46' }}
                 />
               </HStack>
 
               <Button
-                w="100%" h="65px"
-                bg="#10b981" color="white"
-                fontSize="16px" fontWeight="900" letterSpacing="1px"
+                w="100%"
+                h="65px"
+                bg="#10b981"
+                color="white"
+                fontSize="16px"
+                fontWeight="900"
+                letterSpacing="1px"
                 _hover={{ bg: '#059669' }}
                 onClick={() => {
                   setCamasEmergencia(setupBeds);
@@ -1365,51 +1742,95 @@ export default function MapaHospitalOptimizado() {
 
   return (
     <ChakraProvider>
-      <Box h="100vh" w="100vw" bg="#09090b" display="flex" flexDirection="column" overflow="hidden">
-        <Flex as="nav" h="85px" bg="#09090b" borderBottom="1px solid #27272a" px={6} align="center" justify="space-between" zIndex="10">
-          <HStack spacing={4}>
-            <Box p={3} bg="#18181b" borderRadius="xl" border="1px solid #27272a">
-              <Icon as={FaMapMarkerAlt} color="#38bdf8" boxSize={6} />
+      <Box h="100dvh" w="100vw" bg="#09090b" display="flex" flexDirection="column" overflow="hidden">
+        <Flex
+          as="nav"
+          minH={{ base: "64px", lg: "78px" }}
+          bg="#09090b"
+          borderBottom="1px solid #27272a"
+          px={{ base: 3, md: 5 }}
+          py={2}
+          align="center"
+          justify="space-between"
+          gap={2}
+          zIndex="20"
+          flexWrap="wrap"
+        >
+          <HStack spacing={3} minW={0}>
+            <Box p={{ base: 2, md: 2.5 }} bg="#18181b" borderRadius="xl" border="1px solid #27272a" flexShrink={0}>
+              <Icon as={FaMapMarkerAlt} color="#38bdf8" boxSize={{ base: 4, md: 5 }} />
             </Box>
-            <VStack align="start" spacing={0}>
-              <Text fontSize="22px" fontWeight="900" color="#f8fafc" letterSpacing="1px">{hospitalInfo.nombre.toUpperCase()}</Text>
-              <Text fontSize="13px" fontWeight="800" color="#a1a1aa" letterSpacing="1px">CENTRO DE MANDO Y RECEPCIÓN</Text>
+            <VStack align="start" spacing={0} minW={0}>
+              <Text fontSize={{ base: "15px", md: "19px", xl: "21px" }} fontWeight="900" color="#f8fafc" letterSpacing="0.8px" noOfLines={1}>
+                {hospitalInfo.nombre.toUpperCase()}
+              </Text>
+              <Text display={{ base: "none", sm: "block" }} fontSize="11px" fontWeight="800" color="#a1a1aa" letterSpacing="0.8px">
+                CENTRO DE MANDO Y RECEPCIÓN
+              </Text>
             </VStack>
           </HStack>
 
-          <HStack spacing={5}>
-            <HStack bg="#18181b" px={4} py={2} borderRadius="xl" border="2px solid #27272a">
-              <Icon as={FaBed} color={camasEmergencia > 2 ? "#10b981" : camasEmergencia > 0 ? "#f59e0b" : "#ef4444"} boxSize={6} />
-              <VStack align="start" spacing={0} ml={2} mr={3}>
-                <Text fontSize="10px" fontWeight="900" color="#a1a1aa" letterSpacing="1px">CAMAS URG.</Text>
-                <Text fontSize="24px" fontWeight="900" color="#f8fafc" lineHeight="1">{camasEmergencia}</Text>
+          <HStack spacing={{ base: 2, md: 3.5 }} flexWrap="wrap" justify="flex-end">
+            <HStack bg="#18181b" px={{ base: 2.5, md: 3.5 }} py={1.5} borderRadius="xl" border="1px solid #27272a">
+              <Icon
+                as={FaBed}
+                color={camasEmergencia > 2 ? "#10b981" : camasEmergencia > 0 ? "#f59e0b" : "#ef4444"}
+                boxSize={{ base: 4, md: 5 }}
+              />
+              <VStack align="start" spacing={0} ml={1.5} mr={2}>
+                <Text fontSize="9px" fontWeight="900" color="#a1a1aa" letterSpacing="0.8px">CAMAS</Text>
+                <Text fontSize={{ base: "18px", md: "22px" }} fontWeight="900" color="#f8fafc" lineHeight="1">
+                  {camasEmergencia}
+                </Text>
               </VStack>
-              <ButtonGroup size="sm" isAttached>
+              <ButtonGroup size="xs" isAttached>
                 <IconButton
-                  icon={<FaMinus />} aria-label="Restar cama"
+                  icon={<FaMinus />}
+                  aria-label="Restar cama"
                   onClick={() => setCamasEmergencia(v => Math.max(0, v - 1))}
-                  bg="#27272a" color="white" _hover={{ bg: '#3f3f46' }}
+                  bg="#27272a"
+                  color="white"
+                  _hover={{ bg: '#3f3f46' }}
+                  h="30px"
                 />
                 <IconButton
-                  icon={<FaPlus />} aria-label="Sumar cama"
+                  icon={<FaPlus />}
+                  aria-label="Sumar cama"
                   onClick={() => setCamasEmergencia(v => v + 1)}
-                  bg="#27272a" color="white" _hover={{ bg: '#3f3f46' }}
+                  bg="#27272a"
+                  color="white"
+                  _hover={{ bg: '#3f3f46' }}
+                  h="30px"
                 />
               </ButtonGroup>
             </HStack>
 
             <Button
-              h="55px" px={4} bg="#18181b" color="#38bdf8" border="1px solid #3f3f46"
+              h={{ base: "42px", md: "48px" }}
+              px={{ base: 3, md: 4 }}
+              bg="#18181b"
+              color="#38bdf8"
+              border="1px solid #3f3f46"
               _hover={{ bg: '#27272a', borderColor: '#38bdf8' }}
-              fontWeight="900" fontSize="14px" onClick={onExpedientesOpen} leftIcon={<FaHistory />}
+              fontWeight="900"
+              fontSize={{ base: "12px", md: "13px" }}
+              onClick={onExpedientesOpen}
+              leftIcon={<FaHistory />}
             >
-              EXPEDIENTES ({historialExpedientes.length})
+              <Text display={{ base: "none", sm: "inline" }}>EXPEDIENTES </Text>
+              ({historialExpedientes.length})
             </Button>
 
             {patientNotifications.length > 0 && (
               <Button
-                h="55px" px={5} bg="#ef4444" color="white" fontWeight="900" fontSize="15px"
-                animation="pulseRed 2s infinite" onClick={onNotificationOpen}
+                h={{ base: "42px", md: "48px" }}
+                px={{ base: 3, md: 4 }}
+                bg="#ef4444"
+                color="white"
+                fontWeight="900"
+                fontSize={{ base: "12px", md: "14px" }}
+                animation="pulseRed 2s infinite"
+                onClick={onNotificationOpen}
                 leftIcon={<FaExclamationTriangle />}
               >
                 ALERTA ({patientNotifications.length})
@@ -1417,112 +1838,146 @@ export default function MapaHospitalOptimizado() {
             )}
 
             <Badge
-              display="flex" alignItems="center" gap={2} px={4} py={3} borderRadius="xl"
+              display="flex"
+              alignItems="center"
+              gap={1.5}
+              px={{ base: 2.5, md: 3.5 }}
+              py={{ base: 2, md: 2.5 }}
+              borderRadius="xl"
               bg={wsConnected ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)'}
-              border="1px solid" borderColor={wsConnected ? '#10b981' : '#ef4444'}
-              color={wsConnected ? '#10b981' : '#ef4444'} fontSize="13px" fontWeight="900"
+              border="1px solid"
+              borderColor={wsConnected ? '#10b981' : '#ef4444'}
+              color={wsConnected ? '#10b981' : '#ef4444'}
+              fontSize="11px"
+              fontWeight="900"
             >
-              <Icon as={wsConnected ? FiActivity : FiWifiOff} boxSize={4} />
-              {wsConnected ? 'ACTIVO' : 'DESCONECTADO'}
+              <Icon as={wsConnected ? FiActivity : FiWifiOff} boxSize={3.5} />
+              <Text display={{ base: "none", md: "inline" }}>
+                {wsConnected ? 'ACTIVO' : 'DESCONECTADO'}
+              </Text>
             </Badge>
 
             <Tooltip label="Cerrar Sesión" placement="bottom" hasArrow bg="#18181b" color="#ef4444" fontWeight="bold">
               <IconButton
-                icon={<FaSignOutAlt />} aria-label="Cerrar Sesión" onClick={closeSession}
-                bg="#18181b" color="#a1a1aa" border="1px solid #27272a" borderRadius="xl"
-                w="50px" h="50px"
+                icon={<FaSignOutAlt />}
+                aria-label="Cerrar Sesión"
+                onClick={closeSession}
+                bg="#18181b"
+                color="#a1a1aa"
+                border="1px solid #27272a"
+                borderRadius="xl"
+                w={{ base: "42px", md: "48px" }}
+                h={{ base: "42px", md: "48px" }}
                 _hover={{ bg: 'rgba(239,68,68,0.2)', color: '#ef4444', borderColor: '#ef4444' }}
               />
             </Tooltip>
           </HStack>
         </Flex>
 
-        <Flex flex={1} overflow="hidden">
-          <Box w={sidebarWidth} bg="#09090b" borderRight="1px solid #27272a" display="flex" flexDirection="column" zIndex={5}>
-            <Box p={5} borderBottom="1px solid #27272a">
-              <Text fontSize="16px" fontWeight="900" color="#f8fafc" letterSpacing="1px">MONITOREO DE UNIDADES</Text>
-              <Text fontSize="12px" color="#a1a1aa" mt={1}>Gestión y seguimiento de ambulancias en campo</Text>
+        <Flex flex={1} overflow="hidden" position="relative">
+          {isDesktopLandscape && (
+            <Box
+              w={isSidebarCollapsed ? "72px" : "360px"}
+              h="100%"
+              bg="#09090b"
+              borderRight="1px solid #27272a"
+              display="flex"
+              flexDirection="column"
+              flexShrink={0}
+              zIndex={10}
+              transition="width 0.25s cubic-bezier(0.4, 0, 0.2, 1)"
+            >
+              {renderSidebarPanel(isSidebarCollapsed, false)}
             </Box>
+          )}
 
-            <Box flex={1} overflowY="auto" p={5} sx={{ '&::-webkit-scrollbar': { width: '8px' }, '&::-webkit-scrollbar-thumb': { bg: '#3f3f46', borderRadius: '4px' } }}>
-              {activeRoutes.length > 0 && (
-                <Box mb={8}>
-                  <HStack mb={4}><Icon as={FaRoute} color="#38bdf8" boxSize={5} /><Text fontSize="15px" fontWeight="900" color="#e4e4e7">RUTAS EN CURSO ({activeRoutes.length})</Text></HStack>
-                  <VStack spacing={3} align="stretch">
-                    {activeRoutes.map(route => (
-                      <Box key={route.ambulanceId} p={4} bg="#18181b" borderRadius="xl" border="1px solid #38bdf8">
-                        <Flex justify="space-between" align="center" mb={2}>
-                          <Text fontSize="18px" fontWeight="900" color="#f8fafc">{route.ambulanceId}</Text>
-                          <Badge bg="#0ea5e9" color="white" fontSize="13px" px={3} py={1} fontWeight="900">
-                            {Math.round((route.duration || 0) / 60)} MIN
-                          </Badge>
-                        </Flex>
-                        <Text fontSize="13px" fontWeight="700" color="#a1a1aa" mb={3}>
-                          DISTANCIA: {((route.distance || 0) / 1000).toFixed(1)} km
-                        </Text>
-                        <HStack spacing={2}>
-                          <Button flex={1} size="md" bg="#27272a" color="white" _hover={{ bg: '#3f3f46' }} fontSize="12px" fontWeight="800"
-                            onClick={() => { if (route.geometry && map.current) { const b = new mapboxgl.LngLatBounds(); route.geometry.forEach(c => b.extend([c[0], c[1]])); map.current.fitBounds(b, { padding: 80 }); } }}>
-                            ENFOCAR RUTA
-                          </Button>
-                          <Button size="md" bg="#27272a" color="#ef4444" _hover={{ bg: '#dc2626', color: 'white' }} onClick={() => clearAmbulanceRoute(route.ambulanceId)}>
-                            <Icon as={FaTimes} />
-                          </Button>
-                        </HStack>
-                      </Box>
-                    ))}
-                  </VStack>
-                </Box>
-              )}
+          <Box flex={1} h="100%" position="relative" overflow="hidden">
+            <div ref={mapContainer} style={{ width: '100%', height: '100%' }} />
 
-              <HStack mb={4}><Icon as={FaAmbulance} color="#a1a1aa" boxSize={5} /><Text fontSize="15px" fontWeight="900" color="#e4e4e7">TODAS LAS UNIDADES ({ambulances.length})</Text></HStack>
-              {ambulances.length === 0 ? (
-                <Box p={8} bg="#18181b" borderRadius="xl" border="1px dashed #3f3f46" textAlign="center">
-                  <Icon as={FaCheckCircle} boxSize={8} color="#52525b" mb={3} />
-                  <Text fontSize="14px" fontWeight="800" color="#a1a1aa">Sin unidades activas</Text>
-                </Box>
-              ) : (
-                <VStack spacing={4} align="stretch">
-                  {ambulances.map(amb => (
-                    <Box key={amb.id} p={4} bg="#18181b" borderRadius="xl" border="1px solid #27272a" borderLeft="6px solid"
-                      borderLeftColor={amb.status === 'en_ruta' ? '#10b981' : amb.status === 'fuera_de_servicio' ? '#64748b' : '#f59e0b'}>
-                      <Flex justify="space-between" align="center" mb={3}>
-                        <Text fontSize="18px" fontWeight="900" color="#f8fafc">{amb.id}</Text>
-                        <Badge bg={amb.status === 'en_ruta' ? '#10b981' : amb.status === 'fuera_de_servicio' ? '#64748b' : '#f59e0b'}
-                          color="white" px={3} py={1} fontSize="11px" fontWeight="900">
-                          {(amb.status || '').replace('_', ' ').toUpperCase()}
-                        </Badge>
-                      </Flex>
-                      <Button w="100%" h="50px" bg="#27272a" color="white" _hover={{ bg: '#3f3f46' }} fontSize="12px" fontWeight="900"
-                        onClick={() => { if (amb.location && map.current) map.current.flyTo({ center: [amb.location.lng, amb.location.lat], zoom: 16 }); }}>
-                        UBICAR MAPA
-                      </Button>
-                    </Box>
-                  ))}
-                </VStack>
-              )}
-            </Box>
-
-            <Box p={5} borderTop="1px solid #27272a">
-              <VStack spacing={3}>
-                <Button w="100%" h="55px" bg="#27272a" color="white" _hover={{ bg: '#3f3f46' }} fontSize="14px" fontWeight="900"
-                  leftIcon={<Icon as={FaMapMarkerAlt} />} onClick={centerOnHospital}>
-                  CENTRAR EN HOSPITAL
+            {!isDesktopLandscape && (
+              <HStack
+                position="absolute"
+                bottom={5}
+                left={4}
+                right={4}
+                zIndex={15}
+                justify="space-between"
+                pointerEvents="none"
+              >
+                <Button
+                  pointerEvents="auto"
+                  h="50px"
+                  px={4}
+                  bg="rgba(24, 24, 27, 0.9)"
+                  backdropFilter="blur(12px)"
+                  color="white"
+                  border="1px solid"
+                  borderColor={activeRoutes.length > 0 ? "#38bdf8" : "#3f3f46"}
+                  borderRadius="2xl"
+                  boxShadow="0 10px 25px rgba(0, 0, 0, 0.6)"
+                  leftIcon={<Icon as={FaAmbulance} color="#38bdf8" boxSize={5} />}
+                  _hover={{ bg: '#27272a', borderColor: '#38bdf8' }}
+                  onClick={onUnitsDrawerOpen}
+                >
+                  <Text fontSize="13px" fontWeight="900" letterSpacing="0.5px">
+                    UNIDADES ({ambulances.length})
+                  </Text>
+                  {activeRoutes.length > 0 && (
+                    <Badge ml={2} bg="#0ea5e9" color="white" borderRadius="full" px={2} fontSize="10px" fontWeight="900">
+                      {activeRoutes.length} EN RUTA
+                    </Badge>
+                  )}
                 </Button>
-                <Button w="100%" h="55px" bg={trafficEnabled ? "#f59e0b" : "#27272a"} color={trafficEnabled ? "black" : "white"}
-                  _hover={{ bg: trafficEnabled ? '#d97706' : '#3f3f46' }} fontSize="14px" fontWeight="900" onClick={toggleTraffic}>
-                  {trafficEnabled ? 'OCULTAR TRÁFICO' : 'MOSTRAR TRÁFICO'}
-                </Button>
-              </VStack>
-            </Box>
-          </Box>
 
-          <Box flex={1} position="relative" display="flex" flexDirection="column">
-            <Box flex={1} position="relative">
-              <div ref={mapContainer} style={{ width: '100%', height: '100%' }} />
-            </Box>
+                <HStack spacing={2} pointerEvents="auto">
+                  <Tooltip label="Centrar en Hospital" hasArrow bg="#18181b" color="white">
+                    <IconButton
+                      aria-label="Centrar en Hospital"
+                      icon={<FaMapMarkerAlt />}
+                      w="50px"
+                      h="50px"
+                      bg="rgba(24, 24, 27, 0.9)"
+                      backdropFilter="blur(12px)"
+                      color="#38bdf8"
+                      border="1px solid #3f3f46"
+                      borderRadius="2xl"
+                      boxShadow="0 10px 25px rgba(0, 0, 0, 0.6)"
+                      _hover={{ bg: '#27272a', borderColor: '#38bdf8' }}
+                      onClick={centerOnHospital}
+                    />
+                  </Tooltip>
+                  <Tooltip label={trafficEnabled ? "Ocultar Tráfico" : "Mostrar Tráfico"} hasArrow bg="#18181b" color="white">
+                    <IconButton
+                      aria-label="Alternar Tráfico"
+                      icon={<FaLayerGroup />}
+                      w="50px"
+                      h="50px"
+                      bg={trafficEnabled ? "#f59e0b" : "rgba(24, 24, 27, 0.9)"}
+                      backdropFilter="blur(12px)"
+                      color={trafficEnabled ? "black" : "white"}
+                      border="1px solid"
+                      borderColor={trafficEnabled ? "#f59e0b" : "#3f3f46"}
+                      borderRadius="2xl"
+                      boxShadow="0 10px 25px rgba(0, 0, 0, 0.6)"
+                      _hover={{ bg: trafficEnabled ? '#d97706' : '#27272a' }}
+                      onClick={toggleTraffic}
+                    />
+                  </Tooltip>
+                </HStack>
+              </HStack>
+            )}
           </Box>
         </Flex>
+
+        <Drawer isOpen={isUnitsDrawerOpen} placement="left" onClose={onUnitsDrawerClose} size="sm">
+          <DrawerOverlay backdropFilter="blur(8px)" bg="rgba(0,0,0,0.75)" />
+          <DrawerContent bg="#09090b" color="white" borderRight="1px solid #27272a" maxW="360px">
+            <DrawerCloseButton color="white" top={3.5} right={3.5} />
+            <DrawerBody p={0}>
+              {renderSidebarPanel(false, true)}
+            </DrawerBody>
+          </DrawerContent>
+        </Drawer>
 
         {pdfExportReport && (
           <Box position="fixed" left="-10000px" top="0" w="950px" zIndex="-1" pointerEvents="none">
@@ -1530,14 +1985,14 @@ export default function MapaHospitalOptimizado() {
           </Box>
         )}
 
-        <Drawer isOpen={isExpedientesOpen} placement="right" onClose={onExpedientesClose} size="md">
-          <DrawerOverlay backdropFilter="blur(10px)" />
+        <Drawer isOpen={isExpedientesOpen} placement="right" onClose={onExpedientesClose} size={{ base: "full", sm: "md" }}>
+          <DrawerOverlay backdropFilter="blur(10px)" bg="rgba(0,0,0,0.75)" />
           <DrawerContent bg="#09090b" color="white" borderLeft="1px solid #27272a">
             <DrawerCloseButton color="white" />
-            <DrawerHeader borderBottom="1px solid #27272a" fontSize="20px" fontWeight="900">
+            <DrawerHeader borderBottom="1px solid #27272a" fontSize="18px" fontWeight="900">
               HISTORIAL DE EXPEDIENTES
             </DrawerHeader>
-            <DrawerBody p={6}>
+            <DrawerBody p={{ base: 4, md: 6 }}>
               {historialExpedientes.length === 0 ? (
                 <VStack spacing={4} mt={10} textAlign="center">
                   <Icon as={FaFolderOpen} boxSize={12} color="#52525b" />
@@ -1548,13 +2003,25 @@ export default function MapaHospitalOptimizado() {
                   {historialExpedientes.map((exp, i) => {
                     const norm = normalizeExpediente(exp);
                     return (
-                      <Box key={exp.callId || i} p={4} bg="#18181b" borderRadius="xl" border="1px solid #3f3f46">
-                        <HStack justify="space-between" mb={2}>
-                          <Text fontSize="15px" fontWeight="900" color="#38bdf8">{norm.callId}</Text>
+                      <Box
+                        key={exp.callId || i}
+                        p={4}
+                        bg="#18181b"
+                        borderRadius="xl"
+                        border="1px solid #3f3f46"
+                        transition="all 0.2s ease"
+                        _hover={{ borderColor: '#38bdf8' }}
+                      >
+                        <HStack justify="space-between" mb={2} wrap="wrap" gap={1}>
+                          <Text fontSize="14px" fontWeight="900" color="#38bdf8" wordBreak="break-all">{norm.callId}</Text>
                           <Badge
                             bg={norm.isFinal ? '#10b981' : '#f59e0b'}
-                            color="white" px={2} py={1} borderRadius="md"
-                            fontSize="10px" fontWeight="900"
+                            color="white"
+                            px={2}
+                            py={1}
+                            borderRadius="md"
+                            fontSize="10px"
+                            fontWeight="900"
                           >
                             {norm.isFinal ? `REPORTE FINAL v${norm.version}` : `URGENTE v${norm.version}`}
                           </Badge>
@@ -1568,19 +2035,27 @@ export default function MapaHospitalOptimizado() {
                         <Text fontSize="11px" color="#71717a" mb={3}>{exp.fecha}</Text>
                         <HStack spacing={2}>
                           <Button
-                            flex={1} h="45px" bg="#27272a" color="white"
+                            flex={1}
+                            h="44px"
+                            bg="#27272a"
+                            color="white"
                             border="1px solid #3f3f46"
                             _hover={{ bg: '#3f3f46', borderColor: '#38bdf8' }}
-                            fontSize="12px" fontWeight="900"
+                            fontSize="12px"
+                            fontWeight="900"
                             leftIcon={<FaEye />}
                             onClick={() => verDetalles(norm)}
                           >
                             VER EXPEDIENTE
                           </Button>
                           <Button
-                            flex={1} h="45px" bg="#0284c7" color="white"
+                            flex={1}
+                            h="44px"
+                            bg="#0284c7"
+                            color="white"
                             _hover={{ bg: '#0369a1' }}
-                            fontSize="12px" fontWeight="900"
+                            fontSize="12px"
+                            fontWeight="900"
                             leftIcon={<FaFilePdf />}
                             onClick={() => descargarPDFDirecto(norm)}
                           >
@@ -1596,21 +2071,25 @@ export default function MapaHospitalOptimizado() {
           </DrawerContent>
         </Drawer>
 
-        <Modal isOpen={isNotificationOpen} onClose={() => {}} size="2xl" isCentered closeOnOverlayClick={false}>
+        <Modal isOpen={isNotificationOpen} onClose={() => {}} size={{ base: "full", sm: "xl", md: "2xl" }} isCentered closeOnOverlayClick={false}>
           <ModalOverlay backdropFilter="blur(20px)" bg="rgba(0,0,0,0.85)" />
-          <ModalContent bg="#09090b" border="2px solid #3f3f46" borderRadius="2xl" overflow="hidden">
+          <ModalContent bg="#09090b" border="2px solid #3f3f46" borderRadius={{ base: 0, sm: "2xl" }} overflow="hidden">
             <Box bg="#eab308" p={5} textAlign="center">
-              <Text fontSize="22px" fontWeight="900" color="black" letterSpacing="2px">ALERTA DE TRASLADO</Text>
+              <Text fontSize={{ base: "18px", md: "22px" }} fontWeight="900" color="black" letterSpacing="2px">
+                ALERTA DE TRASLADO
+              </Text>
             </Box>
-            <ModalBody p={8}>
-              <SimpleGrid columns={2} spacing={6} mb={6}>
+            <ModalBody p={{ base: 5, md: 8 }}>
+              <SimpleGrid columns={{ base: 1, sm: 2 }} spacing={4} mb={6}>
                 <Box bg="#18181b" p={5} borderRadius="xl" border="1px solid #3f3f46" textAlign="center">
                   <Text fontSize="12px" color="#a1a1aa" fontWeight="900" mb={2}>UNIDAD</Text>
-                  <Text fontSize="32px" fontWeight="900" color="#f8fafc">{selectedNotification?.ambulanceId}</Text>
+                  <Text fontSize={{ base: "26px", md: "32px" }} fontWeight="900" color="#f8fafc">
+                    {selectedNotification?.ambulanceId}
+                  </Text>
                 </Box>
                 <Box bg="#18181b" p={5} borderRadius="xl" border="1px solid #3f3f46" textAlign="center">
                   <Text fontSize="12px" color="#a1a1aa" fontWeight="900" mb={2}>TIPO</Text>
-                  <Text fontSize="20px" fontWeight="900" color="#ef4444" lineHeight="1.2">
+                  <Text fontSize={{ base: "18px", md: "20px" }} fontWeight="900" color="#ef4444" lineHeight="1.2">
                     {selectedNotification?.patientInfo?.condition || selectedNotification?.emergencyType || 'URGENCIA'}
                   </Text>
                 </Box>
@@ -1629,14 +2108,29 @@ export default function MapaHospitalOptimizado() {
 
               <VStack spacing={4}>
                 <HStack w="100%" spacing={4}>
-                  <Button flex={1} h="80px" fontSize="18px" fontWeight="900" bg="#10b981" color="white"
-                    _hover={{ bg: '#059669' }} onClick={acceptPatient}>
+                  <Button
+                    flex={1}
+                    h={{ base: "64px", md: "80px" }}
+                    fontSize={{ base: "15px", md: "18px" }}
+                    fontWeight="900"
+                    bg="#10b981"
+                    color="white"
+                    _hover={{ bg: '#059669' }}
+                    onClick={acceptPatient}
+                  >
                     ACEPTAR RECEPCIÓN
                   </Button>
-                  <Button flex={1} h="80px" fontSize="16px" fontWeight="900"
-                    bg={confirmReject ? "#dc2626" : "#18181b"} color={confirmReject ? "white" : "#ef4444"}
-                    border={confirmReject ? "none" : "2px solid #ef4444"} _hover={{ bg: '#b91c1c', color: 'white' }}
-                    onClick={rejectPatient}>
+                  <Button
+                    flex={1}
+                    h={{ base: "64px", md: "80px" }}
+                    fontSize={{ base: "14px", md: "16px" }}
+                    fontWeight="900"
+                    bg={confirmReject ? "#dc2626" : "#18181b"}
+                    color={confirmReject ? "white" : "#ef4444"}
+                    border={confirmReject ? "none" : "2px solid #ef4444"}
+                    _hover={{ bg: '#b91c1c', color: 'white' }}
+                    onClick={rejectPatient}
+                  >
                     {confirmReject ? "CONFIRMAR RECHAZO" : "RECHAZAR"}
                   </Button>
                 </HStack>
@@ -1645,14 +2139,14 @@ export default function MapaHospitalOptimizado() {
           </ModalContent>
         </Modal>
 
-        <Modal isOpen={isReportModalOpen} onClose={onReportModalClose} size="6xl" isCentered scrollBehavior="inside">
+        <Modal isOpen={isReportModalOpen} onClose={onReportModalClose} size={{ base: "full", md: "5xl", xl: "6xl" }} isCentered scrollBehavior="inside">
           <ModalOverlay backdropFilter="blur(10px)" bg="rgba(0,0,0,0.85)" />
-          <ModalContent maxW="1150px" bg="#09090b" border="1px solid #3f3f46" borderRadius="2xl" overflow="hidden">
-            <ModalHeader bg="#18181b" borderBottom="1px solid #27272a" py={3}>
-              <HStack justify="space-between">
+          <ModalContent maxW="1150px" bg="#09090b" border="1px solid #3f3f46" borderRadius={{ base: 0, md: "2xl" }} overflow="hidden">
+            <ModalHeader bg="#18181b" borderBottom="1px solid #27272a" py={3} px={{ base: 4, md: 6 }}>
+              <HStack justify="space-between" wrap="wrap" gap={2}>
                 <HStack>
                   <Icon as={FaFolderOpen} color="#38bdf8" boxSize={5} />
-                  <Text fontSize="18px" fontWeight="900" color="white">EXPEDIENTE CLÍNICO</Text>
+                  <Text fontSize={{ base: "16px", md: "18px" }} fontWeight="900" color="white">EXPEDIENTE CLÍNICO</Text>
                 </HStack>
                 {selectedReport?.codigo_prioridad_color && (
                   <Badge bg={selectedReport.codigo_prioridad_color} color="white" px={3} py={1.5} fontSize="13px" fontWeight="900" borderRadius="md">
@@ -1666,49 +2160,34 @@ export default function MapaHospitalOptimizado() {
               {renderReporteSheet(selectedReport, reportRef)}
             </ModalBody>
 
-            <ModalFooter bg="#18181b" borderTop="1px solid #27272a" py={3} px={5}>
+            <ModalFooter bg="#18181b" borderTop="1px solid #27272a" py={3} px={{ base: 4, md: 5 }}>
               <HStack w="100%" spacing={4}>
-                <Button flex={0.3} h="50px" variant="ghost" color="#a1a1aa"
-                  fontSize="14px" fontWeight="900"
+                <Button
+                  flex={0.35}
+                  h="50px"
+                  variant="ghost"
+                  color="#a1a1aa"
+                  fontSize="14px"
+                  fontWeight="900"
                   _hover={{ bg: '#27272a', color: 'white' }}
-                  onClick={onReportModalClose}>
+                  onClick={onReportModalClose}
+                >
                   CERRAR
                 </Button>
-                <Button flex={0.7} h="50px"
-                  bg="#0284c7" color="white"
-                  fontSize="15px" fontWeight="900"
+                <Button
+                  flex={0.65}
+                  h="50px"
+                  bg="#0284c7"
+                  color="white"
+                  fontSize="15px"
+                  fontWeight="900"
                   leftIcon={<FaFilePdf />}
                   _hover={{ bg: '#0369a1' }}
-                  onClick={generarPDF}>
+                  onClick={generarPDF}
+                >
                   DESCARGAR PDF
                 </Button>
               </HStack>
-            </ModalFooter>
-          </ModalContent>
-        </Modal>
-
-        <Modal isOpen={isNoteOpen} onClose={onNoteClose} size="3xl" isCentered>
-          <ModalOverlay backdropFilter="blur(10px)" bg="rgba(0,0,0,0.8)" />
-          <ModalContent bg="#09090b" border="1px solid #3f3f46" borderRadius="2xl" overflow="hidden">
-            <Box p={6} bg="#18181b" borderBottom="1px solid #27272a">
-              <Text fontSize="20px" fontWeight="900" color="white">AVISO A UNIDAD: {selectedAmbulance?.id}</Text>
-            </Box>
-            <ModalBody p={8}>
-              <Text fontSize="13px" color="#a1a1aa" fontWeight="900" mb={5}>SELECCIONE UNA RESPUESTA:</Text>
-              <SimpleGrid columns={2} spacing={5}>
-                {RESPUESTAS_RAPIDAS.map((msg, i) => (
-                  <Button key={i} h="85px" whiteSpace="normal" bg="#27272a" color="white" fontSize="16px" fontWeight="900"
-                    _hover={{ bg: '#0284c7' }} onClick={() => enviarRespuestaRapida(msg)}>
-                    {msg}
-                  </Button>
-                ))}
-              </SimpleGrid>
-            </ModalBody>
-            <ModalFooter p={6} bg="#18181b" borderTop="1px solid #27272a">
-              <Button w="100%" h="60px" bg="#3f3f46" color="white" fontSize="16px" fontWeight="900"
-                _hover={{ bg: '#52525b' }} onClick={onNoteClose}>
-                CANCELAR
-              </Button>
             </ModalFooter>
           </ModalContent>
         </Modal>
