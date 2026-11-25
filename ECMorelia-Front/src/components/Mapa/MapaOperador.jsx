@@ -1,7 +1,3 @@
-// src/components/operador/MapaOperador.jsx
-// EmergenCity - Consola de navegación móvil
-// v4: heartbeat + case recovery + estilos XML
-
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { searchPlaces, getPlaceTypeLabel } from '../../helpers/placeSearch.js';
 import { useNavigate } from 'react-router-dom';
@@ -30,10 +26,11 @@ mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN ||
   'pk.eyJ1IjoiZXltYXJkMjkiLCJhIjoiY21tcDY4YzNpMGw3bjJzb203YmZyNTVnMyI';
 
 const WS_URL = resolveWsUrl();
-const DEFAULT_CENTER = { lat: 19.7024, lng: -101.1969 };
+const DEFAULT_CENTER = { lat: 19.0438, lng: -98.1981 };
 const RECONNECT_DELAY = 3000;
 const MAX_RECONNECT = 5;
 const HEARTBEAT_INTERVAL_MS = 20000;
+const GPS_ACCURACY_THRESHOLD = 2000;
 
 const ROUTE_POLL_INTERVAL = 20000;
 const MIN_MOVE_FOR_POLL = 150;
@@ -132,7 +129,6 @@ export default function MapaOperador() {
   const toast = useToast();
   const navigate = useNavigate();
 
-  // Cuenta los toasts activos para ocultar el header mientras haya notificaciones
   const [activeToastCount, setActiveToastCount] = useState(0);
   const toastSequenceRef = useRef(0);
 
@@ -150,6 +146,9 @@ export default function MapaOperador() {
     });
   }, [toast]);
 
+  const showToastRef = useRef(showToast);
+  useEffect(() => { showToastRef.current = showToast; });
+
   const [searchingHospital, setSearchingHospital] = useState(false);
 
   const wsRef = useRef(null);
@@ -162,6 +161,8 @@ export default function MapaOperador() {
   const watchId = useRef(null);
   const gpsHeading = useRef(0);
   const isInitialMapCentered = useRef(false);
+  const gpsWarnedRef = useRef(false);
+  const lastGpsWarnRef = useRef(0);
   const [myLocation, setMyLocation] = useState(null);
   const myLocationRef = useRef(null);
   const [mySpeed, setMySpeed] = useState(0);
@@ -184,7 +185,7 @@ export default function MapaOperador() {
   const searchDebounceRef = useRef(null);
   const currentRouteGeometry = useRef(null);
   const isNavigatingRef = useRef(false);
-  const routeCacheRef = useRef({ key: '', result: null, ts: 0 }); // ⬅️ AGREGA ESTA LÍNEA
+  const routeCacheRef = useRef({ key: '', result: null, ts: 0 });
 
   const [isNavigating, setIsNavigating] = useState(false);
   const [currentManeuver, setCurrentManeuver] = useState(null);
@@ -237,7 +238,6 @@ export default function MapaOperador() {
   useEffect(() => { saveLocal('operador', 'assignedEmergency', assignedEmergency); }, [assignedEmergency]);
   useEffect(() => { saveLocal('operador', 'hospitalRequest', hospitalRequest); }, [hospitalRequest]);
 
-  // ==================== WEBSOCKET ====================
   const sendWS = useCallback((data) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify(data));
@@ -295,14 +295,12 @@ export default function MapaOperador() {
         }));
         ws.send(JSON.stringify({ type: 'request_hospitals_list' }));
 
-        // Recuperar caso activo si la página se recargó
         ws.send(JSON.stringify({
           type: 'request_my_case',
           role: 'ambulance',
           id: ambulancia.id
         }));
 
-        // Heartbeat periódico
         if (heartbeatRef.current) clearInterval(heartbeatRef.current);
         heartbeatRef.current = setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) {
@@ -322,14 +320,12 @@ export default function MapaOperador() {
             case 'active_hospitals_update': setHospitals(data.hospitals || []); break;
             case 'emergency_offer': handleEmergencyOffer(data); break;
 
-            // ==================== RECUPERACIÓN DE CASO ====================
             case 'assigned_emergency_sync': {
               const em = data.emergency;
               const rt = data.route;
               const hr = data.hospitalRequest;
 
               if (!em) {
-                // No hay caso activo → limpiar estado local
                 if (isNavigatingRef.current) {
                   silentCleanupNavigation();
                   changeStatus('disponible');
@@ -339,7 +335,6 @@ export default function MapaOperador() {
                 break;
               }
 
-              // Reconstruir emergencia
               setAssignedEmergency(prev => ({
                 ...(prev || {}),
                 callId: em.callId,
@@ -353,7 +348,6 @@ export default function MapaOperador() {
                 initiatedBy: em.initiatedBy
               }));
 
-              // Reconstruir hospital request si aplica
               if (hr) {
                 setHospitalRequest(prev => ({
                   ...(prev || {}),
@@ -365,13 +359,11 @@ export default function MapaOperador() {
                 }));
               }
 
-              // Reconstruir ruta y navegación
               if (rt?.routeGeometry && em.location) {
                 const destHospitalId = em.hospitalId;
                 const destAddress = data.route?.hospitalId ? `Hospital ${destHospitalId}` : em.address;
-                const targetLoc = em.location; // Se va al incidente primero
+                const targetLoc = em.location;
 
-                // Restaurar destino y ruta
                 activeDestination.current = {
                   ...targetLoc,
                   mode: 'emergency',
@@ -403,7 +395,6 @@ export default function MapaOperador() {
                   position: 'bottom'
                 });
               } else if (em.location) {
-                // Sin ruta cacheada → recalcular
                 startNavigationEngine(em.location, 'emergency', em.address);
                 showToast({
                   title: 'Caso recuperado',
@@ -415,7 +406,6 @@ export default function MapaOperador() {
               }
               break;
             }
-            // ==================== FIN RECUPERACIÓN ====================
 
             case 'operator_emergency_created': {
               setAssignedEmergency(prev => ({
@@ -585,7 +575,7 @@ export default function MapaOperador() {
 
                 const currentLoc = myLocationRef.current;
                 if (currentLoc) {
-const route = await computeRouteCached(currentLoc, dest);
+                  const route = await computeRouteCached(currentLoc, dest);
                   if (route) {
                     drawRoute(route.geometry, '#ef4444');
                     currentRouteGeometry.current = route.geometry;
@@ -677,12 +667,34 @@ const route = await computeRouteCached(currentLoc, dest);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ambulancia]);
 
-  // ==================== MAPBOX ====================
   useEffect(() => {
     if (!ambulancia || !mapContainer.current) return;
 
+    const handleGpsError = (err) => {
+      if (!isMounted.current) return;
+      if (err.code === 1) {
+        showToastRef.current({
+          title: 'Ubicación bloqueada',
+          description: 'Permita la ubicación PRECISA en el navegador (icono candado → Ubicación → Preciso).',
+          status: 'error',
+          duration: 12000,
+          position: 'bottom'
+        });
+      } else if (err.code === 2) {
+        showToastRef.current({
+          title: 'GPS no disponible',
+          description: 'Verifique que el GPS del dispositivo esté activo.',
+          status: 'warning',
+          duration: 8000,
+          position: 'bottom'
+        });
+      }
+    };
+
     navigator.geolocation.getCurrentPosition(
       (pos) => {
+        const accuracy = Number.isFinite(pos.coords.accuracy) ? pos.coords.accuracy : 99999;
+        if (accuracy > GPS_ACCURACY_THRESHOLD) return;
         const loc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
         if (!isValidCoord(loc)) return;
         setMyLocation(loc);
@@ -693,7 +705,8 @@ const route = await computeRouteCached(currentLoc, dest);
           updateAmbulanceMarker(loc, 0);
         }
       },
-      () => {}, { enableHighAccuracy: true, timeout: 5000 }
+      handleGpsError,
+      { enableHighAccuracy: true, timeout: 15000 }
     );
 
     const mapInstance = new mapboxgl.Map({
@@ -735,7 +748,6 @@ const route = await computeRouteCached(currentLoc, dest);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ambulancia]);
 
-  // ==================== GEOLOCALIZACIÓN ====================
   useEffect(() => {
     if (!ambulancia) return;
     const handleOrientation = (e) => {
@@ -744,8 +756,46 @@ const route = await computeRouteCached(currentLoc, dest);
     };
     window.addEventListener('deviceorientation', handleOrientation, true);
 
+    const handleGpsError = (err) => {
+      if (!isMounted.current) return;
+      if (err.code === 1) {
+        showToastRef.current({
+          title: 'Ubicación bloqueada',
+          description: 'Permita la ubicación PRECISA en el navegador.',
+          status: 'error',
+          duration: 12000,
+          position: 'bottom'
+        });
+      } else if (err.code === 2) {
+        showToastRef.current({
+          title: 'GPS no disponible',
+          description: 'Verifique que el GPS del dispositivo esté activo.',
+          status: 'warning',
+          duration: 8000,
+          position: 'bottom'
+        });
+      }
+    };
+
     watchId.current = navigator.geolocation.watchPosition(
       (pos) => {
+        if (!isMounted.current) return;
+        const accuracy = Number.isFinite(pos.coords.accuracy) ? pos.coords.accuracy : 99999;
+        if (accuracy > GPS_ACCURACY_THRESHOLD) {
+          const now = Date.now();
+          if (!gpsWarnedRef.current || now - lastGpsWarnRef.current > 60000) {
+            gpsWarnedRef.current = true;
+            lastGpsWarnRef.current = now;
+            showToastRef.current({
+              title: 'GPS impreciso',
+              description: `±${Math.round(accuracy)}m. En Brave: candado → Ubicación → "Preciso". Si persiste, use Chrome.`,
+              status: 'warning',
+              duration: 12000,
+              position: 'bottom'
+            });
+          }
+          return;
+        }
         const loc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
         if (!isValidCoord(loc)) return;
         const spd = pos.coords.speed != null ? parseFloat((pos.coords.speed * 3.6).toFixed(1)) : 0;
@@ -783,7 +833,8 @@ const route = await computeRouteCached(currentLoc, dest);
           location: loc, speed: spd, heading: hdg, status: ambulanceStatus
         });
       },
-      () => {}, { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
+      handleGpsError,
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
     );
     return () => {
       window.removeEventListener('deviceorientation', handleOrientation, true);
@@ -792,7 +843,6 @@ const route = await computeRouteCached(currentLoc, dest);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ambulancia, ambulanceStatus, sendWS, isFollowing, isGpsMode, mySpeed]);
 
-  // ==================== MARCADORES ====================
   const updateMarkerRotation = useCallback((hdg) => {
     if (ambulanceMarker.current) {
       const el = ambulanceMarker.current.getElement().querySelector('.amb-body');
@@ -826,25 +876,16 @@ const route = await computeRouteCached(currentLoc, dest);
       .setLngLat([loc.lng, loc.lat]).addTo(map.current);
   }, []);
 
-
-
-
-  // ==================== MOTOR DE RUTAS ====================
-
-    // ==================== MOTOR DE RUTAS ====================
   const computeRoute = useCallback(async (start, end) => {
     if (!isValidCoord(start) || !isValidCoord(end)) return null;
     const straightKm = calcDistance(start.lat, start.lng, end.lat, end.lng);
     if (straightKm > 500) return null;
 
-    // Timeout interno de 3.5s para no colgar la UI en caso de red lenta
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 3500);
 
     try {
       const coords = `${start.lng},${start.lat};${end.lng},${end.lat}`;
-      // overview=simplified reduce el payload ~60% sin perder calidad visual.
-      // driving-traffic ya aplica el perfil de tráfico en vivo.
       const url = `https://api.mapbox.com/directions/v5/mapbox/driving-traffic/${coords}` +
         `?geometries=geojson&overview=simplified&steps=true` +
         `&access_token=${mapboxgl.accessToken}&language=es`;
@@ -875,7 +916,6 @@ const route = await computeRouteCached(currentLoc, dest);
     }
   }, []);
 
-  // Wrapper con caché corto (8s) para evitar recálculos redundantes
   const computeRouteCached = useCallback(async (start, end) => {
     if (!isValidCoord(start) || !isValidCoord(end)) return null;
     const key = `${start.lat.toFixed(4)},${start.lng.toFixed(4)}-${end.lat.toFixed(4)},${end.lng.toFixed(4)}`;
@@ -935,7 +975,7 @@ const route = await computeRouteCached(currentLoc, dest);
     }
   }, [computeRouteCached, drawRoute, isRecalculating, showToast]);
 
-    const startNavigationEngine = async (targetLoc, mode = 'manual', address = '') => {
+  const startNavigationEngine = async (targetLoc, mode = 'manual', address = '') => {
     let loc = myLocationRef.current;
     if (!loc) {
       try {
@@ -1017,7 +1057,6 @@ const route = await computeRouteCached(currentLoc, dest);
     return () => { if (offRouteCheckRef.current) clearInterval(offRouteCheckRef.current); };
   }, [isNavigating, recalcRoute]);
 
-  // ==================== BÚSQUEDA ====================
   const searchAddresses = useCallback((query) => {
     if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
     if (!query || query.trim().length < 2) {
@@ -1048,7 +1087,6 @@ const route = await computeRouteCached(currentLoc, dest);
     startNavigationEngine(targetLoc, 'manual', result.place_name);
   };
 
-  // ==================== CANCELACIÓN ====================
   const silentCleanupNavigation = useCallback(() => {
     setHospitalRequest(null);
     setSearchingHospital(false);
@@ -1129,7 +1167,6 @@ const route = await computeRouteCached(currentLoc, dest);
     }
   }, [assignedEmergency, ambulancia, sendWS, changeStatus, showToast, silentCleanupNavigation]);
 
-  // ==================== TRANSFERENCIA Y HOSPITAL ====================
   const handleSendTransfer = async () => {
     const hospital = hospitals.find(h => h.id === selectedHospitalId);
     if (!hospital || !myLocationRef.current) return;
@@ -1183,7 +1220,6 @@ const route = await computeRouteCached(currentLoc, dest);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [assignedEmergency, ambulancia, sendWS, showToast]);
 
-  // ==================== CREAR EMERGENCIA OPERADOR ====================
   const handleCreateOperatorEmergency = useCallback(async () => {
     if (!myLocationRef.current) {
       showToast({
@@ -1237,7 +1273,6 @@ const route = await computeRouteCached(currentLoc, dest);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [operatorPatientData, ambulancia, sendWS, showToast, onDrawerClose]);
 
-  // ==================== CONFIRMACIONES ====================
   const confirmAction = useCallback((action, title, body) => {
     setPendingAction({ fn: action, title, body });
     onAlertOpen();
@@ -1266,7 +1301,6 @@ const route = await computeRouteCached(currentLoc, dest);
     showToast({ title: 'Rechazo enviado', description: 'Se buscará otra unidad', status: 'info', duration: 3000, position: 'bottom' });
   }, [pendingOffer, sendWS, showToast]);
 
-  // ==================== UTILIDADES ====================
   const getManeuverIcon = (step) => {
     if (!step) return <FaArrowUp />;
     const m = step.maneuver?.modifier || '';
@@ -1529,7 +1563,7 @@ const route = await computeRouteCached(currentLoc, dest);
       {!isNavigating && (
         <>
           <SlideFade
-            in={activeToastCount === 0}
+            in={activeToastCount === 0 && !pendingOffer}
             unmountOnExit
             offsetY={-8}
             zIndex={10}
@@ -1603,7 +1637,7 @@ const route = await computeRouteCached(currentLoc, dest);
             )}
           </SlideFade>
 
-          {!isDrawerOpen && (
+          {!isDrawerOpen && !pendingOffer && (
             <Box position="absolute" bottom="20px" left="16px" right="16px" zIndex={10}>
               <Button
                 w="100%" h="68px"
@@ -1622,7 +1656,6 @@ const route = await computeRouteCached(currentLoc, dest);
         </>
       )}
 
-      {/* DRAWER y MODALES omitidos — idénticos a tu versión anterior */}
       <Drawer isOpen={isDrawerOpen} placement="bottom" onClose={onDrawerClose} size="full">
         <DrawerOverlay backdropFilter="blur(5px)" bg="rgba(0,0,0,0.6)" />
         <DrawerContent bg="#1E1E1E" borderTopRadius="20px" h="85vh" mt="15vh" borderTop="1px solid #2C2C2C" zIndex={1400}>
@@ -1821,7 +1854,6 @@ const route = await computeRouteCached(currentLoc, dest);
         </DrawerContent>
       </Drawer>
 
-      {/* MODAL DE OFERTA */}
       <Modal isOpen={!!pendingOffer} onClose={() => {}} size="xl" isCentered closeOnOverlayClick={false} closeOnEsc={false}>
         <ModalOverlay bg="rgba(0,0,0,0.92)" backdropFilter="blur(8px)" />
         <ModalContent bg="#1E1E1E" border="3px solid #ef4444" borderRadius="20px" overflow="hidden" mx="16px">
